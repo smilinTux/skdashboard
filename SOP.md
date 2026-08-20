@@ -406,7 +406,7 @@ behavior.
    Fixing the docstring is a follow-up, deliberately not bundled into a docs-only PR.
 
 <!-- docs-evidence
-verified: 2026-08-16
+verified: 2026-08-20
 checks:
   - name: card-mutate route is gated (section 7, SECURITY.md route table)
     run: grep -q 'capability=_CAP_CARD_MUTATE' src/skdashboard/dashboard.py
@@ -418,8 +418,8 @@ checks:
     run: test "$(grep -c 'if not os.environ.get("SKAI_AUTHZ") and not os.environ.get("SKAI_QUEUE_TOKEN"):' src/skdashboard/dashboard.py)" = "1"
   - name: documented port 7778 still the module default
     run: grep -q 'DEFAULT_DASHBOARD_PORT = 7778' src/skdashboard/dashboard.py
-  - name: bind is still loopback-only (section 5 Exposure)
-    run: grep -q 'host="127.0.0.1", port=port' src/skdashboard/dashboard.py
+  - name: bind remains loopback by default but accepts an explicit host
+    run: grep -q 'home: Path, host: str = "127.0.0.1", port:' src/skdashboard/dashboard.py && grep -q 'uvicorn.Config(app, host=host, port=port' src/skdashboard/dashboard.py
   - name: /api/doctor is still a registered route
     run: grep -q 'Route("/api/doctor"' src/skdashboard/dashboard.py
   - name: still no /health route (SOP says there is none)
