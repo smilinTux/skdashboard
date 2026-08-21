@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -118,6 +120,9 @@ def _local_reconcile(home: Path, *, apply: bool) -> dict[str, Any]:
     discovered = scan(root, runners=[LocalRunner()], include_declared=True)
     report = reconcile(_mgr(root), discovered, apply=apply, scan_complete=True)
     result = report.as_dict()
+    for key in ("relationships", "validation_failures", "secret_redaction_findings"):
+        result.setdefault(key, [])
+        result.setdefault("counts", {}).setdefault(key, len(result[key]))
     result["scope"] = "declared+local"
     return result
 
@@ -130,22 +135,41 @@ def plan(home: Path) -> dict[str, Any]:
 def apply(home: Path) -> dict[str, Any]:
     """Apply validated local discovery through the canonical event store."""
     result = _local_reconcile(home, apply=True)
-    if result["validation_failures"]:
+    if result.get("validation_failures"):
         result["applied"] = False
     return result
 
 
+def _verified_run_artifacts(home: Path) -> list[dict]:
+    """Compatibility reader for a consumer deployed before the skcoord release."""
+    try:
+        from skcoord.cmdb_reconcile import read_verified_run_artifacts
+    except ImportError:
+        read_verified_run_artifacts = None
+    if read_verified_run_artifacts is not None:
+        return read_verified_run_artifacts(home)
+
+    verified: list[tuple[float, dict]] = []
+    for path in (home / "cmdb" / "reconcile-runs").glob("*.json"):
+        try:
+            payload = path.read_bytes()
+            expected = path.with_suffix(".sha256").read_text().split()[0]
+            value = json.loads(payload)
+            if hashlib.sha256(payload).hexdigest() == expected and isinstance(value, dict):
+                verified.append((path.stat().st_mtime, value))
+        except (OSError, ValueError, IndexError, json.JSONDecodeError):
+            continue
+    return [value for _, value in sorted(verified, key=lambda item: item[0], reverse=True)]
+
+
 def status(home: Path) -> dict[str, Any]:
     """Return inventory and checksum-verified reconcile status."""
-    from skcoord.cmdb_reconcile import (
-        operator_summary,
-        read_verified_run_artifacts,
-    )
+    from skcoord.cmdb_reconcile import operator_summary
 
     root = Path(home).expanduser()
     mgr = _mgr(root)
     result = operator_summary(
-        read_verified_run_artifacts(root),
+        _verified_run_artifacts(root),
         datetime.now(timezone.utc),
         timedelta(hours=4),
     )
