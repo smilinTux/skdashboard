@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -109,5 +110,75 @@ def search(home: Path, query: str, limit: int = 50) -> dict[str, Any]:
     }
 
 
+def _local_reconcile(home: Path, *, apply: bool) -> dict[str, Any]:
+    """Plan or apply the declared-plus-local discovery scope."""
+    from skcoord.discovery import LocalRunner, reconcile, scan
+
+    root = Path(home).expanduser()
+    discovered = scan(root, runners=[LocalRunner()], include_declared=True)
+    report = reconcile(_mgr(root), discovered, apply=apply, scan_complete=True)
+    result = report.as_dict()
+    result["scope"] = "declared+local"
+    return result
+
+
+def plan(home: Path) -> dict[str, Any]:
+    """Return a write-free local discovery reconciliation plan."""
+    return _local_reconcile(home, apply=False)
+
+
+def apply(home: Path) -> dict[str, Any]:
+    """Apply validated local discovery through the canonical event store."""
+    result = _local_reconcile(home, apply=True)
+    if result["validation_failures"]:
+        result["applied"] = False
+    return result
+
+
+def status(home: Path) -> dict[str, Any]:
+    """Return inventory and checksum-verified reconcile status."""
+    from skcoord.cmdb_reconcile import (
+        operator_summary,
+        read_verified_run_artifacts,
+    )
+
+    root = Path(home).expanduser()
+    mgr = _mgr(root)
+    result = operator_summary(
+        read_verified_run_artifacts(root),
+        datetime.now(timezone.utc),
+        timedelta(hours=4),
+    )
+    cis = mgr.list_cis()
+    result["inventory"] = {
+        "total": len(cis),
+        "discovered": sum("discovered" in (ci.tags or []) for ci in cis),
+        "retired": sum(ci.status == "retired" for ci in cis),
+    }
+    findings = mgr.audit_relationships()
+    result["relationship_audit"] = {"clean": not findings, "findings": findings}
+    return result
+
+
+def drift(home: Path) -> dict[str, Any]:
+    """Return declared-versus-local drift without changing the store."""
+    from skcoord.discovery import LocalRunner, scan
+    from skcoord.discovery import drift as find_drift
+
+    root = Path(home).expanduser()
+    discovered = scan(root, runners=[LocalRunner()], include_declared=True)
+    findings = [item.as_dict() for item in find_drift(discovered, _mgr(root))]
+    return {"scope": "declared+local", "count": len(findings), "findings": findings}
+
+
 def seed(home: Path) -> dict:
-    return _mgr(home).seed_from_inventory()
+    """Versioned compatibility alias for clients predating ``/apply``."""
+    result = apply(home)
+    result.update(
+        {
+            "schema": "skdashboard.cmdb.compat-seed/v1",
+            "deprecated": True,
+            "cis": len(_mgr(home).list_cis()),
+        }
+    )
+    return result
