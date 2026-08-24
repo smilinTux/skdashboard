@@ -1,0 +1,11 @@
+{
+  "receipt_version": "1.0.0",
+  "candidate_id": "SKCP-00-v1.1.2-truthful-superseding",
+  "manifest_path": "docs/review/SKCP-00-CANDIDATE-MANIFEST-v1.1.2.json",
+  "manifest_sha256": "5070110b179d57ce358f96b9562ed1725374f69e2dc5d71324b565f873bcb696",
+  "active_contract_source_revision": "dcdd6b25df3663656e7d476ac848ffdf6e183c66",
+  "sealed_at": "2026-08-24T02:48:00Z",
+  "sealed_by": "jarvis",
+  "non_recursive": true,
+  "implementation_authorized": false
+}
