@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the truthful V1.1.2 control-plane review candidate, reproducible
+  CardStore capture, preserved lineage artifacts, and detached manifest seal.
+
 - Added the human-approved SK control-plane architecture candidate, versioned
   metric and report contracts, `/api/v1` OpenAPI baseline, breadth-first sprint
   plan, synthetic wireframes, exact-hash approval record, and executable
