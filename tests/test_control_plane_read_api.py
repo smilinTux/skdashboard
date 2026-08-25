@@ -82,12 +82,49 @@ def test_v1_source_failure_is_partial_not_healthy(tmp_path: Path) -> None:
     assert body["errors"][0]["code"] == "SOURCE_PARTIAL"
 
 
-def test_v1_economy_keeps_unavailable_cost_distinct_from_zero(tmp_path: Path) -> None:
+def test_v1_economy_projects_nested_nonzero_dimensions_and_cost(tmp_path: Path) -> None:
+    usage = {
+        "generated_at": "2026-08-23T00:00:00Z",
+        "selected_lane": "harness_reported",
+        "available_lanes": ["harness_reported", "gateway_observed"],
+        "summary": {
+            "tokens": {
+                "input": 1000,
+                "output": 2000,
+                "cache_read": 500,
+                "cache_write": 100,
+                "reasoning": 900,
+                "total": 4500,
+            },
+            "cost_usd": 12.5,
+            "cost_state": "estimated",
+        },
+        "collectors": [],
+        "coverage": {"expected_nodes": 2, "reporting_nodes": 2, "missing_nodes": []},
+        "errors": [],
+    }
+    with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
+        response = TestClient(_app(tmp_path)).get("/api/v1/economy/summary", headers=READ_HEADERS)
+    item = response.json()["items"][0]
+    assert item["tokens"] == usage["summary"]["tokens"]
+    assert item["cost_usd"] == 12.5
+    assert item["cost_state"] == "estimated"
+    assert item["available_lanes"] == ["harness_reported", "gateway_observed"]
+    assert item["expected_nodes"] == 2
+    assert item["reporting_nodes"] == 2
+    assert item["missing_nodes"] == []
+
+
+def test_v1_economy_preserves_exact_zero_and_unavailable_cost(tmp_path: Path) -> None:
     usage = {
         "generated_at": "2026-08-23T00:00:00Z",
         "selected_lane": "harness_reported",
         "available_lanes": ["harness_reported"],
-        "summary": {"input": 2, "output": 3, "cache_read": 0, "cache_write": 0, "reasoning": 0, "total": 5, "cost_usd": 0.0, "cost_state": "unavailable"},
+        "summary": {
+            "tokens": {field: 0 for field in ("input", "output", "cache_read", "cache_write", "reasoning", "total")},
+            "cost_usd": 0.0,
+            "cost_state": "unavailable",
+        },
         "collectors": [],
         "coverage": {"expected_nodes": 1, "reporting_nodes": 0, "missing_nodes": ["node-a"]},
         "errors": [],
@@ -95,9 +132,36 @@ def test_v1_economy_keeps_unavailable_cost_distinct_from_zero(tmp_path: Path) ->
     with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
         response = TestClient(_app(tmp_path)).get("/api/v1/economy/summary", headers=READ_HEADERS)
     item = response.json()["items"][0]
-    assert item["tokens"]["total"] == 5
+    assert item["tokens"] == {field: 0 for field in ("input", "output", "cache_read", "cache_write", "reasoning", "total")}
     assert item["cost_usd"] is None
     assert item["cost_state"] == "unavailable"
+    assert item["expected_nodes"] == 1
+    assert item["reporting_nodes"] == 0
+    assert item["missing_nodes"] == ["node-a"]
+
+
+def test_v1_economy_keeps_malformed_nested_values_unknown(tmp_path: Path) -> None:
+    usage = {
+        "generated_at": "2026-08-23T00:00:00Z",
+        "selected_lane": "gateway_observed",
+        "summary": {
+            "tokens": {"input": "4500", "output": 0},
+            "cost_usd": "not-a-number",
+            "cost_state": "estimated",
+        },
+        "coverage": {},
+    }
+    with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
+        response = TestClient(_app(tmp_path)).get("/api/v1/economy/summary", headers=READ_HEADERS)
+    item = response.json()["items"][0]
+    assert item["tokens"]["input"] is None
+    assert item["tokens"]["output"] == 0
+    assert item["tokens"]["total"] is None
+    assert item["cost_usd"] is None
+    assert item["cost_state"] == "unknown"
+    assert item["expected_nodes"] is None
+    assert item["reporting_nodes"] is None
+    assert item["missing_nodes"] is None
 
 
 def test_v1_fleet_disables_alert_side_effects(tmp_path: Path) -> None:

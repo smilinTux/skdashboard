@@ -69,6 +69,11 @@ skdashboard-control-plane-mcp \
   --bearer-file /run/user/$(id -u)/skdashboard-read.cap
 ```
 
+The client also supports an explicit-capability action preview, exact-version
+submit, and bounded receipt polling. These methods are never used by default,
+reject arbitrary routes, and operate against the same synthetic fixture in
+contract tests.
+
 The frozen contract currently advertises insight query while a deployed
 runtime may not yet serve it, and older overview projections may use scope
 fields outside the frozen V1.1 schema. The client intentionally fails closed

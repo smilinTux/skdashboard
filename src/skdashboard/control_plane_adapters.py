@@ -525,10 +525,10 @@ def _local_readers(
             "delayed_collectors",
             "stale_collectors",
         )
+        projected = dashboard_skcounter.project_economy_summary(summary)
         if (
-            not isinstance(summary, dict)
-            or "total" not in summary
-            or "cost_state" not in summary
+            projected["tokens"]["total"] is None
+            or projected["cost_state"] == "unknown"
             or not isinstance(coverage, dict)
             or not all(isinstance(coverage.get(key), int) for key in required_coverage)
             or not isinstance(collectors, list)
@@ -547,9 +547,9 @@ def _local_readers(
         }
         return aggregate_reader(
             {
-                "tokens_total": summary.get("total", 0),
-                "cost_usd": summary.get("cost_usd") if summary.get("cost_state") == "available" else None,
-                "cost_state": summary.get("cost_state", "unavailable"),
+                "tokens_total": projected["tokens"]["total"],
+                "cost_usd": projected["cost_usd"],
+                "cost_state": projected["cost_state"],
                 "observation_count": raw.get("observation_count", 0),
                 "fresh_collectors": coverage["fresh_collectors"],
                 "delayed_collectors": delayed_collectors,

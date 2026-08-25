@@ -776,6 +776,7 @@ def create_app(
     control_plane_architecture_provider=None,
     control_plane_governance_provider=None,
     control_plane_report_provider=None,
+    control_plane_command_gateway=None,
 ):
     """Build the Starlette ASGI app for the dashboard.
 
@@ -1969,6 +1970,7 @@ def create_app(
             architecture_provider=control_plane_architecture_provider,
             governance_provider=control_plane_governance_provider,
             report_provider=control_plane_report_provider,
+            command_gateway=control_plane_command_gateway,
         )
     )
     if static_dir.exists():

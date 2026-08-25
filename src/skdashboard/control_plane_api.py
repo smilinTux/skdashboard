@@ -29,6 +29,10 @@ class ControlPlaneInvocationFactory(Protocol):
     def __call__(self, request, capability: str, target: str): ...
 
 
+class _PolicyUnavailable(Exception):
+    """The canonical authorization dependencies could not decide."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -287,6 +291,10 @@ def _typed_context(
         if type(verifier) is ControlPlaneCurrentnessVerifier:
             verifier.close()
         return None
+    if result.state is DecisionState.UNAVAILABLE:
+        if type(verifier) is ControlPlaneCurrentnessVerifier:
+            verifier.close()
+        raise _PolicyUnavailable
     if (
         not result.allow
         or result.state is not DecisionState.ALLOW
@@ -392,6 +400,18 @@ def _protected_handler(
                     decision_authorizer=decision_authorizer,
                     invocation_factory=invocation_factory,
                 )
+            except _PolicyUnavailable:
+                counters["denied"] += 1
+                response = _error(
+                    request,
+                    503,
+                    "POLICY_UNAVAILABLE",
+                    "the capability decision is temporarily unavailable",
+                    retryable=True,
+                )
+                response.headers["Retry-After"] = "5"
+                response.headers["Cache-Control"] = "no-store"
+                return response
             except Exception:
                 authority = None
             if authority is None:
@@ -442,6 +462,7 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    command_gateway=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -556,19 +577,19 @@ def routes(
                 home,
                 {"lane": lane, "from": request.query_params.get("from", ""), "to": request.query_params.get("to", "")},
             )
-            summary = raw.get("summary", {})
-            coverage = raw.get("coverage", {})
-            cost = summary.get("cost_usd") if summary.get("cost_state") == "available" else None
+            summary = raw.get("summary")
+            coverage = raw.get("coverage")
+            projected = dashboard_skcounter.project_economy_summary(summary)
             items = [{
                 "measurement_lane": raw.get("selected_lane"),
-                "available_lanes": raw.get("available_lanes", []),
-                "tokens": {key: summary.get(key, 0) for key in dashboard_skcounter.TOKEN_FIELDS},
-                "cost_usd": cost,
-                "cost_state": summary.get("cost_state", "unavailable"),
-                "collectors": raw.get("collectors", []),
-                "expected_nodes": coverage.get("expected_nodes", 0),
-                "reporting_nodes": coverage.get("reporting_nodes", 0),
-                "missing_nodes": coverage.get("missing_nodes", []),
+                "available_lanes": raw.get("available_lanes"),
+                "tokens": projected["tokens"],
+                "cost_usd": projected["cost_usd"],
+                "cost_state": projected["cost_state"],
+                "collectors": raw.get("collectors"),
+                "expected_nodes": coverage.get("expected_nodes") if isinstance(coverage, dict) else None,
+                "reporting_nodes": coverage.get("reporting_nodes") if isinstance(coverage, dict) else None,
+                "missing_nodes": coverage.get("missing_nodes") if isinstance(coverage, dict) else None,
             }]
             return _response(
                 request,
@@ -958,7 +979,7 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
-    return [
+    result = [
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
@@ -976,3 +997,8 @@ def routes(
         Route("/api/v1/events", protected(events, "skdashboard.events.read")),
         Route("/metrics", protected(metrics, "skdashboard.read")),
     ]
+    if command_gateway is not None:
+        if decision_authorizer is None:
+            raise ValueError("command routes require typed control-plane authorization")
+        result.extend(command_gateway.routes(protected))
+    return result
