@@ -433,8 +433,8 @@ class EncryptedSessionAdapter:
             except (InvalidToken, ValueError, TypeError, json.JSONDecodeError):
                 return SessionResolution("corrupt")
             refreshing_at = current_record.get("refreshing_at")
-            if current_record.get("refreshing") and (
-                type(refreshing_at) is not int or now - refreshing_at < REFRESH_RESERVATION_TTL
+            if current_record.get("refreshing") and type(refreshing_at) is int and (
+                now - refreshing_at < REFRESH_RESERVATION_TTL
             ):
                 return SessionResolution("unavailable")
             old_encrypted = current["encrypted"]
