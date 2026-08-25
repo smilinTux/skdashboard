@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recover legacy refresh reservations that predate the reservation timestamp.
+
 - Redact OIDC callback query values from Uvicorn access logs while preserving
   callback paths, response status, safe application references, and failure categories.
 
