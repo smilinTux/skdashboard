@@ -4,8 +4,9 @@ All notable changes to `skdashboard` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are **not** written in the tree: `setuptools_scm` derives them from the git
-tag, and `.github/workflows/publish.yml` cuts the next patch tag on every push to
-`main`. So a heading here names a tag that exists, and the tag is the source of truth.
+tag, and `.github/workflows/publish.yml` cuts the next patch tag after CI passes for
+the current `main` commit. So a heading here names a tag that exists, and the tag is
+the source of truth.
 
 > This file was added on 2026-08-14, after the fact. Entries below `[Unreleased]` were
 > reconstructed from the git tags and their commit subjects, so they record **what
@@ -21,8 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recover legacy refresh reservations that predate the reservation timestamp.
 
+- Gate automatic patch tags and PyPI publication on successful CI for the exact
+  current main commit, without a manual-dispatch or off-main ancestry bypass.
+
+- Redact OIDC callback query values from Uvicorn access logs while preserving
+  callback paths, response status, safe application references, and failure categories.
+
+- Canonicalize verified CapAuth OIDC fingerprint subjects to their device identity
+  before current dashboard policy evaluation.
+
+- Read CapAuth authorization-code IdP discovery from its canonical `/oidc`
+  endpoint instead of the incompatible legacy root PGP discovery document.
+
 - Preserve fail-closed OIDC callback errors while logging only allowlisted failure
   categories with a browser-safe correlation reference.
+
+- Partition bounded control-plane SSE replay, cursors, subscribers, and delivery by the
+  exact typed authenticated Tenant/caller boundary, reject boolean-only authorization,
+  generic resource identifiers, and ambiguous Tenant bindings, and isolate protected
+  events from the explicit public/legacy refresh lane.
 
 - Mark corrupt and unavailable session authorization responses as retryable.
 
