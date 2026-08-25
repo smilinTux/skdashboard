@@ -1,12 +1,19 @@
+import asyncio
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from cryptography.fernet import Fernet
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from skdashboard.read_only import create_read_only_app
-from skdashboard.session_adapter import COOKIE_NAME, EncryptedSessionAdapter, SessionConfig
+from skdashboard.session_adapter import (
+    COOKIE_NAME,
+    EncryptedSessionAdapter,
+    SessionConfig,
+    _digest,
+)
 
 ORIGIN = "https://10.0.0.139:7778"
 
@@ -133,6 +140,36 @@ def test_refresh_rotates_server_credentials_and_pep_runs_each_request(tmp_path):
         {"grant_type": "refresh_token", "refresh_token": "refresh-1"},
         None,
     )
+
+
+def test_stale_refresh_reservation_can_recover_after_process_loss(tmp_path):
+    now = [1_000]
+    tokens = Tokens()
+    session = adapter(tmp_path, clock=lambda: now[0], tokens=tokens)
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session, authorizer=lambda *_: True), base_url=ORIGIN)
+    login(client)
+    handle = client.cookies[COOKIE_NAME]
+    with session._connect() as connection:
+        row = connection.execute(
+            "SELECT encrypted FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+        ).fetchone()
+        record = session._open(row["encrypted"])
+        record["refreshing"] = True
+        record["refreshing_at"] = now[0]
+        connection.execute(
+            "UPDATE sessions SET encrypted = ? WHERE handle_hash = ?",
+            (session._seal(record), _digest(handle)),
+        )
+    now[0] = 1_290
+    scope = {
+        "type": "http", "method": "GET", "path": "/api/v1/overview",
+        "headers": [(b"cookie", f"{COOKIE_NAME}={handle}".encode())],
+        "client": ("127.0.0.1", 1), "scheme": "https", "query_string": b"",
+        "server": ("10.0.0.139", 7778),
+    }
+    resolution = asyncio.run(session.resolve(Request(scope)))
+    assert resolution.state == "authenticated"
+    assert tokens.calls[-1][0]["grant_type"] == "refresh_token"
 
 
 def test_csrf_logout_and_corrupt_store_fail_closed(tmp_path):
