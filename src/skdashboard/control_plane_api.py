@@ -25,6 +25,8 @@ ALLOWED_BROWSER_ORIGINS = frozenset({"https://10.0.0.139:7778", "https://100.81.
 SSE_CURRENTNESS_SECONDS = 1
 PROJECTION_ETAG_TTL_SECONDS = 60
 PROJECTION_ETAG_MAX_ENTRIES = 64
+RATE_WINDOW_SECONDS = 60
+RATE_CLASS_LIMITS = {"common": 120, "critical": 120}
 
 _projection_generations: dict[str, int] = defaultdict(int)
 _projection_generation_lock = threading.Lock()
@@ -38,23 +40,28 @@ class _ProjectionETagCache:
         self._entries: OrderedDict[str, tuple[str, float, int]] = OrderedDict()
         self._lock = threading.Lock()
 
-    def matches(self, key: str, presented: str | None) -> str | None:
-        """Return the current matching ETag without recomputing its projection."""
+    def matches(self, key: str, presented: str | None) -> tuple[str | None, str]:
+        """Return a matching ETag and an explicit bounded-cache outcome."""
         if not presented:
-            return None
+            return None, "bypass"
         now = time.monotonic()
         with _projection_generation_lock:
             generation = _projection_generations[self._home]
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
-                return None
+                return None, "miss"
             etag, expires_at, stored_generation = entry
-            if expires_at <= now or stored_generation != generation:
+            if expires_at <= now:
                 self._entries.pop(key, None)
-                return None
+                return None, "expired"
+            if stored_generation != generation:
+                self._entries.pop(key, None)
+                return None, "invalidated"
             self._entries.move_to_end(key)
-            return etag if presented == etag else None
+            if presented != etag:
+                return None, "validator-miss"
+            return etag, "hit"
 
     def remember(self, key: str, etag: str) -> None:
         """Remember only one bounded validator, never owner projection content."""
@@ -699,6 +706,10 @@ def routes(
         raise ValueError("owner projection requires typed control-plane authorization")
     hits: dict[tuple[str, str], deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
+    rate_counters = {
+        rate_class: {"requests": 0, "limited": 0}
+        for rate_class in RATE_CLASS_LIMITS
+    }
     projection_etags = _ProjectionETagCache(home)
     authorize = authorizer or (
         lambda bearer, capability, target: _capauth_authorize(home, bearer, capability, target)
@@ -709,13 +720,18 @@ def routes(
             now = time.monotonic()
             client = request.client.host if request.client else "local"
             recent = hits[(rate_class, client)]
-            while recent and recent[0] <= now - 60:
+            limit = RATE_CLASS_LIMITS[rate_class]
+            while recent and recent[0] <= now - RATE_WINDOW_SECONDS:
                 recent.popleft()
-            if len(recent) >= 120:
+            rate_counters[rate_class]["requests"] += 1
+            if len(recent) >= limit:
+                rate_counters[rate_class]["limited"] += 1
                 response = _error(
                     request, 429, "RATE_LIMITED", "read rate limit exceeded", retryable=True
                 )
-                response.headers["Retry-After"] = "60"
+                response.headers["Retry-After"] = str(RATE_WINDOW_SECONDS)
+                response.headers["X-RateLimit-Class"] = rate_class
+                response.headers["X-RateLimit-Limit"] = str(limit)
                 return response
             recent.append(now)
             counters["requests"] += 1
@@ -774,11 +790,14 @@ def routes(
                     hashlib.sha256(authorization.encode()).hexdigest(),
                 )
             )
-            matched = projection_etags.matches(
+            matched, cache_status = projection_etags.matches(
                 cache_key, request.headers.get("if-none-match")
             )
             if matched is not None:
-                return Response(status_code=304, headers={"ETag": matched})
+                return Response(
+                    status_code=304,
+                    headers={"ETag": matched, "X-Projection-Cache": "hit"},
+                )
 
             raw = board_reader(home, limit=limit, cursor=cursor)
             errors = [raw["error"]] if raw.get("error") else []
@@ -799,11 +818,29 @@ def routes(
                 # Compatibility for injected readers predating the bounded owner contract.
                 result = _page(request, "skcoord", items, errors)
             response = _response(request, result)
-            if response.status_code in {200, 304} and response.headers.get("etag"):
+            if not errors and response.status_code == 200 and response.headers.get("etag"):
                 projection_etags.remember(cache_key, response.headers["etag"])
+            response.headers["X-Projection-Cache"] = cache_status
             return response
         except (TypeError, ValueError) as exc:
-            return _error(request, 400, "INVALID_QUERY", str(exc))
+            response = _error(request, 400, "INVALID_QUERY", str(exc))
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Projection-Cache"] = "bypass"
+            return response
+        except TimeoutError:
+            response = _error(
+                request, 504, "OWNER_TIMEOUT", "board owner read timed out", retryable=True
+            )
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Projection-Cache"] = "bypass"
+            return response
+        except Exception:
+            response = _error(
+                request, 503, "OWNER_UNAVAILABLE", "board owner read failed", retryable=True
+            )
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Projection-Cache"] = "bypass"
+            return response
 
     async def fleet(request):
         from . import dashboard_fleet
@@ -1392,7 +1429,24 @@ def routes(
             "# HELP skdashboard_control_plane_denied_total Denied control-plane requests.",
             "# TYPE skdashboard_control_plane_denied_total counter",
             f"skdashboard_control_plane_denied_total {counters['denied']}",
+            "# HELP skdashboard_control_plane_rate_class_limit Per-client request limit per window.",
+            "# TYPE skdashboard_control_plane_rate_class_limit gauge",
+            "# HELP skdashboard_control_plane_rate_class_requests_total Requests observed by rate class.",
+            "# TYPE skdashboard_control_plane_rate_class_requests_total counter",
+            "# HELP skdashboard_control_plane_rate_class_limited_total Requests rejected by rate class.",
+            "# TYPE skdashboard_control_plane_rate_class_limited_total counter",
         ]
+        for rate_class, limit in RATE_CLASS_LIMITS.items():
+            labels = f'class="{rate_class}"'
+            lines.extend(
+                (
+                    f"skdashboard_control_plane_rate_class_limit{{{labels}}} {limit}",
+                    f"skdashboard_control_plane_rate_class_requests_total{{{labels}}} "
+                    f"{rate_counters[rate_class]['requests']}",
+                    f"skdashboard_control_plane_rate_class_limited_total{{{labels}}} "
+                    f"{rate_counters[rate_class]['limited']}",
+                )
+            )
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     return [

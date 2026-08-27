@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,7 @@ DEFAULT_DASHBOARD_HOST = "127.0.0.1"
 _DOCTOR_CACHE_TTL = 30.0
 _doctor_cache: dict = {"ts": 0.0, "home": None, "report": None}
 _board_readers: dict[Path, _BoundedBoardReader] = {}
+_board_readers_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Capability names for the write routes that are NOT queue-a-run and NOT a
@@ -394,7 +396,7 @@ class _BoundedBoardReader:
         from skcoord.card_store import CardStore
         from skcoord.coordination import TaskViewReadBatch, TaskViewReadScope
 
-        self._home = Path(home)
+        self._home = Path(home).resolve()
         # CardStore task and epic identifiers are eight lowercase hex digits;
         # ITIL records are explicitly prefixed. Build only the lexical keyset
         # here and defer every fold to the requested ``limit + 1`` page.
@@ -452,16 +454,18 @@ class _BoundedBoardReader:
 def _bounded_board_reader(home: Path) -> _BoundedBoardReader:
     """Return one process-local owner index until an accepted mutation."""
     key = Path(home).resolve()
-    reader = _board_readers.get(key)
-    if reader is None:
-        reader = _BoundedBoardReader(key)
-        _board_readers[key] = reader
-    return reader
+    with _board_readers_lock:
+        reader = _board_readers.get(key)
+        if reader is None:
+            reader = _BoundedBoardReader(key)
+            _board_readers[key] = reader
+        return reader
 
 
 def _invalidate_bounded_board_reader(home: Path) -> None:
     """Discard the owner index after an accepted dashboard card mutation."""
-    _board_readers.pop(Path(home).resolve(), None)
+    with _board_readers_lock:
+        _board_readers.pop(Path(home).resolve(), None)
 
 
 def _get_board_state(home: Path) -> dict:

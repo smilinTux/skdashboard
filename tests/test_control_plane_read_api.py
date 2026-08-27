@@ -14,7 +14,12 @@ from skcoord.card_store import CardStore
 from skcoord.coordination import Board, TaskViewReadBatch, TaskViewReadScope
 from starlette.testclient import TestClient
 
-from skdashboard.control_plane_api import _capauth_authorize
+from skdashboard.control_plane_api import (
+    PROJECTION_ETAG_TTL_SECONDS,
+    RATE_CLASS_LIMITS,
+    _capauth_authorize,
+    invalidate_control_plane_projections,
+)
 from skdashboard.dashboard import create_app
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
@@ -214,8 +219,75 @@ def test_matching_etag_avoids_owner_recomputation(tmp_path: Path) -> None:
         )
 
     assert first.status_code == 200
+    assert first.headers["x-projection-cache"] == "bypass"
     assert unchanged.status_code == 304
+    assert unchanged.headers["x-projection-cache"] == "hit"
     assert counter == {"calls": 1, "records": 2}
+
+
+def test_projection_cache_expiry_invalidation_scope_and_failure_are_safe(
+    tmp_path: Path,
+) -> None:
+    counter = {"calls": 0, "records": 0}
+
+    def fold(_store, card_id):
+        return Card(
+            id=card_id,
+            kind=Kind.TASK,
+            title=card_id,
+            status=Column.BACKLOG,
+            swimlane="feature",
+            source="cards",
+        )
+
+    with patch.object(CardStore, "fold", fold):
+        client = TestClient(_bounded_app(tmp_path, counter))
+        first = client.get("/api/v1/board/summary?limit=1", headers=READ_HEADERS)
+        scope_miss = client.get(
+            "/api/v1/board/summary?limit=2",
+            headers={**READ_HEADERS, "If-None-Match": first.headers["etag"]},
+        )
+        with patch("skdashboard.control_plane_api.PROJECTION_ETAG_TTL_SECONDS", -1):
+            expiring_client = TestClient(_bounded_app(tmp_path / "expired", counter))
+            expiring_first = expiring_client.get(
+                "/api/v1/board/summary?limit=1", headers=READ_HEADERS
+            )
+            expired = expiring_client.get(
+                "/api/v1/board/summary?limit=1",
+                headers={**READ_HEADERS, "If-None-Match": expiring_first.headers["etag"]},
+            )
+
+    assert PROJECTION_ETAG_TTL_SECONDS == 60
+    assert scope_miss.status_code == 200
+    assert scope_miss.headers["x-projection-cache"] == "miss"
+    # Expiry forces owner recomputation, after which the generic conditional
+    # response may still correctly return 304 for the unchanged fresh bytes.
+    assert expired.status_code == 304
+    assert expired.headers["x-projection-cache"] == "expired"
+
+    invalidate_control_plane_projections(tmp_path)
+    with patch.object(CardStore, "fold", fold):
+        invalidated = client.get(
+            "/api/v1/board/summary?limit=1",
+            headers={**READ_HEADERS, "If-None-Match": first.headers["etag"]},
+        )
+    assert invalidated.status_code == 304
+    assert invalidated.headers["x-projection-cache"] == "invalidated"
+
+    timed_out = create_app(
+        tmp_path / "timeout",
+        control_plane_authorizer=_authorizer,
+        control_plane_board_reader=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TimeoutError()
+        ),
+    )
+    failure = TestClient(timed_out).get(
+        "/api/v1/board/summary?limit=1", headers=READ_HEADERS
+    )
+    assert failure.status_code == 504
+    assert failure.json()["code"] == "OWNER_TIMEOUT"
+    assert failure.headers["cache-control"] == "no-store"
+    assert failure.headers["x-projection-cache"] == "bypass"
 
 
 def test_common_read_saturation_cannot_rate_limit_health(tmp_path: Path) -> None:
@@ -232,10 +304,20 @@ def test_common_read_saturation_cannot_rate_limit_health(tmp_path: Path) -> None
         control_plane_board_reader=board_reader,
     )
     client = TestClient(app)
-    for _ in range(120):
+    for _ in range(RATE_CLASS_LIMITS["common"]):
         assert client.get("/api/v1/board/summary?limit=1", headers=READ_HEADERS).status_code == 200
 
+    limited = client.get("/api/v1/board/summary?limit=1", headers=READ_HEADERS)
+    assert limited.status_code == 429
+    assert limited.headers["x-ratelimit-class"] == "common"
     assert client.get("/api/v1/health").status_code == 200
+
+    metrics = client.get("/metrics", headers=READ_HEADERS)
+    assert metrics.status_code == 200
+    assert 'skdashboard_control_plane_rate_class_limit{class="common"} 120' in metrics.text
+    assert 'skdashboard_control_plane_rate_class_limit{class="critical"} 120' in metrics.text
+    assert 'skdashboard_control_plane_rate_class_limited_total{class="common"} 1' in metrics.text
+    assert 'skdashboard_control_plane_rate_class_limited_total{class="critical"} 0' in metrics.text
 
 
 def test_v1_source_failure_is_partial_not_healthy(tmp_path: Path) -> None:
