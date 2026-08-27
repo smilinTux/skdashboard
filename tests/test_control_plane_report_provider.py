@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
 
 from starlette.testclient import TestClient
 from test_control_plane_decision_context import ORIGIN, Rig
 
 from skdashboard.dashboard import create_app
+
+
+class _Routes:
+    def __init__(self, *rigs: Rig):
+        self.rigs = {rig.binding.target: rig for rig in rigs}
+
+    def authorize_with_currentness(self, bearer, invocation):
+        return self.rigs[invocation.target].authorizer.authorize_with_currentness(
+            bearer, invocation
+        )
+
+    def factory(self, request, capability, target):
+        return self.rigs[target].factory(request, capability, target)
+
 
 PATH = "/api/v1/reports/projection?role=project-manager&scope=estate&window=latest&baseline=none&service=all&report_type=all"
 
@@ -119,6 +134,82 @@ def test_report_scope_rejects_unknown_duplicate_and_protected_values(tmp_path: P
         )
         assert response.status_code == 400
         assert response.json()["code"] == "INVALID_REPORT_SCOPE"
+
+
+def test_slow_report_does_not_starve_health_evidence_or_common_reads(tmp_path: Path):
+    rig = Rig(target="/api/v1/reports/projection")
+    entered = Event()
+    release = Event()
+
+    class Provider:
+        def read(self, _context, query, _home, *, currentness_verifier):
+            entered.set()
+            release.wait(2)
+            return projection(query)
+
+    overview = Rig(target="/api/v1/overview")
+    board = Rig(target="/api/v1/board/summary")
+    metrics_rig = Rig(target="/metrics")
+    routes = _Routes(rig, overview, board, metrics_rig)
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=routes,
+        control_plane_invocation_factory=routes.factory,
+        control_plane_report_provider=Provider(),
+    )
+    result = {}
+
+    def report():
+        result["response"] = TestClient(app).get(
+            PATH,
+            headers={"Authorization": f"Bearer {rig.fresh_bearer()}", "Origin": ORIGIN},
+        )
+
+    thread = Thread(target=report)
+    thread.start()
+    assert entered.wait(1)
+    client = TestClient(app)
+    assert client.get("/api/v1/health").status_code == 200
+    assert client.get(
+        "/api/v1/overview",
+        headers={"Authorization": f"Bearer {overview.fresh_bearer()}", "Origin": ORIGIN},
+    ).status_code == 200
+    assert client.get(
+        "/api/v1/board/summary",
+        headers={"Authorization": f"Bearer {board.fresh_bearer()}", "Origin": ORIGIN},
+    ).status_code == 200
+    metrics = client.get(
+        "/metrics",
+        headers={"Authorization": f"Bearer {metrics_rig.fresh_bearer()}", "Origin": ORIGIN},
+    )
+    assert metrics.status_code == 200
+    assert 'skdashboard_workload_active{workload="report"} 1' in metrics.text
+    release.set()
+    thread.join(2)
+    assert result["response"].status_code == 200
+
+
+def test_report_worker_failure_is_bounded_unavailable(tmp_path: Path):
+    rig = Rig(target="/api/v1/reports/projection")
+
+    class Provider:
+        def read(self, *_args, **_kwargs):
+            raise RuntimeError("public-synthetic worker outage")
+
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=rig.factory,
+        control_plane_report_provider=Provider(),
+    )
+    response = TestClient(app).get(
+        PATH,
+        headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "REPORTS_UNAVAILABLE"
+    assert response.json()["retryable"] is True
+    assert "public-synthetic" not in response.text
 
 
 def test_report_provider_requires_typed_authorization(tmp_path: Path):
