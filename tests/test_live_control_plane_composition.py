@@ -173,12 +173,15 @@ def test_read_only_runtime_serves_now_portfolio_static_and_external_board(tmp_pa
     now = client.get("/control-plane/now")
     portfolio = client.get("/control-plane/portfolio")
     css = client.get("/static/css/overview.css")
+    javascript = client.get("/static/js/overview.js")
     assert now.status_code == portfolio.status_code == css.status_code == 200
     assert "<h2>Now</h2>" in now.text
     assert "Portfolio" in portfolio.text
     assert f'href="{board}"' in now.text
     assert f'href="{board}"' in portfolio.text
     assert 'href="/board"' not in now.text + portfolio.text
+    assert board in javascript.text
+    assert 'href="/board"' not in javascript.text
     assert client.get("/board").status_code == 404
     assert client.post("/api/card/example/mutate").status_code == 404
 
