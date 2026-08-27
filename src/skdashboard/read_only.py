@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from copy import deepcopy
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
@@ -18,6 +19,17 @@ from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
+READ_ONLY_STATIC_ASSETS = frozenset(
+    {
+        "css/board.css",
+        "css/cockpit.css",
+        "css/overview.css",
+        "css/projects.css",
+        "js/control_plane_scope.js",
+        "js/overview.js",
+        "js/projects.js",
+    }
+)
 
 
 class CallbackAccessLogFilter(logging.Filter):
@@ -104,6 +116,7 @@ def create_read_only_app(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    legacy_board_url=None,
 ) -> Starlette:
     """Build the least-privilege app without importing legacy route tables."""
 
@@ -125,9 +138,48 @@ def create_read_only_app(
 
         report_provider = ReportProjectionProvider()
 
+    if legacy_board_url is not None:
+        parsed_board_url = urlsplit(legacy_board_url)
+        if (
+            parsed_board_url.scheme != "https"
+            or not parsed_board_url.netloc
+            or parsed_board_url.username is not None
+            or parsed_board_url.password is not None
+            or parsed_board_url.query
+            or parsed_board_url.fragment
+        ):
+            raise ValueError("legacy board URL must be a credential-free exact HTTPS URL")
+
+    def page(name: str):
+        async def serve(_request):
+            html = (static_dir / name).read_text(encoding="utf-8")
+            if legacy_board_url is not None:
+                html = html.replace('href="/board"', f'href="{legacy_board_url}"')
+            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+        return serve
+
     async def index(_request):
         name = "read_only_session.html" if session_adapter is not None else "read_only.html"
-        return HTMLResponse((static_dir / name).read_text(encoding="utf-8"))
+        return await page(name)(_request)
+
+    async def static_asset(request):
+        relative = request.url.path.removeprefix("/static/")
+        if relative not in READ_ONLY_STATIC_ASSETS:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        candidate = (static_dir / relative).resolve()
+        try:
+            candidate.relative_to(static_dir.resolve())
+        except ValueError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if not candidate.is_file():
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
+            javascript = candidate.read_text(encoding="utf-8").replace(
+                '"/board"', json.dumps(legacy_board_url)
+            )
+            return Response(javascript, media_type="text/javascript")
+        return FileResponse(candidate)
 
     async def manifest(request):
         base = str(request.base_url).rstrip("/")
@@ -144,7 +196,12 @@ def create_read_only_app(
             }
         )
 
-    routes = [Route("/", index), Route("/.well-known/skworld-module.json", manifest)]
+    routes = [
+        Route("/", index),
+        Route("/control-plane/now", page("overview.html")),
+        Route("/control-plane/portfolio", page("projects.html")),
+        Route("/.well-known/skworld-module.json", manifest),
+    ]
     routes.extend(
         control_plane_routes(
             home,
@@ -166,6 +223,14 @@ def create_read_only_app(
     )
     if session_adapter is not None:
         routes.extend(session_adapter.routes())
+    for asset in sorted(READ_ONLY_STATIC_ASSETS):
+        routes.append(
+            Route(
+                f"/static/{asset}",
+                static_asset,
+                name=asset,
+            )
+        )
     app = Starlette(routes=routes)
     app.add_middleware(SecureTransportMiddleware)
     return app
