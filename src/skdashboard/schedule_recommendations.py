@@ -72,9 +72,23 @@ def compare_scenarios(
             }
         )
     normalized.sort(key=lambda item: (item["kind"], item["item_id"], _canonical(item)))
+    baseline_hash = _hash(baseline)
+    scenario_view = {
+        "source_baseline_hash": baseline_hash,
+        "overrides": [
+            {
+                "kind": item["kind"],
+                "item_id": item["item_id"],
+                "field": item["field"],
+                "value": item["after"],
+            }
+            for item in normalized
+        ],
+    }
     identity = {
         "source": dict(projection_binding),
-        "baseline_hash": _hash(baseline),
+        "baseline_hash": baseline_hash,
+        "scenario": scenario_view,
         "changes": normalized,
     }
     digest = _hash(identity)
@@ -84,14 +98,14 @@ def compare_scenarios(
         "scenario_id": "scn-" + digest.removeprefix("sha256:")[:24],
         "scenario_hash": digest,
         "source_projection": dict(projection_binding),
-        "baseline_hash": identity["baseline_hash"],
+        "baseline_hash": baseline_hash,
         "method_separation": {
             "date_projection": "deterministic critical path from owner dates and dependencies",
             "flow_projection": "probabilistic aggregate throughput in canonical periods",
             "blended": False,
         },
         "changes": normalized,
-        "comparison": {"baseline": dict(baseline), "scenario": dict(baseline)},
+        "comparison": {"baseline": dict(baseline), "scenario": scenario_view},
         "created_at": created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "immutable": True,
         "mode": "no_write",
@@ -201,7 +215,14 @@ def preview_reschedule(
 
     if expires_at.tzinfo is None:
         raise ValueError("expires_at must be timezone-aware")
-    if not owner_system or not owner_operation or not changes or not rollback or not required_approvals:
+    required_binding = {"projection_id", "projection_version", "projection_hash"}
+    if set(projection_binding) != required_binding or not all(projection_binding.values()):
+        raise ValueError("an exact projection binding is required")
+    for name, value in (("projection_hash", projection_binding["projection_hash"]), ("scenario_hash", scenario_hash)):
+        digest = value.removeprefix("sha256:") if isinstance(value, str) else ""
+        if not isinstance(value, str) or not value.startswith("sha256:") or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValueError(f"{name} must use sha256:<64 lowercase hex>")
+    if not scenario_id or not owner_system or not owner_operation or not changes or not rollback or not required_approvals:
         raise ValueError("typed operation, changes, rollback, and approvals are required")
     operation_changes = []
     for change in changes:

@@ -39,7 +39,9 @@ def test_all_required_scenario_types_are_reproducible_and_no_write():
     assert {item["kind"] for item in first["changes"]} == SCENARIO_KINDS
     assert first["method_separation"]["blended"] is False
     assert first["comparison"]["baseline"] == baseline
-    assert first["comparison"]["scenario"] == baseline
+    assert first["comparison"]["scenario"]["source_baseline_hash"] == first["baseline_hash"]
+    assert len(first["comparison"]["scenario"]["overrides"]) == len(_changes())
+    assert {item["value"] for item in first["comparison"]["scenario"]["overrides"] if item["kind"] == "scope_change"} == {8}
     assert first["writes_owner_records"] is False
     assert first["individual_ranking_prohibited"] is True
     assert first["scenario_hash"] == first["reproducibility_key"]
@@ -129,3 +131,5 @@ def test_preview_rejects_untyped_change_and_missing_approval():
         preview_reschedule(**base, changes=({"item_id": "x", "field": "person_rank", "evidence_refs": ["e://1"]},))
     with pytest.raises(ValueError, match="approvals"):
         preview_reschedule(**{**base, "required_approvals": ()}, changes=({"item_id": "x", "field": "sequence", "evidence_refs": ["e://1"]},))
+    with pytest.raises(ValueError, match="scenario_hash"):
+        preview_reschedule(**{**base, "scenario_hash": "not-a-hash"}, changes=({"item_id": "x", "field": "sequence", "evidence_refs": ["e://1"]},))
