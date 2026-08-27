@@ -17,7 +17,10 @@ from uuid import uuid4
 
 from capauth import ClientKind, ControlPlaneDecisionAuthorizer, ControlPlaneInvocationV1
 from capauth.control_plane import RequestBoundary
-from skcoord.authorized_card_policy import AuthorizedCardPolicyBackend, AuthorizedCardPolicyProvider
+from skcoord.authorized_card_policy import (
+    AuthorizedCardPolicyBackend,
+    AuthorizedCardPolicyProvider,
+)
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS, MAX_BEARER_BYTES
 
@@ -123,7 +126,11 @@ class EphemeralIssuerClient:
             writer.write(encoded)
             await asyncio.wait_for(writer.drain(), timeout=2)
             response = await asyncio.wait_for(reader.readline(), timeout=2)
-            if not response or len(response) > MAX_ISSUER_MESSAGE_BYTES or not response.endswith(b"\n"):
+            if (
+                not response
+                or len(response) > MAX_ISSUER_MESSAGE_BYTES
+                or not response.endswith(b"\n")
+            ):
                 raise ConnectionError("issuer response is unavailable")
             decoded = json.loads(response)
             if set(decoded) != {"schema_version", "bearer"}:
