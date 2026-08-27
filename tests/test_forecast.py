@@ -60,6 +60,12 @@ def test_forecast_is_reproducible_truthful_and_range_only():
         "iterations": 500,
         "milestone_period": 8,
         "assumptions": ("aggregate weekly throughput remains representative",),
+        "calibration": {
+            "state": "calibrated",
+            "backtest_ref": "evidence://backtest/flow-v4",
+            "coverage": {"p50": 0.52, "p85": 0.84, "p95": 0.96},
+            "reason": None,
+        },
     }
     first = forecast(_history(), **kwargs)
     second = forecast(_history(), **kwargs)
@@ -71,6 +77,8 @@ def test_forecast_is_reproducible_truthful_and_range_only():
     assert first["method_discrimination"]["date_critical_path"].startswith("not calculated")
     assert first["history_window"] == {"start": "2026-05-04", "end": "2026-07-27"}
     assert first["sample_periods"] == 12
+    assert first["calibration"] == kwargs["calibration"]
+    assert "evaluated separately" in first["dependency_treatment"]
     assert (
         first["completion_quantiles_periods"]["p50"]
         <= first["completion_quantiles_periods"]["p85"]
@@ -78,6 +86,23 @@ def test_forecast_is_reproducible_truthful_and_range_only():
     )
     assert 0 <= first["milestone_confidence"] <= 1
     assert "completion_date" not in set(_walk_keys(first))
+
+
+def test_forecast_calibration_is_explicit_and_fails_closed():
+    unavailable = forecast(
+        _history(), cohort="approved-flow", scope="estate", remaining_work=4, seed=1
+    )
+    assert unavailable["calibration"]["state"] == "unavailable"
+    assert unavailable["calibration"]["coverage"] == {"p50": None, "p85": None, "p95": None}
+
+    with pytest.raises(ValueError, match="calibrated forecasts require"):
+        forecast(
+            _history(), cohort="approved-flow", scope="estate", remaining_work=4, seed=1,
+            calibration={
+                "state": "calibrated", "backtest_ref": None,
+                "coverage": {"p50": 0.5, "p85": 0.8, "p95": 0.9}, "reason": None,
+            },
+        )
 
 
 def test_migrated_administrative_and_mixed_clock_periods_are_excluded():

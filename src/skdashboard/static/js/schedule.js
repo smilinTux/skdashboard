@@ -100,8 +100,11 @@ function render() {
 function renderForecast(forecast) {
   const ranges = document.getElementById("schedule-forecast-ranges");
   document.getElementById("schedule-forecast-state").textContent = forecast.state;
-  document.getElementById("schedule-forecast-meta").textContent = `${forecast.method} | ${forecast.sample_periods} periods | ${forecast.history_window.start || "unknown"} to ${forecast.history_window.end || "unknown"}`;
-  ranges.textContent = forecast.state === "ready" ? `P50 ${forecast.completion_quantiles_periods.p50}, P85 ${forecast.completion_quantiles_periods.p85}, P95 ${forecast.completion_quantiles_periods.p95} periods. Aggregate flow only, not a critical-path date.` : `Unavailable: ${forecast.abstention_reason}`;
+  const calibration = forecast.calibration.state === "calibrated" ? `calibrated P50 ${forecast.calibration.coverage.p50}, P85 ${forecast.calibration.coverage.p85}, P95 ${forecast.calibration.coverage.p95}` : `calibration unavailable: ${forecast.calibration.reason}`;
+  const exclusions = forecast.exclusions.map((item) => `${item.period_id}: ${item.reason}`).join("; ") || "none";
+  const assumptions = forecast.assumptions.join("; ") || "none recorded";
+  document.getElementById("schedule-forecast-meta").textContent = `${forecast.method} | history ${forecast.history_window.start || "unknown"} to ${forecast.history_window.end || "unknown"} | sample ${forecast.sample_periods} periods | ${calibration}`;
+  ranges.textContent = forecast.state === "ready" ? `P50 ${forecast.completion_quantiles_periods.p50}, P85 ${forecast.completion_quantiles_periods.p85}, P95 ${forecast.completion_quantiles_periods.p95} periods. Aggregate flow only, not a critical-path date. Dependency treatment: ${forecast.dependency_treatment}. Exclusions: ${exclusions}. Assumptions: ${assumptions}.` : `Unavailable: ${forecast.abstention_reason}. Dependency treatment: ${forecast.dependency_treatment}. Exclusions: ${exclusions}. Assumptions: ${assumptions}.`;
 }
 
 function openDetail(id, trigger) {
