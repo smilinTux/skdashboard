@@ -185,6 +185,8 @@ def forecast(
     minimum_sample: int = 6,
     milestone_period: int | None = None,
     assumptions: Sequence[str] = (),
+    calibration: dict[str, object] | None = None,
+    dependency_treatment: str = "dependencies excluded from aggregate flow and evaluated separately",
 ) -> dict:
     """Forecast aggregate remaining work with reproducible bootstrap sampling."""
 
@@ -196,6 +198,34 @@ def forecast(
         raise ValueError("iterations and minimum_sample must be positive")
     if milestone_period is not None and milestone_period < 0:
         raise ValueError("milestone_period must be non-negative")
+    if not dependency_treatment:
+        raise ValueError("dependency_treatment is required")
+    calibration_record = dict(
+        calibration
+        or {
+            "state": "unavailable",
+            "backtest_ref": None,
+            "coverage": {"p50": None, "p85": None, "p95": None},
+            "reason": "no leakage-free backtest artifact was supplied",
+        }
+    )
+    if set(calibration_record) != {"state", "backtest_ref", "coverage", "reason"}:
+        raise ValueError("calibration must contain state, backtest_ref, coverage, and reason")
+    coverage = calibration_record["coverage"]
+    if (
+        calibration_record["state"] not in {"calibrated", "unavailable"}
+        or not isinstance(coverage, dict)
+        or set(coverage) != {"p50", "p85", "p95"}
+        or any(value is not None and not isinstance(value, (int, float)) for value in coverage.values())
+        or any(isinstance(value, (int, float)) and not 0 <= value <= 1 for value in coverage.values())
+    ):
+        raise ValueError("invalid forecast calibration")
+    if calibration_record["state"] == "calibrated":
+        if not calibration_record["backtest_ref"] or any(value is None for value in coverage.values()):
+            raise ValueError("calibrated forecasts require a backtest reference and P50 P85 P95 coverage")
+        calibration_record["reason"] = None
+    elif not calibration_record["reason"]:
+        raise ValueError("unavailable calibration requires a reason")
 
     included, excluded = _prepare_history(history)
     cadence_days = _cadence_days(included)
@@ -222,6 +252,8 @@ def forecast(
         "seed": seed,
         "assumptions": list(assumptions),
         "exclusions": excluded,
+        "dependency_treatment": dependency_treatment,
+        "calibration": calibration_record,
         "individual_ranking_prohibited": True,
         "writes_owner_records": False,
     }

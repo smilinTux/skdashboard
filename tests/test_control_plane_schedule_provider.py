@@ -116,6 +116,8 @@ def test_schedule_forecast_provider_is_protected_and_fails_closed(tmp_path: Path
     response = TestClient(app).get(path, headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN})
     assert response.status_code == 200
     assert response.json()["state"] == "ready"
+    assert response.json()["calibration"]["state"] == "unavailable"
+    assert response.json()["dependency_treatment"]
 
     unavailable = TestClient(create_app(tmp_path, control_plane_authorizer=lambda *_: True)).get(path, headers={"Authorization": "Bearer legacy"})
     assert unavailable.status_code == 503

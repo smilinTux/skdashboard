@@ -932,13 +932,15 @@ def routes(
         allowed_keys = {
             "schema_version", "artifact_kind", "state", "abstention_reason", "method", "calculation_owner",
             "method_discrimination", "cohort", "scope", "history_window", "sample_periods", "period_cadence_days",
-            "remaining_work", "iterations", "seed", "assumptions", "exclusions", "individual_ranking_prohibited",
-            "completion_quantiles_periods", "milestone_confidence", "writes_owner_records",
+            "remaining_work", "iterations", "seed", "assumptions", "exclusions", "dependency_treatment", "calibration",
+            "individual_ranking_prohibited", "completion_quantiles_periods", "milestone_confidence", "writes_owner_records",
         }
         if not isinstance(result, dict):
             return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "invalid schedule forecast")
         quantiles = result.get("completion_quantiles_periods")
         exclusions = result.get("exclusions")
+        calibration = result.get("calibration")
+        coverage = calibration.get("coverage") if isinstance(calibration, dict) else None
         typed = (
             result.get("schema_version") == "1.0.0"
             and result.get("artifact_kind") == "aggregate_schedule_forecast"
@@ -959,6 +961,14 @@ def routes(
             and result.get("individual_ranking_prohibited") is True
             and isinstance(result.get("assumptions"), list)
             and all(isinstance(item, str) for item in result["assumptions"])
+            and isinstance(result.get("dependency_treatment"), str)
+            and bool(result["dependency_treatment"])
+            and isinstance(calibration, dict)
+            and set(calibration) == {"state", "backtest_ref", "coverage", "reason"}
+            and calibration.get("state") in {"calibrated", "unavailable"}
+            and isinstance(coverage, dict)
+            and set(coverage) == {"p50", "p85", "p95"}
+            and all(value is None or isinstance(value, (int, float)) and 0 <= value <= 1 for value in coverage.values())
             and isinstance(exclusions, list)
             and all(isinstance(item, dict) and set(item) == {"period_id", "timing_basis", "reason"} and all(isinstance(value, str) for value in item.values()) for item in exclusions)
             and isinstance(quantiles, dict)
