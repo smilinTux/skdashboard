@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added reproducible no-write schedule scenario comparisons, evidence-balanced AI
+  schedule recommendations with typed abstention, and exact hash-bound expiring
+  reschedule action previews that never authorize dispatch.
+
 - Added an opt-in internal session capability issuer for the read-only runtime.
   It mints a fresh protected-request bearer and rejects reuse of the browser
   session access token.
