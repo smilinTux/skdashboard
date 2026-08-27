@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from starlette.applications import Starlette
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
@@ -160,6 +161,11 @@ def create_read_only_app(
             return JSONResponse({"error": "not_found"}, status_code=404)
         if not candidate.is_file():
             return JSONResponse({"error": "not_found"}, status_code=404)
+        if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
+            javascript = candidate.read_text(encoding="utf-8").replace(
+                '"/board"', json.dumps(legacy_board_url)
+            )
+            return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
 
     async def manifest(request):
