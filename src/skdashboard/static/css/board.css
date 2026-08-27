@@ -82,6 +82,7 @@ h1{font-size:16px;margin:0;font-weight:680;letter-spacing:-.01em;white-space:now
 .dot{width:7px;height:7px;border-radius:50%;background:var(--med);}
 .dot.on{background:var(--done);box-shadow:0 0 0 3px color-mix(in srgb,var(--done) 20%,transparent);animation:pulse 2s infinite;}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@media(prefers-reduced-motion:reduce){.dot.on{animation:none}}
 .who{font-size:11.5px;color:var(--ink3);}
 .filters{display:flex;gap:7px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
 .filters input,.filters select{font-size:12px;padding:5px 9px;border:1px solid var(--hair);border-radius:8px;background:var(--panel);color:var(--ink);}
