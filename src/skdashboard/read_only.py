@@ -19,6 +19,17 @@ from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
+READ_ONLY_STATIC_ASSETS = frozenset(
+    {
+        "css/board.css",
+        "css/cockpit.css",
+        "css/overview.css",
+        "css/projects.css",
+        "js/control_plane_scope.js",
+        "js/overview.js",
+        "js/projects.js",
+    }
+)
 
 
 class CallbackAccessLogFilter(logging.Filter):
@@ -153,7 +164,9 @@ def create_read_only_app(
         return await page(name)(_request)
 
     async def static_asset(request):
-        relative = request.path_params["path"]
+        relative = request.url.path.removeprefix("/static/")
+        if relative not in READ_ONLY_STATIC_ASSETS:
+            return JSONResponse({"error": "not_found"}, status_code=404)
         candidate = (static_dir / relative).resolve()
         try:
             candidate.relative_to(static_dir.resolve())
@@ -210,7 +223,14 @@ def create_read_only_app(
     )
     if session_adapter is not None:
         routes.extend(session_adapter.routes())
-    routes.append(Route("/static/{path:path}", static_asset))
+    for asset in sorted(READ_ONLY_STATIC_ASSETS):
+        routes.append(
+            Route(
+                f"/static/{asset}",
+                static_asset,
+                name=asset,
+            )
+        )
     app = Starlette(routes=routes)
     app.add_middleware(SecureTransportMiddleware)
     return app
