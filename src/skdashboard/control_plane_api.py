@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import inspect
@@ -13,8 +14,21 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+
+from .workload_isolation import (
+    INSIGHT_LIMITS,
+    REPORT_LIMITS,
+    BoundedWorkload,
+    WorkloadError,
+    WorkloadRequestTooLarge,
+    WorkloadResponseTooLarge,
+    WorkloadSaturated,
+    WorkloadTimedOut,
+)
 
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
@@ -22,6 +36,22 @@ MAX_BEARER_BYTES = 64 * 1024
 TENANT_RESOURCE_TYPE = "tenant"
 ALLOWED_BROWSER_ORIGINS = frozenset({"https://10.0.0.139:7778", "https://100.81.238.58:7778"})
 SSE_CURRENTNESS_SECONDS = 1
+INSIGHT_INTENTS = frozenset({"brief", "explain", "compare", "forecast_explanation", "draft_report"})
+INSIGHT_METRIC_FAMILIES = frozenset(
+    {"portfolio", "flow", "reliability", "delivery", "architecture", "ai", "economy", "governance", "experience"}
+)
+INSIGHT_SCOPE_KEYS = frozenset(
+    {
+        "portfolio_id",
+        "project_id",
+        "product_id",
+        "service_id",
+        "team_id",
+        "node_id",
+        "environment",
+        "measurement_lane",
+    }
+)
 
 
 class ControlPlaneInvocationFactory(Protocol):
@@ -630,6 +660,7 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    insight_provider=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -641,10 +672,30 @@ def routes(
         or architecture_provider is not None
         or governance_provider is not None
         or report_provider is not None
+        or insight_provider is not None
     ) and decision_authorizer is None:
         raise ValueError("owner projection requires typed control-plane authorization")
     hits: dict[str, deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
+    insight_workload = BoundedWorkload("insight", INSIGHT_LIMITS)
+    report_workload = BoundedWorkload("report", REPORT_LIMITS)
+    insight_schema_root = Path(__file__).parent / "contracts" / "v1.1.0"
+    insight_schema = json.loads(
+        (insight_schema_root / "control-plane-insight.v1.1.0.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    insight_registry = Registry().with_resources(
+        [
+            (document["$id"], Resource.from_contents(document))
+            for path in insight_schema_root.glob("*.json")
+            for document in [json.loads(path.read_text(encoding="utf-8"))]
+            if "$id" in document
+        ]
+    )
+    insight_validator = Draft202012Validator(
+        insight_schema, registry=insight_registry, format_checker=FormatChecker()
+    )
     authorize = authorizer or (
         lambda bearer, capability, target: _capauth_authorize(home, bearer, capability, target)
     )
@@ -1137,6 +1188,90 @@ def routes(
             return Response(status_code=304, headers={"ETag": etag})
         return Response(serialized, media_type="application/json", headers={"ETag": etag})
 
+    def _workload_failure(request, error, *, unavailable_code: str):
+        if isinstance(error, WorkloadRequestTooLarge):
+            return _error(request, 413, "REQUEST_TOO_LARGE", str(error))
+        if isinstance(error, WorkloadResponseTooLarge):
+            return _error(request, 503, unavailable_code, "the bounded workload response is unavailable", retryable=True)
+        if isinstance(error, WorkloadSaturated):
+            response = _error(request, 429, "WORKLOAD_SATURATED", str(error), retryable=True)
+            response.headers["Retry-After"] = "1"
+            return response
+        if isinstance(error, WorkloadTimedOut):
+            return _error(request, 503, "WORKLOAD_TIMEOUT", str(error), retryable=True)
+        return _error(request, 503, unavailable_code, "the bounded workload provider is unavailable", retryable=True)
+
+    async def insights(request):
+        if insight_provider is None:
+            return _error(
+                request,
+                503,
+                "INSIGHTS_UNAVAILABLE",
+                "the governed insight provider is unavailable",
+                retryable=True,
+            )
+        content_length = request.headers.get("content-length")
+        try:
+            if content_length is not None and int(content_length) > INSIGHT_LIMITS.max_request_bytes:
+                raise WorkloadRequestTooLarge("workload request exceeds its byte ceiling")
+            body = bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > INSIGHT_LIMITS.max_request_bytes:
+                    raise WorkloadRequestTooLarge(
+                        "workload request exceeds its byte ceiling"
+                    )
+            raw = bytes(body)
+            query = json.loads(raw)
+            if not isinstance(query, dict) or set(query) - {
+                "question", "scope", "window", "intent", "metric_families", "baseline"
+            }:
+                raise ValueError
+            scope = query.get("scope")
+            families = query.get("metric_families")
+            if (
+                not isinstance(query.get("question"), str)
+                or not 1 <= len(query["question"]) <= 2000
+                or not isinstance(scope, dict)
+                or not scope
+                or set(scope) - INSIGHT_SCOPE_KEYS
+                or any(not isinstance(value, str) or not value or len(value) > 128 for value in scope.values())
+                or query.get("intent") not in INSIGHT_INTENTS
+                or not isinstance(families, list)
+                or not 1 <= len(families) <= 16
+                or len(set(families)) != len(families)
+                or any(family not in INSIGHT_METRIC_FAMILIES for family in families)
+                or not isinstance(query.get("window"), dict)
+                or (query.get("baseline") is not None and (not isinstance(query["baseline"], str) or len(query["baseline"]) > 128))
+            ):
+                raise ValueError
+        except WorkloadRequestTooLarge as error:
+            return _workload_failure(request, error, unavailable_code="INSIGHTS_UNAVAILABLE")
+        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            return _error(request, 400, "INVALID_INSIGHT_QUERY", "the insight query is invalid")
+
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        if context is None or verifier is None:
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the authorized insight provider is unavailable", retryable=True)
+        try:
+            result = await insight_workload.run(
+                insight_provider.read,
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+                request_bytes=len(raw),
+            )
+            insight_validator.validate(result)
+        except asyncio.CancelledError:
+            raise
+        except WorkloadError as error:
+            return _workload_failure(request, error, unavailable_code="INSIGHTS_UNAVAILABLE")
+        except Exception:
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the governed insight result is unavailable", retryable=True)
+        return _response(request, result)
+
     async def reports(request):
         allowed = {
             "role",
@@ -1184,17 +1319,37 @@ def routes(
                 retryable=True,
             )
         try:
-            projection = report_provider.read(context, query, home, currentness_verifier=verifier)
+            request_bytes = len(
+                json.dumps(query, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
+            projection = await report_workload.run(
+                report_provider.read,
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+                request_bytes=request_bytes,
+            )
         except KeyError:
             return _error(
                 request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
             )
+        except WorkloadError as error:
+            return _workload_failure(request, error, unavailable_code="REPORTS_UNAVAILABLE")
         except ValueError:
             return _error(
                 request,
                 503,
                 "REPORTS_UNAVAILABLE",
                 "the immutable report store is unavailable",
+                retryable=True,
+            )
+        except Exception:
+            return _error(
+                request,
+                503,
+                "REPORTS_UNAVAILABLE",
+                "the bounded report provider is unavailable",
                 retryable=True,
             )
         if not isinstance(projection, dict):
@@ -1222,16 +1377,31 @@ def routes(
                 retryable=True,
             )
         try:
-            snapshot = report_provider.read_snapshot(
-                context, snapshot_id, home, currentness_verifier=verifier
+            snapshot = await report_workload.run(
+                report_provider.read_snapshot,
+                context,
+                snapshot_id,
+                home,
+                currentness_verifier=verifier,
+                request_bytes=len(snapshot_id.encode("utf-8")),
             )
         except KeyError:
             return _error(
                 request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
             )
+        except WorkloadError as error:
+            return _workload_failure(request, error, unavailable_code="REPORTS_UNAVAILABLE")
         except ValueError:
             return _error(
                 request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
+            )
+        except Exception:
+            return _error(
+                request,
+                503,
+                "REPORTS_UNAVAILABLE",
+                "the bounded report provider is unavailable",
+                retryable=True,
             )
         if not isinstance(snapshot, dict):
             return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report snapshot")
@@ -1305,6 +1475,15 @@ def routes(
             "# TYPE skdashboard_control_plane_denied_total counter",
             f"skdashboard_control_plane_denied_total {counters['denied']}",
         ]
+        for workload in (insight_workload, report_workload):
+            snapshot = workload.snapshot()
+            for key in (
+                "active", "admitted", "accepted", "completed", "saturated", "timed_out",
+                "cancelled", "failed", "request_too_large", "response_too_large",
+            ):
+                lines.append(
+                    f'skdashboard_workload_{key}{{workload="{workload.name}"}} {snapshot[key]}'
+                )
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     return [
@@ -1315,6 +1494,11 @@ def routes(
         Route("/api/v1/reliability/projection", protected(reliability, "skdashboard.read")),
         Route("/api/v1/architecture/projection", protected(architecture, "skdashboard.read")),
         Route("/api/v1/governance/projection", protected(governance, "skdashboard.read")),
+        Route(
+            "/api/v1/insights/query",
+            protected(insights, "skdashboard.insights.query"),
+            methods=["POST"],
+        ),
         Route("/api/v1/reports/projection", protected(reports, "skdashboard.read")),
         Route(
             "/api/v1/reports/{snapshot_id}",
