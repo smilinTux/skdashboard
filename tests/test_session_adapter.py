@@ -1,6 +1,8 @@
 import asyncio
 import os
+import sqlite3
 import ssl
+import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -146,6 +148,54 @@ def test_refresh_rotates_server_credentials_and_pep_runs_each_request(tmp_path):
         {"grant_type": "refresh_token", "refresh_token": "refresh-1"},
         None,
     )
+
+
+def test_concurrent_refresh_is_single_flight(tmp_path):
+    class BlockingTokens(Tokens):
+        def __init__(self):
+            super().__init__()
+            self.refresh_started = threading.Event()
+            self.release_refresh = threading.Event()
+
+        async def exchange(self, values, *, expected_nonce=None):
+            result = await super().exchange(values, expected_nonce=expected_nonce)
+            if values["grant_type"] == "refresh_token":
+                self.refresh_started.set()
+                assert self.release_refresh.wait(timeout=5)
+            return result
+
+    now = [1_000]
+    tokens = BlockingTokens()
+    session = adapter(tmp_path, clock=lambda: now[0], tokens=tokens)
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+    login(client)
+    handle = client.cookies.get(COOKIE_NAME)
+    now[0] = 1_290
+
+    def request():
+        return Request(
+            {
+                "type": "http",
+                "headers": [(b"cookie", f"{COOKIE_NAME}={handle}".encode())],
+            }
+        )
+    results = []
+
+    def first_refresh():
+        results.append(asyncio.run(session.resolve(request())))
+
+    worker = threading.Thread(target=first_refresh)
+    worker.start()
+    assert tokens.refresh_started.wait(timeout=5)
+    competing = asyncio.run(session.resolve(request()))
+    tokens.release_refresh.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert competing.state == "unavailable"
+    assert results[0].state == "authenticated"
+    refresh_calls = [call for call, _nonce in tokens.calls if call["grant_type"] == "refresh_token"]
+    assert refresh_calls == [{"grant_type": "refresh_token", "refresh_token": "refresh-1"}]
 
 
 def test_session_capability_issuer_mints_fresh_internal_bearers(tmp_path):
@@ -312,22 +362,123 @@ def test_consistent_encrypted_backup_recovers_after_restart(tmp_path):
 
 
 def test_login_transactions_are_bounded_and_pruned(tmp_path):
-    session = adapter(tmp_path)
-    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
-    responses = [client.get("/auth/login", follow_redirects=False) for _ in range(17)]
+    now = [1_000]
+    session = adapter(tmp_path, clock=lambda: now[0])
+
+    def make_client(source):
+        return TestClient(
+            create_read_only_app(tmp_path, session_adapter=session),
+            base_url=ORIGIN,
+            client=(source, 50_000),
+        )
+
+    first = make_client("192.0.2.1")
+    responses = [first.get("/auth/login", follow_redirects=False) for _ in range(17)]
     assert responses[-1].status_code == 429
+    assert responses[-1].json() == {"error": "login_rate_limited", "retryable": True}
+    assert responses[-1].headers["retry-after"] == "60"
+
+    for suffix in range(2, 9):
+        source = make_client(f"192.0.2.{suffix}")
+        for _ in range(16):
+            assert source.get("/auth/login", follow_redirects=False).status_code == 302
+    global_limit = make_client("192.0.2.9").get("/auth/login", follow_redirects=False)
+    assert global_limit.status_code == 429
     with session._connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM login_transactions").fetchone()[0] == 16
+        assert connection.execute("SELECT COUNT(*) FROM login_transactions").fetchone()[0] == 128
+
+    now[0] += 301
+    assert make_client("192.0.2.9").get("/auth/login", follow_redirects=False).status_code == 302
+    with session._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM login_transactions").fetchone()[0] == 1
 
 
-def test_logout_requires_upstream_revocation(tmp_path):
-    tokens = Tokens()
+def test_logout_requires_upstream_revocation_and_preserves_session_on_outage(tmp_path):
+    class RevocationTokens(Tokens):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+            self.revocations = []
+
+        async def revoke(self, refresh_token):
+            self.revocations.append(refresh_token)
+            if self.fail:
+                raise httpx.ConnectError("unavailable")
+
+    tokens = RevocationTokens()
     session = adapter(tmp_path, tokens=tokens)
     client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
     login(client)
     csrf = client.get("/auth/session").json()["csrf_token"]
-    assert client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}).status_code == 204
-    assert tokens.revoked == "refresh-1"
+    headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
+
+    unavailable = client.post("/auth/logout", headers=headers)
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"error": "session_unavailable", "retryable": True}
+    assert client.get("/auth/session").status_code == 200
+    assert COOKIE_NAME not in unavailable.headers.get("set-cookie", "")
+
+    tokens.fail = False
+    success = client.post("/auth/logout", headers=headers)
+    assert success.status_code == 204
+    assert tokens.revocations == ["refresh-1", "refresh-1"]
+    assert client.get("/auth/session").status_code == 401
+    assert f"{COOKIE_NAME}=\"\"" in success.headers["set-cookie"]
+
+
+def test_resolver_truth_states_and_protected_mapping(tmp_path, monkeypatch):
+    now = [1_000]
+    session = adapter(tmp_path, clock=lambda: now[0])
+    client = TestClient(
+        create_read_only_app(tmp_path, session_adapter=session, authorizer=lambda *_: True),
+        base_url=ORIGIN,
+    )
+    absent = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    assert absent.status_code == 401
+    assert absent.json()["code"] == "UNAUTHORIZED"
+
+    login(client)
+    authenticated = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    assert authenticated.status_code == 200
+    handle = client.cookies.get(COOKIE_NAME)
+    request = Request(
+        {"type": "http", "headers": [(b"cookie", f"{COOKIE_NAME}={handle}".encode())]}
+    )
+    assert asyncio.run(session.resolve(request)).state == "authenticated"
+
+    now[0] += 28_801
+    assert asyncio.run(session.resolve(request)).state == "expired"
+    expired = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    assert expired.status_code == 401
+    assert expired.json()["code"] == "UNAUTHORIZED"
+
+    now[0] = 1_000
+    with session._connect() as connection:
+        connection.execute(
+            "UPDATE sessions SET encrypted = ? WHERE handle_hash = ?",
+            (b"not-ciphertext", _digest(handle)),
+        )
+    assert asyncio.run(session.resolve(request)).state == "corrupt"
+    corrupt = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    assert corrupt.status_code == 503
+    assert {
+        key: corrupt.json()[key] for key in ("code", "message", "retryable")
+    } == {
+        "code": "SESSION_UNAVAILABLE",
+        "message": "session authorization is temporarily unavailable",
+        "retryable": True,
+    }
+    assert corrupt.headers["retry-after"] == "5"
+
+    def unavailable_store():
+        raise sqlite3.OperationalError("down")
+
+    monkeypatch.setattr(session, "_connect", unavailable_store)
+    assert asyncio.run(session.resolve(request)).state == "unavailable"
+    unavailable = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    assert unavailable.status_code == 503
+    assert unavailable.json()["retryable"] is True
+    assert "down" not in unavailable.text
 
 
 def test_only_bounded_session_post_route_is_added(tmp_path):

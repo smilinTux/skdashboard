@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Harden durable dashboard sessions with deterministic single-flight refresh,
+  fail-safe upstream logout revocation, bounded and pruned login transactions,
+  and typed absent, expired, corrupt, and unavailable authorization states.
+
 - Make the real-Chrome AI qualification use an OS-assigned port, allow a
   bounded slow Chrome startup, report its exact failed stage safely, stop child
   processes, and remove its own scratch.

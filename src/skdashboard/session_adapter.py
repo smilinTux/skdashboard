@@ -379,6 +379,18 @@ class EncryptedSessionAdapter:
             "access_expires_at": now + token["expires_in"],
         }
 
+    @staticmethod
+    def _valid_session_record(record: object) -> bool:
+        if not isinstance(record, dict):
+            return False
+        for key in ("access_token", "refresh_token", "csrf"):
+            if not isinstance(record.get(key), str) or not record[key]:
+                return False
+        return (
+            type(record.get("access_expires_at")) is int
+            and type(record.get("expires_at")) is int
+        )
+
     def _load(self, request: Request) -> tuple[str, dict] | None:
         handle = request.cookies.get(COOKIE_NAME, "")
         if not handle:
@@ -391,27 +403,34 @@ class EncryptedSessionAdapter:
         if row is None or row["expires_at"] <= int(self.clock()):
             return None
         try:
-            return handle, self._open(row["encrypted"])
+            record = self._open(row["encrypted"])
         except (InvalidToken, ValueError, TypeError, json.JSONDecodeError):
             return None
+        return (handle, record) if self._valid_session_record(record) else None
 
     def _load_with_state(self, request: Request) -> tuple[str, dict] | SessionResolution:
         handle = request.cookies.get(COOKIE_NAME, "")
         if not handle:
             return SessionResolution("absent")
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT encrypted, expires_at FROM sessions WHERE handle_hash = ?",
-                (_digest(handle),),
-            ).fetchone()
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT encrypted, expires_at FROM sessions WHERE handle_hash = ?",
+                    (_digest(handle),),
+                ).fetchone()
+        except sqlite3.Error:
+            return SessionResolution("unavailable")
         if row is None:
             return SessionResolution("absent")
         if row["expires_at"] <= int(self.clock()):
             return SessionResolution("expired")
         try:
-            return handle, self._open(row["encrypted"])
+            record = self._open(row["encrypted"])
         except (InvalidToken, ValueError, TypeError, json.JSONDecodeError):
             return SessionResolution("corrupt")
+        if not self._valid_session_record(record):
+            return SessionResolution("corrupt")
+        return handle, record
 
     async def resolve(self, request: Request) -> SessionResolution:
         loaded = self._load_with_state(request)
@@ -421,52 +440,73 @@ class EncryptedSessionAdapter:
         now = int(self.clock())
         if record["access_expires_at"] > now + 15:
             return SessionResolution("authenticated", record["access_token"])
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            current = connection.execute(
-                "SELECT encrypted FROM sessions WHERE handle_hash = ?", (_digest(handle),)
-            ).fetchone()
-            if current is None:
-                return SessionResolution("expired")
-            try:
-                current_record = self._open(current["encrypted"])
-            except (InvalidToken, ValueError, TypeError, json.JSONDecodeError):
-                return SessionResolution("corrupt")
-            refreshing_at = current_record.get("refreshing_at")
-            if current_record.get("refreshing") and type(refreshing_at) is int and (
-                now - refreshing_at < REFRESH_RESERVATION_TTL
-            ):
-                return SessionResolution("unavailable")
-            old_encrypted = current["encrypted"]
-            reserved = dict(record)
-            reserved["refreshing"] = True
-            reserved["refreshing_at"] = now
-            reserved_encrypted = self._seal(reserved)
-            changed = connection.execute(
-                "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
-                (reserved_encrypted, _digest(handle), old_encrypted),
-            ).rowcount
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                current = connection.execute(
+                    "SELECT encrypted FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+                ).fetchone()
+                if current is None:
+                    return SessionResolution("expired")
+                try:
+                    current_record = self._open(current["encrypted"])
+                except (InvalidToken, ValueError, TypeError, json.JSONDecodeError):
+                    return SessionResolution("corrupt")
+                if not self._valid_session_record(current_record):
+                    return SessionResolution("corrupt")
+                if current_record["access_expires_at"] > now + 15:
+                    return SessionResolution("authenticated", current_record["access_token"])
+                refreshing_at = current_record.get("refreshing_at")
+                if current_record.get("refreshing") and type(refreshing_at) is int and (
+                    now - refreshing_at < REFRESH_RESERVATION_TTL
+                ):
+                    return SessionResolution("unavailable")
+                old_encrypted = current["encrypted"]
+                reserved = dict(current_record)
+                reserved["refreshing"] = True
+                reserved["refreshing_at"] = now
+                reserved_encrypted = self._seal(reserved)
+                changed = connection.execute(
+                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
+                    (reserved_encrypted, _digest(handle), old_encrypted),
+                ).rowcount
+        except sqlite3.Error:
+            return SessionResolution("unavailable")
         if changed != 1:
             return SessionResolution("unavailable")
         try:
             token = await self.oidc.exchange(
-                {"grant_type": "refresh_token", "refresh_token": record["refresh_token"]}
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": current_record["refresh_token"],
+                }
             )
             fresh = self._validate_token_response(token, now)
         except Exception:
-            with self._connect() as connection:
-                connection.execute(
-                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
-                    (old_encrypted, _digest(handle), reserved_encrypted),
-                )
+            try:
+                with self._connect() as connection:
+                    connection.execute(
+                        "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
+                        (old_encrypted, _digest(handle), reserved_encrypted),
+                    )
+            except sqlite3.Error:
+                pass
             return SessionResolution("unavailable")
-        record.update(fresh)
-        with self._connect() as connection:
-            changed = connection.execute(
-                "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
-                (self._seal(record), _digest(handle), reserved_encrypted),
-            ).rowcount
-        return SessionResolution("authenticated", record["access_token"]) if changed == 1 else SessionResolution("unavailable")
+        updated = dict(current_record)
+        updated.update(fresh)
+        updated.pop("refreshing", None)
+        updated.pop("refreshing_at", None)
+        try:
+            with self._connect() as connection:
+                changed = connection.execute(
+                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
+                    (self._seal(updated), _digest(handle), reserved_encrypted),
+                ).rowcount
+        except sqlite3.Error:
+            return SessionResolution("unavailable")
+        if changed == 1:
+            return SessionResolution("authenticated", updated["access_token"])
+        return SessionResolution("unavailable")
 
     async def session(self, request: Request) -> Response:
         loaded = self._load(request)
