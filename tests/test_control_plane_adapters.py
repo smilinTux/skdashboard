@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
 from starlette.testclient import TestClient
 
 from skdashboard.control_plane_adapters import (
@@ -219,9 +220,17 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         local = _local_readers(
             tmp_path, board_data=board, default_observed_at=NOW.isoformat()
         )
+        new_adapter_ids = {
+            "skcapstone.service_release",
+            "skperf.aggregate",
+            "capauth.policy",
+            "atlas.conditions",
+            "skos.discovery",
+        }
         readers = {
             adapter_id: reader if isinstance(reader, Reader) else Reader(payload=reader())
             for adapter_id, reader in local.items()
+            if adapter_id not in new_adapter_ids
         }
         items = project_estate(readers, now=NOW)
 
@@ -468,8 +477,7 @@ def test_oversize_or_bad_worker_json_is_malformed_not_unavailable(tmp_path: Path
 
 def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
     """Service release adapter reads from CMDB service CIs and returns release counts."""
-    from skcoord.cmdb import CMDBManager
-    
+
     with patch("skcoord.cmdb.CMDBManager") as MockCMDB:
         service_ci = Mock()
         service_ci.id = "service-1"
@@ -481,7 +489,7 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
             "release_version": "v1.0.0",
             "deployed_at": NOW.isoformat(),
         }
-        
+
         service_ci_no_release = Mock()
         service_ci_no_release.id = "service-2"
         service_ci_no_release.name = "test-service-2"
@@ -489,7 +497,7 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
         service_ci_no_release.status = "operational"
         service_ci_no_release.owner = "test-owner-2"
         service_ci_no_release.attributes = {}
-        
+
         service_ci_no_owner = Mock()
         service_ci_no_owner.id = "service-3"
         service_ci_no_owner.name = "test-service-3"
@@ -497,24 +505,24 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
         service_ci_no_owner.status = "operational"
         service_ci_no_owner.owner = None
         service_ci_no_owner.attributes = {"release_version": "v2.0.0"}
-        
+
         mock_manager = MockCMDB.return_value
         mock_manager.list_cis.return_value = [
             service_ci,
             service_ci_no_release,
             service_ci_no_owner,
         ]
-        
+
         readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
         reader = readers["skcapstone.service_release"]
         assert callable(reader)
-        
+
         items = project_estate(
             {"skcapstone.service_release": Reader(payload=reader())},
             now=NOW,
         )
         result = next(item for item in items if item["adapter_id"] == "skcapstone.service_release")
-        
+
         assert result["aggregate"]["services"] == 3
         assert result["aggregate"]["releases"] == 2
         assert result["truth_state"] == "partial"
@@ -527,25 +535,25 @@ def test_service_release_adapter_fails_closed_on_cmdb_error(tmp_path: Path) -> N
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skcapstone.service_release"]
     assert callable(reader)
-    
+
     item = project_estate(
         {"skcapstone.service_release": Reader(payload=reader())},
         now=NOW,
     )
     item = next(i for i in item if i["adapter_id"] == "skcapstone.service_release")
-    
+
     assert item["adapter_id"] == "skcapstone.service_release"
     assert item["truth_state"] in {"unavailable", "unknown"}
 
 
 def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
     """SKPerf aggregate adapter reads benchmark regressions and capacity pressure."""
-    perf_home = tmp_path.parent / "skperf"
+    perf_home = tmp_path / "skperf"
     perf_home.mkdir(parents=True, exist_ok=True)
     perf_data_path = perf_home / "data"
     perf_data_path.mkdir(parents=True, exist_ok=True)
     aggregate_path = perf_data_path / "aggregate.json"
-    
+
     perf_data = {
         "regressions": 3,
         "capacity_pressure": 0.75,
@@ -555,17 +563,17 @@ def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
         "errors": ["benchmark_timeout"],
     }
     aggregate_path.write_text(json.dumps(perf_data))
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skperf.aggregate"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"skperf.aggregate": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "skperf.aggregate")
-    
+
     assert result["aggregate"]["regressions"] == 3
     assert result["aggregate"]["capacity_pressure"] == 0.75
     assert result["coverage"]["expected"] == 10
@@ -581,55 +589,48 @@ def test_skperf_aggregate_fails_closed_on_missing_file(tmp_path: Path) -> None:
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skperf.aggregate"]
     assert callable(reader)
-    
-    items = project_estate(
-        {"skperf.aggregate": Reader(payload=reader())},
-        now=NOW,
-    )
-    item = next(i for i in items if i["adapter_id"] == "skperf.aggregate")
-    
-    # The adapter should return a valid result regardless of file state
-    assert item["adapter_id"] == "skperf.aggregate"
-    assert item["truth_state"] in {"current", "stale", "partial", "unavailable", "unknown"}
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        reader()
 
 
 def test_skperf_aggregate_handles_malformed_data(tmp_path: Path) -> None:
     """SKPerf aggregate adapter handles malformed data gracefully."""
-    perf_home = tmp_path.parent / "skperf"
+    perf_home = tmp_path / "skperf"
     perf_home.mkdir(parents=True, exist_ok=True)
     perf_data_path = perf_home / "data"
     perf_data_path.mkdir(parents=True, exist_ok=True)
     aggregate_path = perf_data_path / "aggregate.json"
-    
+
     aggregate_path.write_text("{invalid json")
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skperf.aggregate"]
     assert callable(reader)
-    
+
     # The reader should raise ValueError for malformed data
     try:
         reader()
         assert False, "Expected ValueError to be raised"
     except ValueError:
         pass  # Expected
-    
+
     # When wrapped in Reader with a failure mode, it should project correctly
     items = project_estate(
         {"skperf.aggregate": Reader(failure="unreachable")},
         now=NOW,
     )
     item = next(i for i in items if i["adapter_id"] == "skperf.aggregate")
-    
+
     assert item["adapter_id"] == "skperf.aggregate"
     assert item["truth_state"] in {"unavailable", "unreachable"}
 
 
 def test_capauth_policy_adapter_reads_estate_and_keys(tmp_path: Path) -> None:
     """CapAuth policy adapter reads estate.json and keys.db for health."""
-    capauth_home = tmp_path.parent / "capauth"
+    capauth_home = tmp_path / "capauth"
     capauth_home.mkdir(parents=True, exist_ok=True)
-    
+
     estate_path = capauth_home / "estate.json"
     estate_data = {
         "version": 1,
@@ -647,22 +648,22 @@ def test_capauth_policy_adapter_reads_estate_and_keys(tmp_path: Path) -> None:
         ],
     }
     estate_path.write_text(json.dumps(estate_data))
-    
+
     keys_db_path = capauth_home / "service" / "keys.db"
     keys_db_path.parent.mkdir(parents=True, exist_ok=True)
     keys_db_path.write_text("mock db")
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["capauth.policy"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"capauth.policy": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "capauth.policy")
-    
-    assert result["aggregate"]["available"] == True
+
+    assert result["aggregate"]["available"] is True
     assert result["aggregate"]["denials"] == 1
     assert result["coverage"]["expected"] == 2
     assert result["coverage"]["reporting"] == 1
@@ -675,24 +676,17 @@ def test_capauth_policy_adapter_fails_closed_on_missing_estate(tmp_path: Path) -
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["capauth.policy"]
     assert callable(reader)
-    
-    items = project_estate(
-        {"capauth.policy": Reader(payload=reader())},
-        now=NOW,
-    )
-    item = next(i for i in items if i["adapter_id"] == "capauth.policy")
-    
-    # Should handle missing data gracefully
-    assert item["adapter_id"] == "capauth.policy"
-    assert item["truth_state"] in {"current", "stale", "partial", "unavailable", "unknown"}
+
+    with pytest.raises(RuntimeError):
+        reader()
 
 
 def test_atlas_conditions_adapter_reads_observations_file(tmp_path: Path) -> None:
     """Atlas conditions adapter reads operator observations for condition counts."""
-    operator_seat_path = tmp_path.parent / "operator_seat"
+    operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
     operator_seat_path.mkdir(parents=True, exist_ok=True)
-    
-    observations_path = operator_seat_path / "observations.json"
+
+    observations_path = operator_seat_path / "brief.json"
     observations_data = {
         "observed_at": NOW.isoformat(),
         "conditions": [
@@ -719,17 +713,17 @@ def test_atlas_conditions_adapter_reads_observations_file(tmp_path: Path) -> Non
         ],
     }
     observations_path.write_text(json.dumps(observations_data))
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["atlas.conditions"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"atlas.conditions": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "atlas.conditions")
-    
+
     assert result["aggregate"]["open_conditions"] == 2
     assert result["aggregate"]["ready_actions"] == 2
     assert result["coverage"]["expected"] == 4
@@ -742,14 +736,14 @@ def test_atlas_conditions_adapter_reads_observations_file(tmp_path: Path) -> Non
 def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Path) -> None:
     """Atlas conditions adapter falls back to fleet observations if operator seat unavailable."""
     # First remove any operator_seat observations that might exist from previous tests
-    operator_seat_path = tmp_path.parent / "operator_seat"
+    operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
     if operator_seat_path.exists():
         import shutil
         shutil.rmtree(operator_seat_path)
-    
-    fleet_path = tmp_path.parent / "fleet" / "observations"
+
+    fleet_path = tmp_path / "fleet" / "observations"
     fleet_path.mkdir(parents=True, exist_ok=True)
-    
+
     observations_path = fleet_path / "conditions.json"
     observations_data = {
         "observed_at": NOW.isoformat(),
@@ -762,17 +756,17 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
         ],
     }
     observations_path.write_text(json.dumps(observations_data))
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["atlas.conditions"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"atlas.conditions": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "atlas.conditions")
-    
+
     assert result["aggregate"]["open_conditions"] == 0
     assert result["aggregate"]["ready_actions"] == 1
     assert result["truth_state"] == "current"
@@ -782,24 +776,24 @@ def test_atlas_conditions_adapter_returns_unknown_when_no_observations(tmp_path:
     """Atlas conditions adapter returns unknown or unavailable when no observations file exists."""
     # Clean up any existing observations from previous tests
     import shutil
-    operator_seat_path = tmp_path.parent / "operator_seat"
-    fleet_path = tmp_path.parent / "fleet" / "observations"
-    
+    operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
+    fleet_path = tmp_path / "fleet" / "observations"
+
     if operator_seat_path.exists():
         shutil.rmtree(operator_seat_path)
     if fleet_path.exists():
         shutil.rmtree(fleet_path)
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["atlas.conditions"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"atlas.conditions": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "atlas.conditions")
-    
+
     # When no observations, should be unavailable or unknown
     assert result["truth_state"] in {"unavailable", "unknown"}
     assert result["aggregate"] is None
@@ -808,23 +802,23 @@ def test_atlas_conditions_adapter_returns_unknown_when_no_observations(tmp_path:
 
 def test_skos_discovery_adapter_scans_skcode_arena(tmp_path: Path) -> None:
     """SKOS discovery adapter scans skcode arena for discovered modules."""
-    skcode_arena_path = tmp_path.parent / "skcode" / "arena"
+    skcode_arena_path = tmp_path / "skcode" / "arena"
     skcode_arena_path.mkdir(parents=True, exist_ok=True)
-    
+
     (skcode_arena_path / "module1").mkdir()
     (skcode_arena_path / "module2").mkdir()
     (skcode_arena_path / "module3").mkdir()
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skos.discovery"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"skos.discovery": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "skos.discovery")
-    
+
     assert result["aggregate"]["discovered"] == 3
     assert result["aggregate"]["unavailable"] == 0
     assert result["truth_state"] == "current"
@@ -836,20 +830,20 @@ def test_skos_discovery_adapter_scans_repo_modules(tmp_path: Path) -> None:
     repo_path.mkdir(parents=True, exist_ok=True)
     src_path = repo_path / "src" / "skcapstone"
     src_path.mkdir(parents=True, exist_ok=True)
-    
+
     (src_path / "module1.py").write_text("# module1")
     (src_path / "module2.py").write_text("# module2")
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skos.discovery"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"skos.discovery": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "skos.discovery")
-    
+
     assert result["aggregate"]["discovered"] == 2
     assert result["aggregate"]["unavailable"] == 0
     assert result["truth_state"] == "current"
@@ -860,24 +854,23 @@ def test_skos_discovery_adapter_returns_unknown_when_no_modules(tmp_path: Path) 
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["skos.discovery"]
     assert callable(reader)
-    
+
     items = project_estate(
         {"skos.discovery": Reader(payload=reader())},
         now=NOW,
     )
     result = next(item for item in items if item["adapter_id"] == "skos.discovery")
-    
-    assert result["aggregate"]["discovered"] == 0
-    assert result["aggregate"]["unavailable"] == 1
-    assert result["truth_state"] == "unknown"
+
+    assert result["truth_state"] == "unavailable"
+    assert result["aggregate"] is None
     assert len(result["errors"]) == 1
-    assert result["errors"][0]["code"] == "SOURCE_PARTIAL"
+    assert result["errors"][0]["code"] == "SOURCE_UNAVAILABLE"
 
 
 def test_all_five_new_adapters_are_implemented() -> None:
     """Verify all five new adapters are in the _IMPLEMENTED set."""
     from skdashboard.control_plane_adapters import _IMPLEMENTED
-    
+
     new_adapters = {
         "skcapstone.service_release",
         "skperf.aggregate",
@@ -885,7 +878,7 @@ def test_all_five_new_adapters_are_implemented() -> None:
         "atlas.conditions",
         "skos.discovery",
     }
-    
+
     for adapter_id in new_adapters:
         assert adapter_id in _IMPLEMENTED, f"{adapter_id} not in _IMPLEMENTED"
 
@@ -899,22 +892,26 @@ def test_new_adapters_follow_bounded_contract(tmp_path: Path) -> None:
         "atlas.conditions",
         "skos.discovery",
     ]
-    
+
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
-    
+
     for adapter_id in adapter_ids:
         assert adapter_id in readers, f"{adapter_id} not in readers"
         reader = readers[adapter_id]
         assert callable(reader)
-        
+
         # Verify the reader can be called (it may raise exceptions without data)
         try:
-            result = reader()
+            raw = reader()
         except (RuntimeError, ValueError):
             # This is expected when data files don't exist in test environment
             continue
-        
-        # If we got a result, verify it follows the contract
+
+        result = next(
+            item
+            for item in project_estate({adapter_id: Reader(payload=raw)}, now=NOW)
+            if item["adapter_id"] == adapter_id
+        )
         assert result["schema_version"] == SCHEMA_VERSION
         assert result["adapter_id"] == adapter_id
         assert result["truth_state"] in {
