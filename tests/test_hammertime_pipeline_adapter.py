@@ -57,7 +57,7 @@ def source(**overrides):
 
 
 def test_pinned_contract_is_exact_and_public_synthetic() -> None:
-    contract_path = Path("docs/contracts/hammertime-pipeline-aggregate.v1.schema.json")
+    contract_path = Path("docs/contracts/hammertime/hammertime-pipeline-aggregate.v1.schema.json")
     contract = json.loads(contract_path.read_text())
     Draft202012Validator.check_schema(contract)
     Draft202012Validator(contract).validate(source())

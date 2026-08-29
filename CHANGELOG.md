@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add a pinned, policy-gated HammerTime metadata-only pipeline aggregate adapter
+  with fail-closed truth states and public-synthetic boundary tests.
+
 - Make the real-Chrome AI qualification use an OS-assigned port, allow a
   bounded slow Chrome startup, report its exact failed stage safely, stop child
   processes, and remove its own scratch.
