@@ -17,6 +17,17 @@ from typing import Callable, Mapping
 
 ADAPTER_VERSION = "1.0.0"
 SCHEMA_VERSION = "1.1.0"
+MAX_SOURCE_BYTES = 1_048_576
+MAX_SOURCE_ITEMS = 2_048
+
+
+def _read_json_bounded(path: Path) -> object:
+    """Read a local JSON observation without allowing an unbounded allocation."""
+    with path.open("rb") as source:
+        raw = source.read(MAX_SOURCE_BYTES + 1)
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise ValueError("observation exceeds byte limit")
+    return json.loads(raw)
 
 
 @dataclass(frozen=True)
@@ -586,7 +597,7 @@ def _local_readers(
 
             manager = CMDBManager(home.expanduser())
             all_cis = manager.list_cis()
-            service_cis = [ci for ci in all_cis if ci.ci_type == "service"]
+            service_cis = [ci for ci in all_cis[:MAX_SOURCE_ITEMS] if ci.ci_type == "service"]
 
             services_count = len(service_cis)
             releases_count = 0
@@ -624,8 +635,7 @@ def _local_readers(
             if not perf_data_path.exists():
                 raise RuntimeError("SKPerf aggregate data unavailable")
 
-            with open(perf_data_path) as f:
-                perf_data = json.load(f)
+            perf_data = _read_json_bounded(perf_data_path)
 
             if not isinstance(perf_data, dict):
                 raise ValueError("SKPerf data malformed")
@@ -664,13 +674,10 @@ def _local_readers(
         try:
             capauth_home = home / "capauth"
             estate_path = capauth_home / "estate.json"
-            keys_db_path = capauth_home / "service" / "keys.db"
-
             if not estate_path.exists():
                 raise RuntimeError("CapAuth estate unavailable")
 
-            with open(estate_path) as f:
-                estate = json.load(f)
+            estate = _read_json_bounded(estate_path)
 
             if not isinstance(estate, dict) or "identities" not in estate:
                 raise ValueError("CapAuth estate malformed")
@@ -683,14 +690,11 @@ def _local_readers(
                 if isinstance(identity, dict) and identity.get("status") != "active":
                     denials += 1
 
-            keys_available = keys_db_path.exists()
             errors = []
-            if not keys_available:
-                errors.append("keys_db_unavailable")
             if not available:
                 errors.append("no_active_identities")
 
-            has_observations = available or keys_available
+            has_observations = bool(identities)
 
             return aggregate_reader(
                 {
@@ -723,12 +727,10 @@ def _local_readers(
 
             if operator_observations_path.exists():
                 source_path = operator_observations_path
-                with open(operator_observations_path) as f:
-                    observations_data = json.load(f)
+                observations_data = _read_json_bounded(operator_observations_path)
             elif fleet_observations_path.exists():
                 source_path = fleet_observations_path
-                with open(fleet_observations_path) as f:
-                    observations_data = json.load(f)
+                observations_data = _read_json_bounded(fleet_observations_path)
             else:
                 open_conditions = 0
                 ready_actions = 0
@@ -800,7 +802,7 @@ def _local_readers(
 
             if skcode_arena_path.exists() and skcode_arena_path.is_dir():
                 try:
-                    arena_entries = list(skcode_arena_path.iterdir())
+                    arena_entries = list(skcode_arena_path.iterdir())[:MAX_SOURCE_ITEMS]
                     discovered = sum(1 for entry in arena_entries if entry.is_dir())
                 except OSError:
                     errors.append("arena_read_failed")
@@ -809,7 +811,7 @@ def _local_readers(
                 try:
                     src_path = skcapstone_repo_path / "src" / "skcapstone"
                     if src_path.exists() and src_path.is_dir():
-                        module_files = list(src_path.glob("*.py"))
+                        module_files = list(src_path.glob("*.py"))[:MAX_SOURCE_ITEMS]
                         discovered += len(module_files)
                 except OSError:
                     errors.append("repo_scan_failed")

@@ -626,8 +626,8 @@ def test_skperf_aggregate_handles_malformed_data(tmp_path: Path) -> None:
     assert item["truth_state"] in {"unavailable", "unreachable"}
 
 
-def test_capauth_policy_adapter_reads_estate_and_keys(tmp_path: Path) -> None:
-    """CapAuth policy adapter reads estate.json and keys.db for health."""
+def test_capauth_policy_adapter_reads_sanitized_estate(tmp_path: Path) -> None:
+    """CapAuth policy adapter reads only the sanitized estate projection."""
     capauth_home = tmp_path / "capauth"
     capauth_home.mkdir(parents=True, exist_ok=True)
 
@@ -649,10 +649,6 @@ def test_capauth_policy_adapter_reads_estate_and_keys(tmp_path: Path) -> None:
     }
     estate_path.write_text(json.dumps(estate_data))
 
-    keys_db_path = capauth_home / "service" / "keys.db"
-    keys_db_path.parent.mkdir(parents=True, exist_ok=True)
-    keys_db_path.write_text("mock db")
-
     readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
     reader = readers["capauth.policy"]
     assert callable(reader)
@@ -668,6 +664,31 @@ def test_capauth_policy_adapter_reads_estate_and_keys(tmp_path: Path) -> None:
     assert result["coverage"]["expected"] == 2
     assert result["coverage"]["reporting"] == 1
     assert result["truth_state"] == "partial"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "adapter_id"),
+    [
+        ("skperf/data/aggregate.json", "skperf.aggregate"),
+        ("capauth/estate.json", "capauth.policy"),
+        ("fleet/atlas/brief/brief.json", "atlas.conditions"),
+    ],
+)
+def test_file_adapters_reject_oversized_sources(
+    tmp_path: Path, relative_path: str, adapter_id: str
+) -> None:
+    """File readers reject payloads beyond their explicit byte bound."""
+    from skdashboard.control_plane_adapters import MAX_SOURCE_BYTES
+
+    source = tmp_path / relative_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b" " * (MAX_SOURCE_BYTES + 1))
+
+    reader = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )[adapter_id]
+    with pytest.raises(ValueError, match="malformed"):
+        reader()
 
 
 def test_capauth_policy_adapter_fails_closed_on_missing_estate(tmp_path: Path) -> None:
