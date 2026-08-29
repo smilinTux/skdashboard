@@ -102,6 +102,29 @@ def test_schedule_scope_rejects_unknown_duplicate_and_protected_values(tmp_path:
         assert response.json()["code"] == "INVALID_SCHEDULE_SCOPE"
 
 
+def test_schedule_provider_failure_is_constant_and_leak_free(tmp_path: Path) -> None:
+    rig = Rig(target="/api/v1/schedule/projection")
+
+    class Provider:
+        def read(self, *_args, **_kwargs):
+            raise PermissionError("protected-record-id")
+
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=rig.factory,
+        control_plane_schedule_provider=Provider(),
+    )
+    path = "/api/v1/schedule/projection?role=project-manager&scope=estate&window=latest&baseline=none&service=all&lens=roadmap&timezone=UTC"
+    response = TestClient(app).get(
+        path,
+        headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "SCHEDULE_UNAVAILABLE"
+    assert "protected-record-id" not in response.text
+
+
 def test_schedule_forecast_provider_is_protected_and_fails_closed(tmp_path: Path) -> None:
     rig = Rig(target="/api/v1/schedule/forecasts")
 

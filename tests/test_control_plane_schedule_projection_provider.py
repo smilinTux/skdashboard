@@ -77,6 +77,22 @@ def _item(item_id="release-1", semantic_type="release", *, truth_state="current"
     }
 
 
+def _dependency(dependency_id, source_item_id, target_item_id):
+    return {
+        "tenant_id": TENANT,
+        "dependency_id": dependency_id,
+        "source_item_id": source_item_id,
+        "target_item_id": target_item_id,
+        "edge_type": "finish_to_start",
+        "direction": "known",
+        "lag_seconds": 0,
+        "truth_state": "current",
+        "visibility": {"state": "visible", "authorization": "authorized"},
+        "blocker_state": "blocking",
+        "evidence_refs": [f"evidence://synthetic/{dependency_id}"],
+    }
+
+
 def _snapshot():
     return {
         "schema_version": SCHEMA_VERSION,
@@ -101,21 +117,7 @@ def _snapshot():
             _item("milestone-1", "milestone"),
             _item("release-1", "release"),
         ],
-        "dependencies": [
-            {
-                "tenant_id": TENANT,
-                "dependency_id": "dependency-1",
-                "source_item_id": "release-1",
-                "target_item_id": "milestone-1",
-                "edge_type": "finish_to_start",
-                "direction": "known",
-                "lag_seconds": 0,
-                "truth_state": "current",
-                "visibility": {"state": "visible", "authorization": "authorized"},
-                "blocker_state": "blocking",
-                "evidence_refs": ["evidence://synthetic/dependency-1"],
-            }
-        ],
+        "dependencies": [_dependency("dependency-1", "release-1", "milestone-1")],
         "overlays": [
             {
                 "tenant_id": TENANT,
@@ -277,3 +279,56 @@ def test_projection_is_bounded_and_linear_enough_for_large_synthetic_input() -> 
     result, _ = _read(snapshot)
     assert len(result["items"]) == 2_000
     assert result["individual_ranking_prohibited"] is True
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.update(snapshot_revision=""),
+        lambda value: value["dependencies"][0].update(lag_seconds=True),
+        lambda value: value.update(projected_at="2099-01-01T00:00:00Z"),
+    ],
+)
+def test_malformed_revision_lag_and_future_projection_fail_closed(mutate) -> None:
+    snapshot = _snapshot()
+    mutate(snapshot)
+    with pytest.raises(PermissionError) as error:
+        _read(snapshot)
+    assert str(error.value) == "authorized schedule projection unavailable"
+    assert "release-1" not in str(error.value)
+
+
+def test_long_dependency_chains_are_iterative_and_cycles_remain_explicit() -> None:
+    snapshot = _snapshot()
+    snapshot["items"] = [_item(f"work-{index:05d}", "work_package") for index in range(1_200)]
+    snapshot["dependencies"] = [
+        _dependency(f"dependency-{index:05d}", f"work-{index:05d}", f"work-{index + 1:05d}")
+        for index in range(1_199)
+    ]
+    snapshot["overlays"] = []
+
+    result, _ = _read(snapshot)
+    assert len(result["items"]) == 1_200
+    assert result["cycle_analysis"] == {"state": "acyclic", "cycle_item_ids": [], "evidence_refs": []}
+
+    snapshot["dependencies"].append(
+        _dependency("dependency-cycle", "work-01199", "work-00000")
+    )
+    result, _ = _read(snapshot)
+    assert result["cycle_analysis"]["state"] == "cycles_detected"
+    assert len(result["cycle_analysis"]["cycle_item_ids"]) == 1_200
+    assert result["critical_path"]["state"] == "unavailable"
+    assert "dependency_cycle" in result["critical_path"]["reasons"]
+
+
+def test_equivalent_dependency_permutations_share_projection_hash() -> None:
+    snapshot = _snapshot()
+    snapshot["items"].append(_item("work-1", "work_package"))
+    snapshot["items"].sort(key=lambda value: value["record_id"])
+    snapshot["dependencies"].append(_dependency("dependency-2", "work-1", "release-1"))
+    reversed_snapshot = deepcopy(snapshot)
+    reversed_snapshot["dependencies"].reverse()
+
+    result, _ = _read(snapshot)
+    reversed_result, _ = _read(reversed_snapshot)
+    assert result == reversed_result

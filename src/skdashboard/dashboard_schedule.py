@@ -215,11 +215,12 @@ class ScheduleProjectionProvider:
             raise PermissionError
         observed = _instant(snapshot["observed_at"])
         projected = _instant(snapshot["projected_at"])
+        revision = _bounded(snapshot["snapshot_revision"], 128)
         now = self._now()
-        if observed is None or projected is None or projected < observed:
+        if observed is None or projected is None or revision is None or projected < observed:
             raise ValueError
         age = (now - observed).total_seconds()
-        if age < -5 or age > self._max_source_age_seconds:
+        if age < -5 or age > self._max_source_age_seconds or (now - projected).total_seconds() < -5:
             raise PermissionError
 
         items = snapshot["items"]
@@ -238,7 +239,10 @@ class ScheduleProjectionProvider:
         ids = [value["item_id"] for value in projected_items]
         if len(ids) != len(set(ids)) or ids != sorted(ids):
             raise ValueError
-        projected_dependencies = [self._dependency(value, request, set(ids)) for value in dependencies]
+        projected_dependencies = sorted(
+            (self._dependency(value, request, set(ids)) for value in dependencies),
+            key=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")),
+        )
         projected_overlays = [self._overlay(value, request) for value in overlays]
         cycles = _cycles(projected_dependencies, set(ids))
         reasons = _critical_path_reasons(projected_items, projected_dependencies, projected_overlays, cycles)
@@ -247,7 +251,7 @@ class ScheduleProjectionProvider:
         projection = {
             "schema_version": SCHEMA_VERSION,
             "projection_id": f"schedule:{request.tenant_id}:{request.role}:estate",
-            "projection_version": str(snapshot["snapshot_revision"]),
+            "projection_version": revision,
             "projection_hash": "",
             "scope": scope,
             "display_timezone": query["timezone"],
@@ -366,7 +370,7 @@ class ScheduleProjectionProvider:
             "cycle_state": "unknown",
             "evidence_refs": _refs(value["evidence_refs"], minimum=1),
         }
-        if None in (edge["dependency_id"], source) or edge["edge_type"] not in {"finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish", "unknown"} or edge["truth_state"] not in TRUTH_STATES or edge["blocker_state"] not in {"blocking", "not_blocking", "unknown"} or (edge["lag_seconds"] is not None and not isinstance(edge["lag_seconds"], int)):
+        if None in (edge["dependency_id"], source) or edge["edge_type"] not in {"finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish", "unknown"} or edge["truth_state"] not in TRUTH_STATES or edge["blocker_state"] not in {"blocking", "not_blocking", "unknown"} or (edge["lag_seconds"] is not None and (isinstance(edge["lag_seconds"], bool) or not isinstance(edge["lag_seconds"], int))):
             raise ValueError
         return edge
 
@@ -451,26 +455,32 @@ def _cycles(edges: list[dict], ids: set[str]) -> set[str]:
     for edge in edges:
         if edge["direction"] == "known" and edge["target_item_id"] is not None:
             graph[edge["source_item_id"]].append(edge["target_item_id"])
-    visiting: set[str] = set()
     visited: set[str] = set()
     cyclic: set[str] = set()
 
-    def visit(node: str, path: list[str]) -> None:
-        if node in visiting:
-            cyclic.update(path[path.index(node) :])
-            return
-        if node in visited:
-            return
-        visiting.add(node)
-        path.append(node)
-        for target in graph[node]:
-            visit(target, path)
-        path.pop()
-        visiting.remove(node)
-        visited.add(node)
-
-    for item_id in sorted(ids):
-        visit(item_id, [])
+    for root in sorted(ids):
+        if root in visited:
+            continue
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        stack = [(root, 0)]
+        while stack:
+            node, index = stack[-1]
+            if node not in positions:
+                positions[node] = len(path)
+                path.append(node)
+            if index == len(graph[node]):
+                stack.pop()
+                path.pop()
+                positions.pop(node)
+                visited.add(node)
+                continue
+            target = graph[node][index]
+            stack[-1] = (node, index + 1)
+            if target in positions:
+                cyclic.update(path[positions[target] :])
+            elif target not in visited:
+                stack.append((target, 0))
     for edge in edges:
         edge["cycle_state"] = "cycle_member" if edge["source_item_id"] in cyclic and edge["target_item_id"] in cyclic else ("unknown" if edge["direction"] == "unknown" else "acyclic")
     return cyclic
