@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reconcile and repair PR 97 authenticated live control-plane composition (card 888b0c76)
+  with current main, wiring read-only runtime entrypoint to session resolver, typed
+  authorizer, invocation factory, durable SKCoord owner-policy provider, and Now,
+  Portfolio, and Schedule routes. Schedule exposes only production provider seam.
+- Compose the authenticated read-only control-plane runtime around exact CapAuth
+  and SKCoord owner-policy bindings, mint a fresh one-use capability through a
+  restricted local issuer channel for every protected request, and serve Now,
+  Portfolio, Schedule, and allowlisted assets while keeping Board on a configured external URL.
+
 - Make the real-Chrome AI qualification use an OS-assigned port, allow a
   bounded slow Chrome startup, report its exact failed stage safely, stop child
   processes, and remove its own scratch.
