@@ -600,6 +600,7 @@ _IMPLEMENTED = {
     "skcounter.harness",
     "skgateway.observed",
     "skjoule.wallet",
+    "hammertime.pipeline",
 }
 
 
@@ -668,14 +669,21 @@ def _bounded_run(
 def default_readers(home: Path) -> dict[str, Reader]:
     """Build independently kill-bounded readers for qualified local aggregates."""
     timeouts = {spec.adapter_id: spec.timeout_ms for spec in SPECS}
-    return {
-        adapter_id: Reader(
-            adapter_id=adapter_id,
-            home=home,
-            timeout_ms=timeouts[adapter_id],
-        )
-        for adapter_id in _IMPLEMENTED
-    }
+    readers = {}
+    for adapter_id in _IMPLEMENTED:
+        if adapter_id == "hammertime.pipeline":
+            # Use the separate policy-gated HammerTime adapter
+            from . import hammertime_adapter
+            readers[adapter_id] = Reader(
+                payload=hammertime_adapter.get_aggregate()
+            )
+        else:
+            readers[adapter_id] = Reader(
+                adapter_id=adapter_id,
+                home=home,
+                timeout_ms=timeouts[adapter_id],
+            )
+    return readers
 
 
 def _worker(argv: list[str]) -> int:
