@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add a tenant-bound, policy-filtered canonical Schedule projection provider
+  with pinned field provenance, exact currentness checks, shared Roadmap,
+  Gantt, and Flow bytes, and distinct unknown, stale, partial, unavailable,
+  policy-filtered, and not-applicable date states.
+
 - Make the real-Chrome AI qualification use an OS-assigned port, allow a
   bounded slow Chrome startup, report its exact failed stage safely, stop child
   processes, and remove its own scratch.
