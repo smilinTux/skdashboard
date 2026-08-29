@@ -72,7 +72,11 @@ def _validate(source: object, now: datetime) -> dict:
         encoded = json.dumps(source, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     except (TypeError, ValueError) as exc:
         raise HammerTimeAggregateFailure("SOURCE_MALFORMED") from exc
-    if len(encoded) > MAX_SOURCE_BYTES or not isinstance(source, Mapping) or set(source) != SOURCE_FIELDS:
+    if len(encoded) > MAX_SOURCE_BYTES or not isinstance(source, Mapping):
+        raise HammerTimeAggregateFailure("SOURCE_MALFORMED")
+    if "policy" not in source:
+        raise HammerTimeAggregateFailure("POLICY_MISSING")
+    if set(source) != SOURCE_FIELDS:
         raise HammerTimeAggregateFailure("SOURCE_MALFORMED")
 
     policy = source.get("policy")
