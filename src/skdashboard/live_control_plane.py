@@ -20,6 +20,7 @@ from capauth.control_plane import RequestBoundary
 from skcoord.authorized_card_policy import (
     AuthorizedCardPolicyBackend,
     AuthorizedCardPolicyProvider,
+    FileAuthorizedCardPolicyBackend,
 )
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS, MAX_BEARER_BYTES
@@ -168,6 +169,32 @@ class LiveControlPlaneComposition:
     legacy_board_url: str
 
 
+def compose_file_backed_live_control_plane(
+    *,
+    config: LiveControlPlaneConfig,
+    capability_authorizer,
+    owner_policy_file: Path,
+    store_factory,
+    expected_policy_uid: int | None = None,
+    clock=None,
+) -> LiveControlPlaneComposition:
+    """Compose the live runtime with SKCoord's durable fail-closed backend."""
+
+    backend_options = {}
+    if expected_policy_uid is not None:
+        backend_options["expected_uid"] = expected_policy_uid
+    if clock is not None:
+        backend_options["clock"] = clock
+    backend = FileAuthorizedCardPolicyBackend(owner_policy_file, **backend_options)
+    return compose_live_control_plane(
+        config=config,
+        capability_authorizer=capability_authorizer,
+        owner_policy_backend=backend,
+        store_factory=store_factory,
+        clock=clock,
+    )
+
+
 def compose_live_control_plane(
     *,
     config: LiveControlPlaneConfig,
@@ -228,5 +255,6 @@ __all__ = [
     "PURPOSE",
     "RESOURCE_TYPE",
     "TARGET",
+    "compose_file_backed_live_control_plane",
     "compose_live_control_plane",
 ]

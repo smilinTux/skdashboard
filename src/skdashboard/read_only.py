@@ -251,6 +251,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--oidc-issuer")
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
+    parser.add_argument("--issuer-socket", type=Path)
+    parser.add_argument("--legacy-board-url")
+    parser.add_argument("--authorized-resource-id")
+    parser.add_argument("--owner-policy-file", type=Path)
+    parser.add_argument("--owner-policy-revision")
+    parser.add_argument("--issuer-uid", type=int)
+    parser.add_argument("--owner-policy-uid", type=int)
+    parser.add_argument(
+        "--capability-authorizer-factory",
+        help="module:callable returning the approved durable CapAuth authorizer",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
@@ -264,6 +275,19 @@ def main(argv: list[str] | None = None) -> None:
     )
     if any(session_values) and not all(session_values):
         parser.error("all session and OIDC options are required together")
+    live_values = (
+        args.issuer_socket,
+        args.legacy_board_url,
+        args.authorized_resource_id,
+        args.owner_policy_file,
+        args.owner_policy_revision,
+        args.capability_authorizer_factory,
+    )
+    if any(live_values) and not all(live_values):
+        parser.error("all live control-plane options are required together")
+    if all(live_values) and not all(session_values):
+        parser.error("live control-plane composition requires the same-origin session options")
+
     session_adapter = None
     if all(session_values):
         from .session_adapter import EncryptedSessionAdapter, SessionConfig
@@ -278,6 +302,49 @@ def main(argv: list[str] | None = None) -> None:
                 redirect_uri=args.oidc_redirect_uri,
                 client_secret=args.oidc_client_secret_file.read_text(encoding="utf-8").strip(),
             ),
+        )
+
+    app_options = {"session_adapter": session_adapter}
+    if all(live_values):
+        from importlib import import_module
+
+        from skcoord.card_store import CardStore
+
+        from .live_control_plane import (
+            LiveControlPlaneConfig,
+            compose_file_backed_live_control_plane,
+        )
+
+        try:
+            module_name, separator, attribute = args.capability_authorizer_factory.partition(":")
+            if not separator or not module_name or not attribute:
+                raise ValueError
+            capability_authorizer = getattr(import_module(module_name), attribute)()
+        except Exception as exc:
+            parser.error(f"capability authorizer factory is unavailable: {type(exc).__name__}")
+        config_options = {
+            "issuer_socket": args.issuer_socket,
+            "legacy_board_url": args.legacy_board_url,
+            "resource_id": args.authorized_resource_id,
+            "owner_policy_revision": args.owner_policy_revision,
+        }
+        if args.issuer_uid is not None:
+            config_options["issuer_uid"] = args.issuer_uid
+        composition = compose_file_backed_live_control_plane(
+            config=LiveControlPlaneConfig(**config_options),
+            capability_authorizer=capability_authorizer,
+            owner_policy_file=args.owner_policy_file,
+            expected_policy_uid=args.owner_policy_uid,
+            store_factory=CardStore,
+        )
+        app_options.update(
+            decision_authorizer=composition.decision_authorizer,
+            invocation_factory=composition.invocation_factory,
+            project_provider=composition.project_provider,
+            session_capability_issuer=composition.session_capability_issuer,
+            legacy_board_url=composition.legacy_board_url,
+            schedule_provider=None,
+            schedule_forecast_provider=None,
         )
 
     import uvicorn
@@ -295,7 +362,7 @@ def main(argv: list[str] | None = None) -> None:
     ]
 
     uvicorn.run(
-        create_read_only_app(args.home, session_adapter=session_adapter),
+        create_read_only_app(args.home, **app_options),
         host=args.host,
         port=args.port,
         ssl_certfile=str(args.tls_certfile),

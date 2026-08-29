@@ -125,6 +125,96 @@ def test_launcher_requires_exact_tls_files_without_persistent_transport_state(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    observed = {}
+    factory_module = tmp_path / "approved_factory.py"
+    factory_module.write_text("def build():\n    return object()\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: (
+            observed.update(composition=values)
+            or SimpleNamespace(
+                decision_authorizer="typed-authorizer",
+                invocation_factory="invocation-factory",
+                project_provider="durable-provider",
+                session_capability_issuer="ephemeral-issuer",
+                legacy_board_url="https://legacy.example/board",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
+    for name in ("session.key", "client.secret"):
+        path = tmp_path / name
+        path.write_text("non-secret-fixture", encoding="utf-8")
+        path.chmod(0o600)
+
+    main(
+        [
+            "--home",
+            str(tmp_path),
+            "--host",
+            "10.0.0.139",
+            "--tls-certfile",
+            "/run/credentials/skdashboard.crt",
+            "--tls-keyfile",
+            "/run/credentials/skdashboard.key",
+            "--session-db",
+            str(tmp_path / "sessions.db"),
+            "--session-key-file",
+            str(tmp_path / "session.key"),
+            "--oidc-issuer",
+            "https://issuer.example",
+            "--oidc-redirect-uri",
+            f"{LAN_ORIGIN}/auth/callback",
+            "--oidc-client-secret-file",
+            str(tmp_path / "client.secret"),
+            "--issuer-socket",
+            str(tmp_path / "issuer.sock"),
+            "--legacy-board-url",
+            "https://legacy.example/board",
+            "--authorized-resource-id",
+            "authorized-card-set:sha256:" + "a" * 64,
+            "--owner-policy-file",
+            str(tmp_path / "owner-policy.json"),
+            "--owner-policy-revision",
+            "b" * 64,
+            "--capability-authorizer-factory",
+            "approved_factory:build",
+        ]
+    )
+
+    assert observed["composition"]["owner_policy_file"] == tmp_path / "owner-policy.json"
+    assert observed["composition"]["capability_authorizer"].__class__ is object
+    routes = {route.path for route in observed["app"].routes}
+    assert {"/control-plane/now", "/control-plane/portfolio", "/control-plane/schedule"} <= routes
+    assert observed["app"].routes
+
+
+def test_launcher_rejects_partial_live_composition(tmp_path: Path) -> None:
+    import pytest
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(tmp_path / "owner-policy.json"),
+            ]
+        )
+
+
 def test_callback_access_log_filter_is_sensitive_and_callback_only() -> None:
     output = io.StringIO()
     handler = logging.StreamHandler(output)

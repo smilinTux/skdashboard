@@ -17,6 +17,7 @@ from skdashboard.live_control_plane import (
     TARGET,
     EphemeralIssuerClient,
     LiveControlPlaneConfig,
+    compose_file_backed_live_control_plane,
     compose_live_control_plane,
 )
 from skdashboard.read_only import create_read_only_app
@@ -163,6 +164,32 @@ def test_issuer_fails_closed_before_connecting_for_wrong_binding(tmp_path, monke
             )
         )
     connected.assert_not_called()
+
+
+def test_file_backed_composition_constructs_the_durable_owner_backend(
+    tmp_path, monkeypatch
+) -> None:
+    created = {}
+
+    class Backend:
+        def __init__(self, path, **options):
+            created.update(path=path, options=options)
+
+    monkeypatch.setattr("skdashboard.live_control_plane.FileAuthorizedCardPolicyBackend", Backend)
+    composition = compose_file_backed_live_control_plane(
+        config=config(tmp_path),
+        capability_authorizer=Mock(),
+        owner_policy_file=tmp_path / "owner-policy.json",
+        expected_policy_uid=1234,
+        store_factory=Mock(),
+    )
+
+    assert created == {
+        "path": tmp_path / "owner-policy.json",
+        "options": {"expected_uid": 1234},
+    }
+    assert composition.project_provider._backend.__class__ is Backend
+    assert composition.decision_authorizer._owner_policy is composition.project_provider
 
 
 def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_board(
