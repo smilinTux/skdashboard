@@ -579,6 +579,265 @@ def _local_readers(
             observed_at=default_observed_at,
         )()
 
+    def service_release() -> dict:
+        """Read service release observations from CMDB service CIs with release metadata."""
+        try:
+            from skcoord.cmdb import CMDBManager
+
+            manager = CMDBManager(home.expanduser())
+            all_cis = manager.list_cis()
+            service_cis = [ci for ci in all_cis if ci.ci_type == "service"]
+            
+            services_count = len(service_cis)
+            releases_count = 0
+            errors = []
+            
+            for ci in service_cis:
+                if ci.attributes.get("release_version") or ci.attributes.get("deployed_at"):
+                    releases_count += 1
+                if not ci.owner:
+                    errors.append("service_without_owner")
+            
+            has_observations = services_count > 0
+            
+            return aggregate_reader(
+                {
+                    "services": services_count,
+                    "releases": releases_count,
+                },
+                expected=services_count,
+                reporting=services_count,
+                errors=errors[:1] if errors else [],
+                has_observations=has_observations,
+                observed_at=default_observed_at,
+                watermark_data=f"cmdb-service-fold:{len(service_cis)}",
+            )()
+        except Exception:
+            raise RuntimeError
+
+    def skperf_aggregate() -> dict:
+        """Read approved benchmark aggregates from SKPerf data when available."""
+        perf_home = home.parent / "skperf"
+        perf_data_path = perf_home / "data" / "aggregate.json"
+        
+        try:
+            if not perf_data_path.exists():
+                raise RuntimeError("SKPerf aggregate data unavailable")
+            
+            with open(perf_data_path) as f:
+                perf_data = json.load(f)
+            
+            if not isinstance(perf_data, dict):
+                raise ValueError("SKPerf data malformed")
+            
+            regressions = perf_data.get("regressions", 0)
+            capacity_pressure = perf_data.get("capacity_pressure", 0.0)
+            reporting = perf_data.get("reporting_benchmarks", 0)
+            expected = perf_data.get("expected_benchmarks", reporting)
+            observed_at = perf_data.get("observed_at", default_observed_at)
+            errors = perf_data.get("errors", [])
+            
+            if not isinstance(regressions, int) or not isinstance(capacity_pressure, (int, float)):
+                raise ValueError("SKPerf aggregate fields malformed")
+            
+            return aggregate_reader(
+                {
+                    "regressions": regressions,
+                    "capacity_pressure": float(capacity_pressure) if isinstance(capacity_pressure, (int, float)) else 0.0,
+                },
+                expected=expected,
+                reporting=reporting,
+                errors=errors[:1] if errors else [],
+                has_observations=reporting > 0,
+                observed_at=observed_at,
+                watermark_data=perf_data_path.name,
+            )()
+        except RuntimeError:
+            raise
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ValueError("SKPerf data malformed") from e
+        except Exception as e:
+            raise RuntimeError("SKPerf aggregate data unavailable") from e
+
+    def capauth_policy() -> dict:
+        """Read CapAuth policy health from estate and policy check state."""
+        try:
+            capauth_home = home.parent / "capauth"
+            estate_path = capauth_home / "estate.json"
+            keys_db_path = capauth_home / "service" / "keys.db"
+            
+            if not estate_path.exists():
+                raise RuntimeError("CapAuth estate unavailable")
+            
+            with open(estate_path) as f:
+                estate = json.load(f)
+            
+            if not isinstance(estate, dict) or "identities" not in estate:
+                raise ValueError("CapAuth estate malformed")
+            
+            identities = estate.get("identities", [])
+            available = isinstance(identities, list) and len(identities) > 0
+            
+            denials = 0
+            for identity in identities:
+                if isinstance(identity, dict) and identity.get("status") != "active":
+                    denials += 1
+            
+            keys_available = keys_db_path.exists()
+            errors = []
+            if not keys_available:
+                errors.append("keys_db_unavailable")
+            if not available:
+                errors.append("no_active_identities")
+            
+            has_observations = available or keys_available
+            
+            return aggregate_reader(
+                {
+                    "available": available,
+                    "denials": denials,
+                },
+                expected=len(identities) if isinstance(identities, list) else 0,
+                reporting=sum(1 for i in identities if isinstance(i, dict) and i.get("status") == "active"),
+                errors=errors[:1] if errors else [],
+                has_observations=has_observations,
+                observed_at=default_observed_at,
+                watermark_data=f"capauth-estate:{len(identities) if isinstance(identities, list) else 0}",
+            )()
+        except FileNotFoundError:
+            raise RuntimeError("CapAuth policy data unavailable")
+        except (json.JSONDecodeError, ValueError):
+            raise ValueError("CapAuth policy data malformed")
+        except Exception:
+            raise RuntimeError
+
+    def atlas_conditions() -> dict:
+        """Read Atlas operator conditions from the operator seat observation store."""
+        try:
+            from pathlib import Path
+            import os
+            
+            operator_observations_path = home.parent / "operator_seat" / "observations.json"
+            fleet_observations_path = home.parent / "fleet" / "observations" / "conditions.json"
+            
+            observations_data = None
+            source_path = None
+            
+            if operator_observations_path.exists():
+                source_path = operator_observations_path
+                with open(operator_observations_path) as f:
+                    observations_data = json.load(f)
+            elif fleet_observations_path.exists():
+                source_path = fleet_observations_path
+                with open(fleet_observations_path) as f:
+                    observations_data = json.load(f)
+            else:
+                open_conditions = 0
+                ready_actions = 0
+                return aggregate_reader(
+                    {
+                        "open_conditions": open_conditions,
+                        "ready_actions": ready_actions,
+                    },
+                    expected=0,
+                    reporting=0,
+                    errors=["no_observations_file"],
+                    has_observations=False,
+                    observed_at=default_observed_at,
+                    watermark_data="no_source",
+                )()
+            
+            if not isinstance(observations_data, dict):
+                raise ValueError("Atlas observations data malformed")
+            
+            conditions = observations_data.get("conditions", [])
+            if not isinstance(conditions, list):
+                raise ValueError("Atlas conditions field malformed")
+            
+            open_conditions = 0
+            ready_actions = 0
+            errors = []
+            
+            for condition in conditions:
+                if not isinstance(condition, dict):
+                    continue
+                status = condition.get("status", "Unknown").lower()
+                if status in {"open", "degraded", "failed"}:
+                    open_conditions += 1
+                if condition.get("ready_for_action") is True:
+                    ready_actions += 1
+                
+                if status == "unknown":
+                    errors.append("unknown_condition_state")
+            
+            has_observations = len(conditions) > 0
+            
+            return aggregate_reader(
+                {
+                    "open_conditions": open_conditions,
+                    "ready_actions": ready_actions,
+                },
+                expected=len(conditions),
+                reporting=len([c for c in conditions if isinstance(c, dict) and c.get("status") != "Unknown"]),
+                errors=errors[:1] if errors else [],
+                has_observations=has_observations,
+                observed_at=observations_data.get("observed_at", default_observed_at),
+                watermark_data=source_path.name if source_path else "unknown",
+            )()
+        except (json.JSONDecodeError, ValueError):
+            raise ValueError("Atlas observations data malformed")
+        except Exception:
+            raise RuntimeError
+
+    def skos_discovery() -> dict:
+        """Read SKOS module discovery from skcode arena or manifest registry."""
+        try:
+            from pathlib import Path
+            
+            skcode_arena_path = home.parent / "skcode" / "arena"
+            skcapstone_repo_path = home / "repo"
+            
+            discovered = 0
+            unavailable = 0
+            errors = []
+            
+            if skcode_arena_path.exists() and skcode_arena_path.is_dir():
+                try:
+                    arena_entries = list(skcode_arena_path.iterdir())
+                    discovered = sum(1 for entry in arena_entries if entry.is_dir())
+                except OSError:
+                    errors.append("arena_read_failed")
+            
+            if skcapstone_repo_path.exists():
+                try:
+                    src_path = skcapstone_repo_path / "src" / "skcapstone"
+                    if src_path.exists() and src_path.is_dir():
+                        module_files = list(src_path.glob("*.py"))
+                        discovered += len(module_files)
+                except OSError:
+                    errors.append("repo_scan_failed")
+            
+            if discovered == 0:
+                unavailable = 1
+                errors.append("no_modules_discovered")
+            
+            has_observations = discovered > 0
+            
+            return aggregate_reader(
+                {
+                    "discovered": discovered,
+                    "unavailable": unavailable,
+                },
+                expected=discovered + unavailable,
+                reporting=discovered,
+                errors=errors[:1] if errors else [],
+                has_observations=has_observations,
+                observed_at=default_observed_at,
+                watermark_data=f"skos-scan:{discovered}:{unavailable}",
+            )()
+        except Exception:
+            raise RuntimeError
+
     readers.update({
         "skcapstone.itil": itil,
         "cmdb.configuration": cmdb,
@@ -586,6 +845,11 @@ def _local_readers(
         "skcounter.harness": lambda: usage("harness_reported"),
         "skgateway.observed": lambda: usage("gateway_observed"),
         "skjoule.wallet": joule,
+        "skcapstone.service_release": service_release,
+        "skperf.aggregate": skperf_aggregate,
+        "capauth.policy": capauth_policy,
+        "atlas.conditions": atlas_conditions,
+        "skos.discovery": skos_discovery,
     })
     return readers
 
@@ -600,6 +864,11 @@ _IMPLEMENTED = {
     "skcounter.harness",
     "skgateway.observed",
     "skjoule.wallet",
+    "skcapstone.service_release",
+    "skperf.aggregate",
+    "capauth.policy",
+    "atlas.conditions",
+    "skos.discovery",
 }
 
 
