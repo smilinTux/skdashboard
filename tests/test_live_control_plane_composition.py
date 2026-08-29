@@ -216,6 +216,18 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     assert 'href="/board"' not in now.text + portfolio.text + schedule.text
     assert board in javascript.text
     assert 'href="/board"' not in javascript.text
+    for asset in ("overview.js", "projects.js", "schedule.js"):
+        script = client.get(f"/static/js/{asset}")
+        assert script.status_code == 200
+        assert 'from "./api.js"' not in script.text
+        assert 'from "./read_only_api.js"' in script.text
+    assert "editor.js" not in javascript.text
+    helper = client.get("/static/js/read_only_api.js")
+    assert helper.status_code == 200
+    assert "/api/auth/capability" not in helper.text
+    assert "localStorage" not in helper.text
+    assert client.get("/static/js/api.js").status_code == 404
+    assert client.get("/static/js/editor.js").status_code == 404
     assert client.get("/board").status_code == 404
     assert client.post("/api/card/example/mutate").status_code == 404
 

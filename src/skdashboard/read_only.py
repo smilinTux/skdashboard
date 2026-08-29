@@ -29,6 +29,7 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "js/control_plane_scope.js",
         "js/overview.js",
         "js/projects.js",
+        "js/read_only_api.js",
         "js/schedule.js",
     }
 )
@@ -176,10 +177,17 @@ def create_read_only_app(
             return JSONResponse({"error": "not_found"}, status_code=404)
         if not candidate.is_file():
             return JSONResponse({"error": "not_found"}, status_code=404)
-        if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
+        if relative in {"js/overview.js", "js/projects.js", "js/schedule.js"}:
             javascript = candidate.read_text(encoding="utf-8").replace(
-                '"/board"', json.dumps(legacy_board_url)
+                'from "./api.js"', 'from "./read_only_api.js"'
             )
+            if relative == "js/overview.js":
+                javascript = javascript.replace(
+                    'import { openCard, initPanel } from "./editor.js";',
+                    "const openCard = () => {};\nconst initPanel = () => {};",
+                )
+            if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
+                javascript = javascript.replace('"/board"', json.dumps(legacy_board_url))
             return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
 
