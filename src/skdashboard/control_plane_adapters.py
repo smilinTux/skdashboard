@@ -12,6 +12,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -21,13 +22,44 @@ MAX_SOURCE_BYTES = 1_048_576
 MAX_SOURCE_ITEMS = 2_048
 
 
-def _read_json_bounded(path: Path) -> object:
-    """Read a local JSON observation without allowing an unbounded allocation."""
+def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _observed_at(value: os.stat_result) -> str:
+    return datetime.fromtimestamp(value.st_mtime, timezone.utc).isoformat()
+
+
+def _read_json_snapshot(path: Path) -> tuple[object, str, str, tuple[int, int, int, int, int]]:
+    """Read one bounded JSON snapshot and reject an in-place concurrent change."""
     with path.open("rb") as source:
+        before = os.fstat(source.fileno())
+        if before.st_size > MAX_SOURCE_BYTES:
+            raise ValueError("observation exceeds byte limit")
         raw = source.read(MAX_SOURCE_BYTES + 1)
+        after = os.fstat(source.fileno())
     if len(raw) > MAX_SOURCE_BYTES:
         raise ValueError("observation exceeds byte limit")
-    return json.loads(raw)
+    signature = _stat_signature(before)
+    if _stat_signature(after) != signature:
+        raise RuntimeError("source changed during read")
+    return json.loads(raw), hashlib.sha256(raw).hexdigest(), _observed_at(before), signature
+
+
+def _read_json_bounded(path: Path) -> object:
+    return _read_json_snapshot(path)[0]
+
+
+def _directory_snapshot(path: Path, pattern: str | None = None) -> tuple[list[Path], str]:
+    """Enumerate one bounded directory snapshot and reject concurrent mutation."""
+    before = path.stat()
+    entries = list(islice(path.glob(pattern) if pattern else path.iterdir(), MAX_SOURCE_ITEMS + 1))
+    after = path.stat()
+    if len(entries) > MAX_SOURCE_ITEMS:
+        raise ValueError("directory exceeds item limit")
+    if _stat_signature(before) != _stat_signature(after):
+        raise RuntimeError("source changed during read")
+    return entries, _observed_at(before)
 
 
 @dataclass(frozen=True)
@@ -623,6 +655,8 @@ def _local_readers(
                 observed_at=default_observed_at,
                 watermark_data=f"cmdb-service-fold:{len(service_cis)}",
             )()
+        except PermissionError:
+            raise
         except Exception:
             raise RuntimeError
 
@@ -662,6 +696,8 @@ def _local_readers(
                 observed_at=observed_at,
                 watermark_data=perf_data_path.name,
             )()
+        except PermissionError:
+            raise
         except RuntimeError:
             raise
         except (json.JSONDecodeError, ValueError) as e:
@@ -672,23 +708,21 @@ def _local_readers(
     def capauth_policy() -> dict:
         """Read CapAuth policy health from estate and policy check state."""
         try:
+            from capauth.estate import EstateManifest
+
             capauth_home = home / "capauth"
             estate_path = capauth_home / "estate.json"
             if not estate_path.exists():
                 raise RuntimeError("CapAuth estate unavailable")
 
-            estate = _read_json_bounded(estate_path)
+            _, digest, observed_at, signature = _read_json_snapshot(estate_path)
+            manifest = EstateManifest.load(estate_path)
+            if manifest.digest != digest or _stat_signature(estate_path.stat()) != signature:
+                raise RuntimeError("CapAuth estate changed during validation")
 
-            if not isinstance(estate, dict) or "identities" not in estate:
-                raise ValueError("CapAuth estate malformed")
-
-            identities = estate.get("identities", [])
-            available = isinstance(identities, list) and len(identities) > 0
-
-            denials = 0
-            for identity in identities:
-                if isinstance(identity, dict) and identity.get("status") != "active":
-                    denials += 1
+            identities = tuple(manifest.identities.values())
+            available = bool(identities)
+            denials = sum(identity.status != "active" for identity in identities)
 
             errors = []
             if not available:
@@ -701,13 +735,15 @@ def _local_readers(
                     "available": available,
                     "denials": denials,
                 },
-                expected=len(identities) if isinstance(identities, list) else 0,
-                reporting=sum(1 for i in identities if isinstance(i, dict) and i.get("status") == "active"),
+                expected=len(identities),
+                reporting=sum(identity.status == "active" for identity in identities),
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
-                observed_at=default_observed_at,
-                watermark_data=f"capauth-estate:{len(identities) if isinstance(identities, list) else 0}",
+                observed_at=observed_at,
+                watermark_data=f"capauth-estate:{manifest.digest}",
             )()
+        except PermissionError:
+            raise
         except FileNotFoundError:
             raise RuntimeError("CapAuth policy data unavailable")
         except (json.JSONDecodeError, ValueError):
@@ -724,13 +760,18 @@ def _local_readers(
 
             observations_data = None
             source_path = None
+            source_observed_at = None
 
             if operator_observations_path.exists():
                 source_path = operator_observations_path
-                observations_data = _read_json_bounded(operator_observations_path)
+                observations_data, _, source_observed_at, _ = _read_json_snapshot(
+                    operator_observations_path
+                )
             elif fleet_observations_path.exists():
                 source_path = fleet_observations_path
-                observations_data = _read_json_bounded(fleet_observations_path)
+                observations_data, _, source_observed_at, _ = _read_json_snapshot(
+                    fleet_observations_path
+                )
             else:
                 open_conditions = 0
                 ready_actions = 0
@@ -781,9 +822,11 @@ def _local_readers(
                 reporting=len([c for c in conditions if isinstance(c, dict) and c.get("status") != "Unknown"]),
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
-                observed_at=observations_data.get("observed_at", default_observed_at),
+                observed_at=observations_data.get("observed_at", source_observed_at),
                 watermark_data=source_path.name if source_path else "unknown",
             )()
+        except PermissionError:
+            raise
         except (json.JSONDecodeError, ValueError):
             raise ValueError("Atlas observations data malformed")
         except Exception:
@@ -799,11 +842,15 @@ def _local_readers(
             discovered = 0
             unavailable = 0
             errors = []
+            observed_at = []
 
             if skcode_arena_path.exists() and skcode_arena_path.is_dir():
                 try:
-                    arena_entries = list(skcode_arena_path.iterdir())[:MAX_SOURCE_ITEMS]
+                    arena_entries, arena_observed_at = _directory_snapshot(skcode_arena_path)
+                    observed_at.append(arena_observed_at)
                     discovered = sum(1 for entry in arena_entries if entry.is_dir())
+                except PermissionError:
+                    raise
                 except OSError:
                     errors.append("arena_read_failed")
 
@@ -811,8 +858,11 @@ def _local_readers(
                 try:
                     src_path = skcapstone_repo_path / "src" / "skcapstone"
                     if src_path.exists() and src_path.is_dir():
-                        module_files = list(src_path.glob("*.py"))[:MAX_SOURCE_ITEMS]
+                        module_files, repo_observed_at = _directory_snapshot(src_path, "*.py")
+                        observed_at.append(repo_observed_at)
                         discovered += len(module_files)
+                except PermissionError:
+                    raise
                 except OSError:
                     errors.append("repo_scan_failed")
 
@@ -831,9 +881,11 @@ def _local_readers(
                 reporting=discovered,
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
-                observed_at=default_observed_at,
+                observed_at=min(observed_at, default=default_observed_at),
                 watermark_data=f"skos-scan:{discovered}:{unavailable}",
             )()
+        except PermissionError:
+            raise
         except Exception:
             raise RuntimeError
 
