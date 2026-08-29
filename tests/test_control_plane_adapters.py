@@ -463,3 +463,284 @@ def test_oversize_or_bad_worker_json_is_malformed_not_unavailable(tmp_path: Path
             item = project_estate({spec.adapter_id: reader}, now=NOW)[0]
         assert item["truth_state"] == "unavailable"
         assert item["errors"][0]["code"] == "SOURCE_MALFORMED"
+
+
+def test_sklegal_global_adapter_exposes_only_approved_fields(tmp_path: Path) -> None:
+    """SKLegal global adapter returns only matters and deadline_pressure, no protected content."""
+    fixture_data = {
+        "meta": {
+            "contractId": "public-synthetic-sklegal-mvp-v1",
+            "publicSynthetic": True,
+        },
+        "matters": [
+            {"id": "44444444-4444-4444-8444-444444444441", "title": "Test Matter 1"},
+            {"id": "55555555-5555-5555-8555-555555555551", "title": "Test Matter 2"},
+        ],
+        "deadlines": [
+            {"due_date": (NOW + timedelta(days=3)).isoformat()},
+            {"due_date": (NOW + timedelta(days=10)).isoformat()},
+            {"invalid_date": "not-a-date"},
+        ],
+        "clients": [  # Should NOT be exposed
+            {"id": "33333333-3333-4333-8333-333333333331", "name": "Test Client"},
+        ],
+    }
+
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+    import json
+    fixture_path.write_text(json.dumps(fixture_data))
+
+    # Test the sklegal reader directly through _local_readers
+    from skdashboard.control_plane_adapters import _local_readers
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    assert "sklegal.global" in readers, "sklegal.global reader should be available"
+
+    raw_result = readers["sklegal.global"]()
+
+    # Verify only approved fields are exposed in raw result
+    assert set(raw_result["aggregate"].keys()) == {"matters", "deadline_pressure"}
+    assert raw_result["aggregate"]["matters"] == 2  # Only count, no IDs
+    assert raw_result["aggregate"]["deadline_pressure"] == 1  # Only count, no dates
+
+    # Verify no protected content leaks
+    result_str = json.dumps(raw_result)
+    assert "44444444-4444-4444-8444-444444444441" not in result_str
+    assert "55555555-5555-5555-8555-555555555551" not in result_str
+    assert "33333333-3333-4333-8333-333333333331" not in result_str
+    assert "Test Matter" not in result_str
+    assert "Test Client" not in result_str
+
+    # Verify through project_estate as well
+    spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
+    reader = Reader(payload=raw_result)
+    items = project_estate({spec.adapter_id: reader}, now=NOW)
+    result = next(item for item in items if item["adapter_id"] == "sklegal.global")
+
+    # Verify only approved fields are exposed
+    assert set(result["aggregate"].keys()) == {"matters", "deadline_pressure"}
+    assert result["aggregate"]["matters"] == 2  # Only count, no IDs
+    assert result["aggregate"]["deadline_pressure"] == 1  # Only count, no dates
+
+    # Verify no protected content leaks
+    result_str = json.dumps(result)
+    assert "44444444-4444-4444-8444-444444444441" not in result_str
+    assert "55555555-5555-5555-8555-555555555551" not in result_str
+    assert "33333333-3333-4333-8333-333333333331" not in result_str
+    assert "Test Matter" not in result_str
+    assert "Test Client" not in result_str
+
+    # Verify truth state and metadata
+    assert result["truth_state"] == "current"
+    assert result["schema_version"] == SCHEMA_VERSION
+    assert result["visibility"]["state"] == "policy_filtered"
+
+
+def test_sklegal_global_adapter_fails_closed_without_public_synthetic(tmp_path: Path) -> None:
+    """SKLegal global adapter returns zero counts when no public-synthetic fixture exists."""
+    import json
+
+    # No fixture directory exists
+    from skdashboard.control_plane_adapters import _local_readers
+
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+
+    # The reader should be present and return zero counts (fail closed without exposing reason)
+    assert "sklegal.global" in readers, "sklegal.global reader should be present"
+
+    # Calling it should return zero counts instead of raising
+    result = readers["sklegal.global"]()
+    assert result["aggregate"]["matters"] == 0
+    assert result["aggregate"]["deadline_pressure"] == 0
+    assert result["has_observations"] is False
+    # Verify no error details are exposed
+    assert "fixture" not in json.dumps(result).lower()
+    assert "unavailable" not in json.dumps(result).lower()
+
+
+def test_sklegal_global_adapter_rejects_non_public_synthetic_fixtures(tmp_path: Path) -> None:
+    """SKLegal global adapter rejects fixtures not marked as public-synthetic."""
+    fixture_data = {
+        "meta": {
+            "contractId": "protected-fixture",
+            "publicSynthetic": False,  # Not public-synthetic
+        },
+        "matters": [{"id": "protected-matter-id"}],
+    }
+
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+    import json
+    fixture_path.write_text(json.dumps(fixture_data))
+
+    reader = Reader(adapter_id="sklegal.global", home=tmp_path, timeout_ms=1_000)
+
+    try:
+        result = reader()
+        # Should succeed but with zero counts for non-public-synthetic
+        assert result["aggregate"]["matters"] == 0
+        assert result["aggregate"]["deadline_pressure"] == 0
+    except RuntimeError:
+        # Or fail closed - both are acceptable
+        pass
+
+    # Verify no protected content leaked even if processed
+    result_str = str(result) if 'result' in locals() else ""
+    assert "protected-matter-id" not in result_str
+
+
+def test_sklegal_global_adapter_respects_byte_bounds(tmp_path: Path) -> None:
+    """SKLegal global adapter returns zero counts for oversized fixtures."""
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+
+    # Write an oversized fixture (>64KB)
+    fixture_path.write_text("x" * 65_000)
+
+    from skdashboard.control_plane_adapters import _local_readers
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+
+    # Oversized fixture should be skipped and return zero counts
+    result = readers["sklegal.global"]()
+    assert result["aggregate"]["matters"] == 0
+    assert result["aggregate"]["deadline_pressure"] == 0
+
+
+def test_sklegal_global_policy_filtered_visibility_in_projection(tmp_path: Path) -> None:
+    """SKLegal global aggregate maintains policy_filtered visibility in projection."""
+    fixture_data = {
+        "meta": {"publicSynthetic": True},
+        "matters": [{"id": "test-id", "title": "Test"}],
+        "deadlines": [],
+    }
+
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+    import json
+    fixture_path.write_text(json.dumps(fixture_data))
+
+    spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
+    reader = Reader(adapter_id="sklegal.global", home=tmp_path, timeout_ms=1_000)
+
+    items = project_estate({spec.adapter_id: reader}, now=NOW)
+    sklegal_item = next(item for item in items if item["adapter_id"] == "sklegal.global")
+
+    # Verify policy-filtered visibility
+    assert sklegal_item["visibility"] == {
+        "state": "policy_filtered",
+        "authorization": "unknown",
+        "reason": "Tenant and Matter policy was not evaluated at global scope",
+    }
+
+    # Verify no tenant/matter identifiers leak
+    item_str = json.dumps(sklegal_item)
+    assert "test-id" not in item_str
+    assert "tenant_id" not in item_str
+    assert "matter_id" not in item_str
+    assert "client_id" not in item_str
+
+
+def test_sklegal_global_deadline_pressure_calculation(tmp_path: Path) -> None:
+    """SKLegal global adapter correctly calculates deadline pressure (within 7 days)."""
+    from datetime import timedelta
+
+    fixture_data = {
+        "meta": {"publicSynthetic": True},
+        "matters": [],
+        "deadlines": [
+            {"due_date": (NOW + timedelta(days=1)).isoformat()},  # Pressure
+            {"due_date": (NOW + timedelta(days=7)).isoformat()},  # Pressure
+            {"due_date": (NOW + timedelta(days=8)).isoformat()},  # No pressure
+            {"due_date": (NOW - timedelta(days=1)).isoformat()},  # Pressure (overdue)
+            {"due_date": (NOW - timedelta(days=2)).isoformat()},  # No pressure (too old)
+            {"due_date": "invalid-date"},  # Skipped
+            {},  # Skipped (no date)
+        ],
+    }
+
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+    import json
+    fixture_path.write_text(json.dumps(fixture_data))
+
+    # Test directly through _local_readers
+    from skdashboard.control_plane_adapters import _local_readers
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    raw_result = readers["sklegal.global"]()
+
+    # Should count: day 1, day 7, and overdue (day -1) = 3
+    assert raw_result["aggregate"]["deadline_pressure"] == 3
+    assert raw_result["aggregate"]["matters"] == 0
+
+
+def test_sklegal_global_malformed_json_fails_closed(tmp_path: Path) -> None:
+    """SKLegal global adapter fails closed on malformed JSON fixtures."""
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+
+    # Write malformed JSON
+    fixture_path.write_text("{invalid json")
+
+    from skdashboard.control_plane_adapters import _local_readers
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+
+    # Malformed JSON should be skipped and return zero counts
+    result = readers["sklegal.global"]()
+    assert result["aggregate"]["matters"] == 0
+    assert result["aggregate"]["deadline_pressure"] == 0
+
+
+def test_sklegal_global_adapter_contract_pinning(tmp_path: Path) -> None:
+    """Verify SKLegal global adapter pins exact contract parameters."""
+    from skdashboard.control_plane_adapters import SPECS
+
+    spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
+
+    # Verify contract pinning from acceptance criteria
+    assert spec.owner == "SKLegal"
+    assert spec.population == "policy_filtered_global_aggregate"
+    assert spec.fields == ("matters", "deadline_pressure")
+    assert spec.classification == "confidential"
+    assert spec.ttl_seconds == 60
+    assert spec.timeout_ms == 1_000
+
+
+def test_sklegal_global_no_prompt_or_capability_leakage(tmp_path: Path) -> None:
+    """SKLegal global adapter never exposes prompts, capabilities, or credentials."""
+    fixture_data = {
+        "meta": {"publicSynthetic": True},
+        "matters": [{"id": "m1"}],
+        "prompts": ["This is a protected prompt that must never leak"],
+        "capabilities": ["protected:admin:full-access"],
+        "credentials": {"api_key": "secret-key-value"},
+        "deadlines": [],
+    }
+
+    fixture_dir = tmp_path / "fixtures" / "sklegal"
+    fixture_dir.mkdir(parents=True)
+    fixture_path = fixture_dir / "public-synthetic-global-aggregate.json"
+    import json
+    fixture_path.write_text(json.dumps(fixture_data))
+
+    # Test directly through _local_readers
+    from skdashboard.control_plane_adapters import _local_readers
+    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    raw_result = readers["sklegal.global"]()
+    result_str = json.dumps(raw_result)
+
+    # Verify no protected content leaked
+    assert "protected prompt" not in result_str
+    assert "protected:admin:full-access" not in result_str
+    assert "secret-key-value" not in result_str
+    assert "prompts" not in result_str
+    assert "credentials" not in result_str
+    assert "capabilities" not in result_str
+
+    # Only approved fields present
+    assert set(raw_result["aggregate"].keys()) == {"matters", "deadline_pressure"}
