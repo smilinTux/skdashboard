@@ -165,21 +165,28 @@ def test_issuer_fails_closed_before_connecting_for_wrong_binding(tmp_path, monke
     connected.assert_not_called()
 
 
-def test_read_only_runtime_serves_now_portfolio_static_and_external_board(tmp_path) -> None:
+def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_board(
+    tmp_path,
+) -> None:
     board = "https://legacy.example/explicit-board"
     app = create_read_only_app(tmp_path, legacy_board_url=board)
     client = TestClient(app, base_url=ORIGIN)
 
     now = client.get("/control-plane/now")
     portfolio = client.get("/control-plane/portfolio")
+    schedule = client.get("/control-plane/schedule")
     css = client.get("/static/css/overview.css")
     javascript = client.get("/static/js/overview.js")
-    assert now.status_code == portfolio.status_code == css.status_code == 200
+    assert (
+        now.status_code == portfolio.status_code == schedule.status_code == css.status_code == 200
+    )
     assert "<h2>Now</h2>" in now.text
     assert "Portfolio" in portfolio.text
+    assert "Schedule" in schedule.text
     assert f'href="{board}"' in now.text
     assert f'href="{board}"' in portfolio.text
-    assert 'href="/board"' not in now.text + portfolio.text
+    assert f'href="{board}"' in schedule.text
+    assert 'href="/board"' not in now.text + portfolio.text + schedule.text
     assert board in javascript.text
     assert 'href="/board"' not in javascript.text
     assert client.get("/board").status_code == 404
