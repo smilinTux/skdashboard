@@ -893,12 +893,21 @@ def routes(
                 "the authorized schedule projection is unavailable",
                 retryable=True,
             )
-        projection = schedule_provider.read(
-            context,
-            query,
-            home,
-            currentness_verifier=verifier,
-        )
+        try:
+            projection = schedule_provider.read(
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+            )
+        except Exception:
+            return _error(
+                request,
+                503,
+                "SCHEDULE_UNAVAILABLE",
+                "the authorized schedule projection is unavailable",
+                retryable=True,
+            )
         if not isinstance(projection, dict):
             return _error(request, 503, "SCHEDULE_UNAVAILABLE", "invalid schedule projection")
         serialized = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
