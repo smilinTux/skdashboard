@@ -17,6 +17,7 @@
     "truth_state": {"$ref": "#/$defs/truth_state"},
     "visibility": {"$ref": "#/$defs/visibility"},
     "source_watermarks": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/watermark"}},
+    "field_provenance": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 500}},
     "items": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/item"}},
     "dependencies": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/dependency"}},
     "overlays": {"type": "array", "maxItems": 5000, "items": {"$ref": "#/$defs/overlay"}},
@@ -92,7 +93,7 @@
       "additionalProperties": false,
       "required": ["state", "instant"],
       "properties": {
-        "state": {"enum": ["known", "unknown", "unavailable", "policy_filtered", "not_applicable"]},
+        "state": {"enum": ["known", "unknown", "stale", "partial", "unavailable", "policy_filtered", "not_applicable"]},
         "instant": {"type": ["string", "null"], "format": "date-time"},
         "reason": {"type": "string", "minLength": 1, "maxLength": 500}
       },
@@ -102,7 +103,7 @@
           "then": {"properties": {"instant": {"type": "string", "format": "date-time"}}}
         },
         {
-          "if": {"properties": {"state": {"enum": ["unknown", "unavailable", "policy_filtered", "not_applicable"]}}, "required": ["state"]},
+          "if": {"properties": {"state": {"enum": ["unknown", "stale", "partial", "unavailable", "policy_filtered", "not_applicable"]}}, "required": ["state"]},
           "then": {"required": ["reason"], "properties": {"instant": {"type": "null"}}}
         }
       ]
@@ -117,7 +118,9 @@
         "planned_start": {"$ref": "#/$defs/date_value"},
         "planned_target": {"$ref": "#/$defs/date_value"},
         "actual_start": {"$ref": "#/$defs/date_value"},
-        "actual_finish": {"$ref": "#/$defs/date_value"}
+        "actual_finish": {"$ref": "#/$defs/date_value"},
+        "forecast_start": {"$ref": "#/$defs/date_value"},
+        "forecast_target": {"$ref": "#/$defs/date_value"}
       }
     },
     "variance": {
