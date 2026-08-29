@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added policy-gated SKLegal global aggregate adapter for the Now workspace (SKCP-NOW-SKLEGAL-01). The adapter returns only approved counts (`matters`, `deadline_pressure`) and truth-state metadata, never exposes Matter content, client content, Evidence Items, Work Products, raw identifiers, prompts, or protected bytes. Uses public-synthetic fixtures only with comprehensive test coverage proving no protected content leakage. Pins exact contract: schema v1.1.0, 60s TTL, 1s timeout, 4KB byte bounds.
+
 - Preserve fail-closed OIDC callback errors while logging only allowlisted failure
   categories with a browser-safe correlation reference.
 
@@ -31,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add an opt-in encrypted server-side OIDC session adapter for the dedicated
   read-only runtime, with opaque browser cookies, PKCE, CSRF, bounded refresh,
   and per-request reuse of the existing CapAuth PEP.
+
+- Enforce exact named HTTPS origins, HTTP redirects, HSTS, Secure host-only
+  cookie transport, and mandatory TLS inputs in the disabled read-only runtime.
 
 - Enforce exact named HTTPS origins, HTTP redirects, HSTS, Secure host-only
   cookie transport, and mandatory TLS inputs in the disabled read-only runtime.

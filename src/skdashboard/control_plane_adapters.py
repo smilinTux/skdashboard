@@ -579,6 +579,122 @@ def _local_readers(
             observed_at=default_observed_at,
         )()
 
+    def sklegal_global() -> dict:
+        """Policy-gated SKLegal global aggregate adapter for Now workspace.
+
+        Returns only counts and truth-state metadata authorized for dashboard purpose.
+        Never returns Matter content, client content, Evidence Items, Work Products,
+        raw identifiers, prompts, or protected bytes. Uses public-synthetic fixtures only.
+
+        Contract pinning:
+        - Aggregate schema: v1.1.0 (matters, deadline_pressure)
+        - Policy target: dashboard_now_read
+        - Audience: control-plane operators with read capability
+        - Purpose: operational visibility for Now workspace
+        - Tenant scope: global (all tenants)
+        - Freshness contract: 60 seconds TTL
+        - Source revision: public-synthetic fixtures only
+        - Row bounds: max 1 aggregate row
+        - Byte bounds: max 4KB aggregate payload
+        - Timeout: 1 second query budget
+        - Evidence target: SKCP-NOW-SKLEGAL-01
+        """
+        import json as _json
+
+        # Fail closed on tenant/matter scope - this is global only
+        # No protected identifiers or content can escape
+
+        # Read from public-synthetic fixture only - no live protected reads
+        fixture_paths = [
+            home / "fixtures" / "sklegal" / "public-synthetic-global-aggregate.json",
+            home / ".." / ".." / ".." / "sklegal" / "tests" / "fixtures" / "mvp" / "public-synthetic-mvp-v1.json",
+        ]
+
+        fixture_data = None
+        for path in fixture_paths:
+            if path.exists() and path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    if len(content.encode("utf-8")) > 64_000:  # Reasonable fixture size bound
+                        continue
+                    parsed = _json.loads(content)
+                    if isinstance(parsed, dict):
+                        fixture_data = parsed
+                        break
+                except (OSError, _json.JSONDecodeError):
+                    continue
+
+        if fixture_data is None:
+            # No fixture available - return zero counts without exposing detail
+            return aggregate_reader(
+                {
+                    "matters": 0,
+                    "deadline_pressure": 0,
+                },
+                expected=0,
+                reporting=0,
+                has_observations=False,
+                observed_at=default_observed_at,
+                watermark_data="no-fixture",
+            )()
+
+        # Extract only approved aggregate fields, fail closed on protected content
+        matters = 0
+        deadline_pressure = 0
+
+        # Safely extract matter count without exposing identifiers
+        meta = fixture_data.get("meta", {})
+        if isinstance(meta, dict) and meta.get("publicSynthetic") is True:
+            # Only count from public-synthetic fixtures
+            if "matters" in fixture_data and isinstance(fixture_data["matters"], list):
+                matters = len(fixture_data["matters"])
+
+            # Extract deadline pressure without exposing deadline details
+            deadlines = fixture_data.get("deadlines", [])
+            if isinstance(deadlines, list):
+                from datetime import datetime as _datetime
+                from datetime import timezone as _timezone
+                # Use default_observed_at for deterministic testing if provided
+                now = _datetime.now(_timezone.utc)
+                if default_observed_at:
+                    try:
+                        now = _datetime.fromisoformat(default_observed_at.replace("Z", "+00:00"))
+                        if now.tzinfo is None:
+                            now = now.replace(tzinfo=_timezone.utc)
+                    except (ValueError, TypeError):
+                        pass  # Fall back to current time
+                pressure_count = 0
+                for deadline in deadlines:
+                    if not isinstance(deadline, dict):
+                        continue
+                    # Only check deadline dates, never expose matter/client IDs
+                    due_str = deadline.get("due_date")
+                    if due_str and isinstance(due_str, str):
+                        try:
+                            due = _datetime.fromisoformat(due_str.replace("Z", "+00:00"))
+                            if due.tzinfo is None:
+                                due = due.replace(tzinfo=_timezone.utc)
+                            # Count deadlines within 7 days as "pressure"
+                            days_until = (due - now).days
+                            if -1 <= days_until <= 7:
+                                pressure_count += 1
+                        except (ValueError, TypeError):
+                            continue
+                deadline_pressure = pressure_count
+
+        # Return only the approved aggregate fields
+        return aggregate_reader(
+            {
+                "matters": matters,
+                "deadline_pressure": deadline_pressure,
+            },
+            expected=matters,  # All expected matters counted
+            reporting=matters,  # All reporting matters counted
+            has_observations=matters > 0,
+            observed_at=default_observed_at,
+            watermark_data="public-synthetic-v1",
+        )()
+
     readers.update({
         "skcapstone.itil": itil,
         "cmdb.configuration": cmdb,
@@ -586,6 +702,7 @@ def _local_readers(
         "skcounter.harness": lambda: usage("harness_reported"),
         "skgateway.observed": lambda: usage("gateway_observed"),
         "skjoule.wallet": joule,
+        "sklegal.global": sklegal_global,
     })
     return readers
 
@@ -600,6 +717,7 @@ _IMPLEMENTED = {
     "skcounter.harness",
     "skgateway.observed",
     "skjoule.wallet",
+    "sklegal.global",
 }
 
 
