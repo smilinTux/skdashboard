@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import socket
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,9 +12,14 @@ from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from skdashboard.control_plane_api import ALLOWED_BROWSER_ORIGINS
+from skdashboard.dashboard_schedule import (
+    AUTHORIZATION_TARGET,
+    ScheduleProjectionProvider,
+)
 from skdashboard.live_control_plane import (
     CAPABILITY,
     RESOURCE_TYPE,
+    SCHEDULE_TARGET,
     TARGET,
     EphemeralIssuerClient,
     LiveControlPlaneConfig,
@@ -33,6 +39,7 @@ def config(tmp_path: Path, *, board="https://legacy.example/board") -> LiveContr
         legacy_board_url=board,
         resource_id=RESOURCE_ID,
         owner_policy_revision=POLICY_REVISION,
+        tenant_id="platform",
         capability_ttl_seconds=60,
     )
 
@@ -67,9 +74,12 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
         store_factory=Mock(),
     )
 
-    assert composition.decision_authorizer._owner_policy is composition.project_provider
+    assert (
+        composition.decision_authorizer._owner_policy._project_provider
+        is composition.project_provider
+    )
     invocation = composition.invocation_factory(request(), CAPABILITY, TARGET)
-    assert invocation.node_id == "chiap04"
+    assert invocation.node_id == "chiap08"
     assert invocation.purpose == "project-management-reporting"
     assert invocation.audience == "skdashboard"
     assert invocation.capability == "skdashboard.read"
@@ -77,6 +87,41 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     assert invocation.resource_type == RESOURCE_TYPE
     assert invocation.resource_id == RESOURCE_ID
     assert invocation.boundary.origin == ORIGIN
+    assert isinstance(composition.schedule_provider, ScheduleProjectionProvider)
+
+
+def test_composed_schedule_provider_is_honestly_unavailable(tmp_path) -> None:
+    composition = compose_live_control_plane(
+        config=config(tmp_path),
+        capability_authorizer=Mock(),
+        owner_policy_backend=Mock(),
+        store_factory=Mock(),
+    )
+    context = SimpleNamespace(
+        binding=SimpleNamespace(target=AUTHORIZATION_TARGET, capability=CAPABILITY),
+        joined_decision=SimpleNamespace(allow=True),
+    )
+    verifier = SimpleNamespace(
+        check_before_owner_read=lambda _context: SimpleNamespace(value="allow"),
+        check_after_owner_read=lambda _context: SimpleNamespace(value="allow"),
+    )
+    query = {
+        "role": "project-manager",
+        "scope": "estate",
+        "window": "latest",
+        "baseline": "none",
+        "service": "all",
+        "lens": "roadmap",
+        "timezone": "UTC",
+    }
+
+    with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
+        composition.schedule_provider.read(
+            context,
+            query,
+            tmp_path,
+            currentness_verifier=verifier,
+        )
 
 
 @pytest.mark.parametrize(
@@ -100,7 +145,184 @@ def test_invocation_factory_rejects_every_nonexact_binding(
         composition.invocation_factory(request(path=target, origin=origin), capability, target)
 
 
-def test_issuer_opens_a_fresh_channel_for_every_request_and_sends_exact_facts(tmp_path) -> None:
+def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
+    tmp_path, monkeypatch
+) -> None:
+    from capauth import (
+        CurrentPolicyRevisions,
+        InMemoryOperatorSessionBackendForTests,
+        OperatorSessionManager,
+    )
+    from capauth.delegated import (
+        CapabilityAuthorizer,
+        InMemoryAuditSink,
+        InMemoryPrincipalPolicyBackend,
+        InMemoryReplayBackend,
+        InMemoryRevocationBackend,
+        IssuerGrant,
+        Principal,
+        StaticTrustedIssuerBackend,
+    )
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyEntryV1,
+        StaticAuthorizedCardPolicyBackend,
+    )
+    from skcoord.authorized_card_snapshot import AuthorizedCardScopeV1
+    from skcoord.card import Card, Column, Kind
+    from test_control_plane_decision_context import Signer
+
+    from skdashboard import control_plane_adapters, control_plane_quality
+
+    now = datetime.now(timezone.utc)
+    principal = Principal(
+        principal_id="human@example.test",
+        subject="human@example.test",
+        kind="human",
+    )
+    scope = AuthorizedCardScopeV1(role="project-manager")
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=principal.subject,
+        acting_principal_id=principal.principal_id,
+        node_id="chiap08",
+        scope=scope,
+        valid_from=now - timedelta(minutes=1),
+        expires_at=now + timedelta(minutes=2),
+        visible_card_ids=("source",),
+        field_mask=("owner_ref", "visible_edges"),
+        semantic_classes=("project",),
+    )
+    source = Card(
+        id="source",
+        kind=Kind.TASK,
+        title="not projected",
+        description="not projected",
+        status=Column.DOING,
+        swimlane="feature",
+        priority="high",
+        originator="fixture",
+        owner="project-owner",
+        labels=["project"],
+        acceptance_criteria=[],
+        dependencies=[],
+        links={},
+        meta={},
+        created_at="2026-08-20T00:00:00Z",
+        updated_at="2026-08-29T20:00:00Z",
+    )
+
+    class Store:
+        def fold(self, card_id):
+            return source if card_id == source.id else None
+
+    signer = Signer()
+
+    def clock():
+        return now
+
+    capability_authorizer = CapabilityAuthorizer(
+        trusted_issuers=StaticTrustedIssuerBackend(
+            (
+                IssuerGrant(
+                    fingerprint=signer.issuer_fingerprint,
+                    capabilities=frozenset({CAPABILITY}),
+                    audiences=frozenset({"skdashboard"}),
+                    principal_kinds=frozenset({"human"}),
+                ),
+            )
+        ),
+        principals=InMemoryPrincipalPolicyBackend((principal,)),
+        revocations=InMemoryRevocationBackend(),
+        replay=InMemoryReplayBackend(clock=clock),
+        audit=InMemoryAuditSink(),
+        signature_verifier=signer,
+        clock=clock,
+    )
+    cfg = LiveControlPlaneConfig(
+        issuer_socket=tmp_path / "issuer.sock",
+        legacy_board_url="https://legacy.example/board",
+        resource_id=entry.resource_id,
+        owner_policy_revision=entry.owner_policy_revision,
+        tenant_id="platform",
+        capability_ttl_seconds=60,
+    )
+    composition = compose_live_control_plane(
+        config=cfg,
+        capability_authorizer=capability_authorizer,
+        owner_policy_backend=StaticAuthorizedCardPolicyBackend((entry,)),
+        store_factory=lambda _home: Store(),
+        credential_signer=signer,
+        operator_sessions=OperatorSessionManager(
+            backend=InMemoryOperatorSessionBackendForTests(),
+            current_revisions=lambda _binding: revisions,
+            enabled=True,
+            clock=clock,
+        ),
+        operator_revisions=(
+            revisions := CurrentPolicyRevisions(
+                issuer="1" * 64,
+                principal="2" * 64,
+                acting_principal="3" * 64,
+                revocation="4" * 64,
+                owner=entry.owner_policy_revision,
+            )
+        ),
+        clock=clock,
+    )
+    assert composition.session_capability_issuer is None
+    bridge = composition.session_authorizer
+    session_record = bridge.enroll(principal.subject, ORIGIN)
+
+    async def resolve_session(incoming_request):
+        return SimpleNamespace(
+            state="authenticated",
+            subject=principal.subject,
+            control_plane_request=bridge.request(session_record, incoming_request),
+        )
+
+    monkeypatch.setattr(control_plane_adapters, "default_readers", lambda _home: {})
+    monkeypatch.setattr(control_plane_adapters, "project_estate", lambda _readers: [])
+    monkeypatch.setattr(
+        control_plane_quality,
+        "project_data_quality",
+        lambda _items: {"projection_type": "data_quality", "truth_state": "current"},
+    )
+    session = SimpleNamespace(resolve=resolve_session, routes=lambda: [])
+    app = create_read_only_app(
+        tmp_path,
+        decision_authorizer=composition.decision_authorizer,
+        invocation_factory=composition.invocation_factory,
+        project_provider=composition.project_provider,
+        schedule_provider=composition.schedule_provider,
+        session_adapter=session,
+        session_capability_issuer=composition.session_capability_issuer,
+        session_authorizer=composition.session_authorizer,
+        legacy_board_url=composition.legacy_board_url,
+    )
+    client = TestClient(app, base_url=ORIGIN)
+    headers = {"Origin": ORIGIN}
+    overview_query = "?role=project-manager&scope=estate&window=latest&baseline=none&service=all"
+    schedule_query = overview_query + "&lens=roadmap&timezone=UTC"
+
+    assert client.get("/control-plane/now").status_code == 200
+    assert client.get("/control-plane/portfolio").status_code == 200
+    overview = client.get("/api/v1/overview" + overview_query, headers=headers)
+    schedule = client.get(SCHEDULE_TARGET + schedule_query, headers=headers)
+
+    assert overview.status_code == 200, overview.text
+    project = next(
+        item
+        for item in overview.json()["items"]
+        if item.get("projection_type") == "project_records"
+    )
+    assert project["truth_state"] == "current"
+    assert project["records"][0]["record_id"] == source.id
+    assert schedule.status_code == 503
+    assert schedule.json()["code"] == "SCHEDULE_UNAVAILABLE"
+
+
+def test_issuer_opens_a_fresh_channel_for_every_request_and_sends_exact_facts(
+    tmp_path,
+) -> None:
     cfg = config(tmp_path)
     calls = []
 
@@ -189,7 +411,10 @@ def test_file_backed_composition_constructs_the_durable_owner_backend(
         "options": {"expected_uid": 1234},
     }
     assert composition.project_provider._backend.__class__ is Backend
-    assert composition.decision_authorizer._owner_policy is composition.project_provider
+    assert (
+        composition.decision_authorizer._owner_policy._project_provider
+        is composition.project_provider
+    )
 
 
 def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_board(
@@ -230,9 +455,21 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     assert client.get("/static/js/editor.js").status_code == 404
     assert client.get("/board").status_code == 404
     assert client.post("/api/card/example/mutate").status_code == 404
+    route_paths = {route.path for route in app.routes}
+    assert {
+        "/api/v1/overview",
+        "/api/v1/schedule/projection",
+        "/api/v1/schedule/forecasts",
+        "/api/v1/board/summary",
+        "/api/v1/fleet/summary",
+        "/api/v1/economy/summary",
+        "/api/v1/events",
+    } <= route_paths
 
 
-def test_legacy_board_configuration_rejects_urls_with_credentials_or_query(tmp_path) -> None:
+def test_legacy_board_configuration_rejects_urls_with_credentials_or_query(
+    tmp_path,
+) -> None:
     for value in (
         "http://legacy.example/board",
         "https://user:secret@legacy.example/board",

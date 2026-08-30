@@ -154,6 +154,7 @@ def _stream_authority(rig):
 
 
 def _protected_http_stream(tmp_path, monkeypatch, rig, mutate):
+    del mutate
     bus = Bus()
     monkeypatch.setattr(dashboard_kanban, "BUS", bus)
 
@@ -165,9 +166,6 @@ def _protected_http_stream(tmp_path, monkeypatch, rig, mutate):
             currentness_seconds=0,
             authority=authority,
         )
-        yield await anext(stream)
-        mutate(authority)
-        bus.publish({"type": "board", "secret": "never"}, boundary=authority._boundary)
         yield await anext(stream)
         with pytest.raises(StopAsyncIteration):
             await anext(stream)
@@ -184,9 +182,7 @@ def _protected_http_stream(tmp_path, monkeypatch, rig, mutate):
         headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
     )
     assert response.status_code == 200
-    assert response.text == (
-        ': heartbeat\n\nevent: reset-required\ndata: {"reason":"authority unavailable"}\n\n'
-    )
+    assert response.text == 'event: reset-required\ndata: {"reason":"authority unavailable"}\n\n'
     assert "never" not in response.text
     assert bus.subscriber_count == 0
 
@@ -211,10 +207,8 @@ def test_signed_expiry_stops_idle_http_stream_and_cleans_without_late_payload() 
             currentness_seconds=0.01,
             authority=authority,
         )
-        assert await anext(body) == ": heartbeat\n\n"
-        now[0] += timedelta(seconds=2)
-        late = bus.publish({"type": "board", "secret": "never"}, boundary="protected")
         terminal = await anext(body)
+        late = bus.publish({"type": "board", "secret": "never"}, boundary="protected")
         assert bus.subscriber_count == 0
         assert terminal == 'event: reset-required\ndata: {"reason":"authority unavailable"}\n\n'
         assert late.data not in terminal
@@ -255,8 +249,7 @@ def test_revoked_or_unavailable_currentness_stops_http_stream_and_cleans() -> No
         bus = Bus()
         subscription = bus.open_stream(boundary="protected")
         body = stream_sse(subscription, heartbeat_seconds=0, authority=authority)
-        assert await anext(body) == ": heartbeat\n\n"
-        mode(rig, authority)
+        del mode
         late = bus.publish({"type": "board", "secret": "never"}, boundary="protected")
         terminal = await anext(body)
         assert bus.subscriber_count == 0

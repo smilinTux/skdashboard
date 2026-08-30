@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 from pathlib import Path
 
@@ -40,7 +41,10 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
     assert client.get("/.well-known/skworld-module.json").status_code == 200
     manifest = client.get("/.well-known/skworld-module.json").json()
     assert manifest["health"].endswith("/api/v1/health")
-    assert manifest["auth"] == {"audience": "skdashboard", "scopes": ["skdashboard.read"]}
+    assert manifest["auth"] == {
+        "audience": "skdashboard",
+        "scopes": ["skdashboard.read"],
+    }
     assert "operator" not in manifest
     assert client.get("/api/v1/health").status_code == 200
     headers = {"Authorization": "Bearer test", "Origin": LAN_ORIGIN}
@@ -66,7 +70,9 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
         assert client.post(path).status_code == 404
 
 
-def test_exact_https_origins_redirect_hsts_and_public_host_denial(tmp_path: Path) -> None:
+def test_exact_https_origins_redirect_hsts_and_public_host_denial(
+    tmp_path: Path,
+) -> None:
     app = create_read_only_app(tmp_path, authorizer=lambda *_: True)
     for origin in (LAN_ORIGIN, TAILNET_ORIGIN):
         response = TestClient(app, base_url=origin).get("/api/v1/health")
@@ -140,7 +146,9 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
                 decision_authorizer="typed-authorizer",
                 invocation_factory="invocation-factory",
                 project_provider="durable-provider",
-                session_capability_issuer="ephemeral-issuer",
+                schedule_provider="schedule-provider",
+                session_capability_issuer=None,
+                session_authorizer="in-process-authorizer",
                 legacy_board_url="https://legacy.example/board",
             )
         ),
@@ -154,6 +162,22 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         path = tmp_path / name
         path.write_text("non-secret-fixture", encoding="utf-8")
         path.chmod(0o600)
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
 
     main(
         [
@@ -185,6 +209,16 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
             str(tmp_path / "owner-policy.json"),
             "--owner-policy-revision",
             "b" * 64,
+            "--tenant-id",
+            "platform",
+            "--operator-session-db",
+            str(tmp_path / "operator-sessions.db"),
+            "--operator-policy-revisions-file",
+            str(revisions),
+            "--signer-fingerprint",
+            "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+            "--signer-gnupg-home",
+            str(gnupg),
             "--capability-authorizer-factory",
             "approved_factory:build",
         ]
@@ -193,8 +227,35 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
     assert observed["composition"]["owner_policy_file"] == tmp_path / "owner-policy.json"
     assert observed["composition"]["capability_authorizer"].__class__ is object
     routes = {route.path for route in observed["app"].routes}
-    assert {"/control-plane/now", "/control-plane/portfolio", "/control-plane/schedule"} <= routes
+    assert {
+        "/control-plane/now",
+        "/control-plane/portfolio",
+        "/control-plane/schedule",
+        "/api/v1/overview",
+        "/api/v1/schedule/projection",
+        "/api/v1/schedule/forecasts",
+        "/api/v1/board/summary",
+        "/api/v1/fleet/summary",
+        "/api/v1/economy/summary",
+        "/api/v1/events",
+    } <= routes
     assert observed["app"].routes
+
+
+def test_unavailable_schedule_sources_report_degraded_state(tmp_path: Path) -> None:
+    app = create_read_only_app(tmp_path, authorizer=lambda *_: True)
+    client = TestClient(app, base_url=LAN_ORIGIN)
+    headers = {"Authorization": "Bearer test", "Origin": LAN_ORIGIN}
+    query = (
+        "?role=project-manager&scope=estate&window=latest&baseline=none"
+        "&service=all&lens=roadmap&timezone=UTC"
+    )
+
+    projection = client.get("/api/v1/schedule/projection" + query, headers=headers)
+    forecast = client.get("/api/v1/schedule/forecasts" + query, headers=headers)
+    assert projection.status_code == forecast.status_code == 503
+    assert projection.json()["code"] == "SCHEDULE_UNAVAILABLE"
+    assert forecast.json()["code"] == "SCHEDULE_FORECAST_UNAVAILABLE"
 
 
 def test_launcher_rejects_partial_live_composition(tmp_path: Path) -> None:
@@ -264,7 +325,10 @@ def test_protected_routes_keep_auth_and_origin_denials(tmp_path: Path) -> None:
     assert (
         client.get(
             "/api/v1/overview",
-            headers={"Authorization": "Bearer test", "Origin": "https://public.example"},
+            headers={
+                "Authorization": "Bearer test",
+                "Origin": "https://public.example",
+            },
         ).status_code
         == 403
     )

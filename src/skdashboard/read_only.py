@@ -116,6 +116,7 @@ def create_read_only_app(
     reliability_provider=None,
     session_adapter=None,
     session_capability_issuer=None,
+    session_authorizer=None,
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
@@ -186,7 +187,10 @@ def create_read_only_app(
                     'import { openCard, initPanel } from "./editor.js";',
                     "const openCard = () => {};\nconst initPanel = () => {};",
                 )
-            if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
+            if legacy_board_url is not None and relative in {
+                "js/overview.js",
+                "js/projects.js",
+            }:
                 javascript = javascript.replace('"/board"', json.dumps(legacy_board_url))
             return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
@@ -227,6 +231,7 @@ def create_read_only_app(
             reliability_provider=reliability_provider,
             session_resolver=session_adapter.resolve if session_adapter else None,
             session_capability_issuer=session_capability_issuer,
+            session_authorizer=session_authorizer,
             architecture_provider=architecture_provider,
             governance_provider=governance_provider,
             report_provider=report_provider,
@@ -264,8 +269,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--authorized-resource-id")
     parser.add_argument("--owner-policy-file", type=Path)
     parser.add_argument("--owner-policy-revision")
+    parser.add_argument("--tenant-id")
     parser.add_argument("--issuer-uid", type=int)
     parser.add_argument("--owner-policy-uid", type=int)
+    parser.add_argument("--operator-session-db", type=Path)
+    parser.add_argument("--operator-policy-revisions-file", type=Path)
+    parser.add_argument("--signer-fingerprint")
+    parser.add_argument("--signer-gnupg-home", type=Path)
     parser.add_argument(
         "--capability-authorizer-factory",
         help="module:callable returning the approved durable CapAuth authorizer",
@@ -289,7 +299,12 @@ def main(argv: list[str] | None = None) -> None:
         args.authorized_resource_id,
         args.owner_policy_file,
         args.owner_policy_revision,
+        args.tenant_id,
         args.capability_authorizer_factory,
+        args.operator_session_db,
+        args.operator_policy_revisions_file,
+        args.signer_fingerprint,
+        args.signer_gnupg_home,
     )
     if any(live_values) and not all(live_values):
         parser.error("all live control-plane options are required together")
@@ -316,8 +331,14 @@ def main(argv: list[str] | None = None) -> None:
     if all(live_values):
         from importlib import import_module
 
+        from capauth import (
+            CurrentPolicyRevisions,
+            OperatorSessionManager,
+            SQLiteOperatorSessionBackend,
+        )
         from skcoord.card_store import CardStore
 
+        from .gpg_agent_signer import GPGAgentCredentialSigner
         from .live_control_plane import (
             LiveControlPlaneConfig,
             compose_file_backed_live_control_plane,
@@ -330,11 +351,35 @@ def main(argv: list[str] | None = None) -> None:
             capability_authorizer = getattr(import_module(module_name), attribute)()
         except Exception as exc:
             parser.error(f"capability authorizer factory is unavailable: {type(exc).__name__}")
+        try:
+
+            def current_revisions(_binding=None):
+                revisions_file = args.operator_policy_revisions_file
+                status = revisions_file.stat()
+                if status.st_mode & 0o022:
+                    raise PermissionError
+                return CurrentPolicyRevisions.model_validate_json(
+                    revisions_file.read_text(encoding="utf-8"), strict=True
+                )
+
+            revisions = current_revisions()
+            sessions = OperatorSessionManager(
+                backend=SQLiteOperatorSessionBackend(args.operator_session_db),
+                current_revisions=current_revisions,
+                enabled=True,
+            )
+            signer = GPGAgentCredentialSigner(
+                issuer_fingerprint=args.signer_fingerprint,
+                gnupg_home=args.signer_gnupg_home,
+            )
+        except Exception as exc:
+            parser.error(f"in-process authorization is unavailable: {type(exc).__name__}")
         config_options = {
             "issuer_socket": args.issuer_socket,
             "legacy_board_url": args.legacy_board_url,
             "resource_id": args.authorized_resource_id,
             "owner_policy_revision": args.owner_policy_revision,
+            "tenant_id": args.tenant_id,
         }
         if args.issuer_uid is not None:
             config_options["issuer_uid"] = args.issuer_uid
@@ -344,14 +389,19 @@ def main(argv: list[str] | None = None) -> None:
             owner_policy_file=args.owner_policy_file,
             expected_policy_uid=args.owner_policy_uid,
             store_factory=CardStore,
+            credential_signer=signer,
+            operator_sessions=sessions,
+            operator_revisions=revisions,
         )
+        session_adapter.control_plane_bridge = composition.session_authorizer
         app_options.update(
             decision_authorizer=composition.decision_authorizer,
             invocation_factory=composition.invocation_factory,
             project_provider=composition.project_provider,
+            schedule_provider=composition.schedule_provider,
             session_capability_issuer=composition.session_capability_issuer,
+            session_authorizer=composition.session_authorizer,
             legacy_board_url=composition.legacy_board_url,
-            schedule_provider=None,
             schedule_forecast_provider=None,
         )
 
