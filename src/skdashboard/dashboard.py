@@ -793,7 +793,7 @@ def create_app(
     import asyncio
 
     from starlette.applications import Starlette
-    from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
+    from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
 
@@ -842,6 +842,12 @@ def create_app(
     def _page(name):
         async def handler(_request):
             return HTMLResponse((static_dir / name).read_text(encoding="utf-8"))
+
+        return handler
+
+    def _redirect(location):
+        async def handler(_request):
+            return RedirectResponse(location, status_code=307, headers={"Cache-Control": "no-store"})
 
         return handler
 
@@ -1870,6 +1876,15 @@ def create_app(
         Route("/control-plane/now", index),
         Route("/control-plane/portfolio", _page("projects.html")),
         Route("/control-plane/schedule", _page("schedule.html")),
+        Route(
+            "/matters",
+            _redirect(
+                "/control-plane/now?role=governance&scope=estate&window=latest"
+                "&baseline=none&service=all&selected_silo=legal"
+            ),
+        ),
+        Route("/tasks", _redirect("/board")),
+        Route("/work-queue", _redirect("/board")),
         Route("/control-plane/reliability", _page("reliability.html")),
         Route("/control-plane/architecture", _page("architecture.html")),
         Route("/control-plane/ai", _page("ai.html")),

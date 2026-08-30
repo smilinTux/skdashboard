@@ -307,6 +307,9 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "/control-plane/now",
         "/control-plane/portfolio",
         "/control-plane/schedule",
+        "/matters",
+        "/tasks",
+        "/work-queue",
         "/api/v1/overview",
         "/api/v1/schedule/projection",
         "/api/v1/schedule/forecasts",
@@ -316,6 +319,34 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "/api/v1/events",
     } <= routes
     assert observed["app"].routes
+
+
+def test_workspace_routes_are_truthful_read_only_entrypoints(tmp_path: Path) -> None:
+    app = create_read_only_app(
+        tmp_path,
+        authorizer=lambda *_: True,
+        legacy_board_url="https://legacy.example/board",
+    )
+    client = TestClient(app, base_url=LAN_ORIGIN)
+
+    matters = client.get("/matters", follow_redirects=False)
+    tasks = client.get("/tasks", follow_redirects=False)
+    queue = client.get("/work-queue", follow_redirects=False)
+
+    assert matters.status_code == tasks.status_code == queue.status_code == 307
+    assert matters.headers["location"].endswith("selected_silo=legal")
+    assert tasks.headers["location"] == "https://legacy.example/board"
+    assert queue.headers["location"] == "https://legacy.example/board"
+    assert all(response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue))
+
+
+def test_queue_routes_fail_closed_without_authorized_board_source(tmp_path: Path) -> None:
+    client = TestClient(create_read_only_app(tmp_path), base_url=LAN_ORIGIN)
+
+    for path in ("/tasks", "/work-queue"):
+        response = client.get(path)
+        assert response.status_code == 503
+        assert "No authorized legacy board source is configured" in response.text
 
 
 def test_runtime_authorizer_and_config_drift_fail_closed(tmp_path: Path) -> None:

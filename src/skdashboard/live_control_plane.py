@@ -85,6 +85,7 @@ class LiveControlPlaneConfig:
     owner_policy_revision: str
     tenant_id: str
     capability_ttl_seconds: int = 300
+    node_id: str = NODE_ID
 
     def __post_init__(self) -> None:
         board = urlsplit(self.legacy_board_url)
@@ -110,6 +111,8 @@ class LiveControlPlaneConfig:
             or any(not (character.isalnum() or character in "._-") for character in self.tenant_id)
         ):
             raise ValueError("an exact tenant identifier is required")
+        if self.node_id not in {"chiap04", "chiap08"}:
+            raise ValueError("an exact approved node identifier is required")
         if not 1 <= self.capability_ttl_seconds <= 300:
             raise ValueError("capability TTL must be between 1 and 300 seconds")
 
@@ -176,7 +179,7 @@ class InProcessOperatorBridge:
                 sessions=sessions,
                 config=DashboardIssuerAuthorizationConfigV1(
                     allowed_origin=origin,
-                    node_id=NODE_ID,
+                    node_id=config.node_id,
                     purpose=PURPOSE,
                     capability=capability,
                     operation="read",
@@ -661,7 +664,7 @@ def compose_live_control_plane(
             raise PermissionError("control-plane invocation is outside the exact binding")
         origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
-            node_id=NODE_ID,
+            node_id=config.node_id,
             purpose=PURPOSE,
             audience=AUDIENCE,
             capability=capability,

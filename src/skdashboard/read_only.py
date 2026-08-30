@@ -14,14 +14,20 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from starlette.applications import Starlette
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from starlette.routing import Route
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .control_plane_api import routes as control_plane_routes
 from .dashboard import _get_agent_status, _get_board_state
+from .runtime_boundary import ALLOWED_BIND_HOSTS
 
-ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
@@ -274,6 +280,23 @@ def create_read_only_app(
         name = "read_only_session.html" if session_adapter is not None else "read_only.html"
         return await page(name)(_request)
 
+    def redirect(location: str):
+        async def serve(_request):
+            return RedirectResponse(location, status_code=307, headers={"Cache-Control": "no-store"})
+
+        return serve
+
+    async def board_workspace(_request):
+        board_url = legacy_runtime_urls.get("/board")
+        if board_url is None:
+            return HTMLResponse(
+                "<h1>Work queue unavailable</h1>"
+                "<p>No authorized legacy board source is configured.</p>",
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return RedirectResponse(board_url, status_code=307, headers={"Cache-Control": "no-store"})
+
     async def static_asset(request):
         relative = request.url.path.removeprefix("/static/")
         if relative not in READ_ONLY_STATIC_ASSETS:
@@ -328,6 +351,15 @@ def create_read_only_app(
         Route("/control-plane/now", page("overview.html")),
         Route("/control-plane/portfolio", page("projects.html")),
         Route("/control-plane/schedule", page("schedule.html")),
+        Route(
+            "/matters",
+            redirect(
+                "/control-plane/now?role=governance&scope=estate&window=latest"
+                "&baseline=none&service=all&selected_silo=legal"
+            ),
+        ),
+        Route("/tasks", board_workspace),
+        Route("/work-queue", board_workspace),
         Route("/control-plane/reliability", page("reliability.html")),
         Route("/control-plane/architecture", page("architecture.html")),
         Route("/control-plane/ai", page("ai.html")),
@@ -388,6 +420,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--owner-policy-sha256")
     parser.add_argument("--owner-policy-revision")
     parser.add_argument("--tenant-id")
+    parser.add_argument("--node-id", choices=("chiap04", "chiap08"), default="chiap08")
     parser.add_argument("--owner-policy-uid", type=int)
     parser.add_argument("--operator-session-db", type=Path)
     parser.add_argument("--operator-policy-revisions-file", type=Path)
@@ -489,7 +522,7 @@ def main(argv: list[str] | None = None) -> None:
             owner_document = AuthorizedCardPolicyDocumentV1.model_validate_json(owner_payload)
             current = datetime.now(timezone.utc)
             matching_entries = tuple(
-                entry.node_id == "chiap08"
+                entry.node_id == args.node_id
                 and entry.resource_id == args.authorized_resource_id
                 and entry.owner_policy_revision == args.owner_policy_revision
                 and entry.valid_from <= current < entry.expires_at
@@ -564,6 +597,7 @@ def main(argv: list[str] | None = None) -> None:
             "resource_id": args.authorized_resource_id,
             "owner_policy_revision": args.owner_policy_revision,
             "tenant_id": args.tenant_id,
+            "node_id": args.node_id,
         }
         composition = compose_file_backed_live_control_plane(
             config=LiveControlPlaneConfig(**config_options),
