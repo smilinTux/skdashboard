@@ -535,6 +535,7 @@ def test_consent_events_fold_converges_regardless_of_writer_arrival_order(tmp_pa
     )
 
     def _build_store(home, write_order):
+        home.mkdir()
         store = CardStore(home)
         store.create(
             CardCore(id=card_id, title="converge test", created_at="2026-08-15T08:00:00+00:00")
