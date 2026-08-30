@@ -293,6 +293,8 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
         currentness_verifier=direct_verifier,
     )
     assert direct_projection["items"][0]["item_id"] == source.id
+    direct_watermarks = direct_projection["items"][0]["source_watermarks"]
+    source.dependencies[:] = ["different-hidden-card"]
 
     async def resolve_session(incoming_request):
         return SimpleNamespace(
@@ -341,6 +343,7 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
     schedule_projection = schedule.json()
     assert schedule_projection["items"][0]["item_id"] == source.id
     assert schedule_projection["items"][0]["title"] == source.title
+    assert schedule_projection["items"][0]["source_watermarks"] == direct_watermarks
     assert schedule_projection["dependencies"] == []
     assert "protected description" not in schedule.text
     assert store_reads == [source.id] * 5

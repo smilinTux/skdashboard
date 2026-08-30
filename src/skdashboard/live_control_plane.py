@@ -423,15 +423,8 @@ class AuthorizedCardScheduleSource:
         }
 
     def _item(self, card, request, owner_policy_revision):
-        facts = self._card_facts(card)
-        card_revision = (
-            "sha256:"
-            + hashlib.sha256(
-                json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-        )
         service = self._service(card)
-        return {
+        item = {
             "tenant_id": request.tenant_id,
             "record_id": card.id,
             "display_title": card.title,
@@ -447,6 +440,15 @@ class AuthorizedCardScheduleSource:
             },
             "dates": self._unknown_dates(),
             "explicit_progress": None,
+        }
+        card_revision = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(item, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        )
+        return {
+            **item,
             "source_watermarks": [{"source": "skcoord.card_store", "value": card_revision}],
             "evidence_refs": [f"skcoord.card_store:{card.id}"],
         }
