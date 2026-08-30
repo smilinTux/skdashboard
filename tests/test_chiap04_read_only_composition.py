@@ -100,6 +100,8 @@ def test_chiap04_unit_is_dedicated_and_never_owns_legacy_ports() -> None:
     assert "ProtectSystem=strict" in unit
     assert "ProtectHome=read-only" in unit
     assert "NoNewPrivileges=true" in unit
+    assert "ReadWritePaths=%h/.local/state/skdashboard-chiap04" in unit
+    assert "ReadWritePaths=%h/.skcapstone" not in unit
     assert "skcapstone-dashboard.service" not in unit
     assert "--port 7778" not in unit
     assert "--port 8765" not in unit
