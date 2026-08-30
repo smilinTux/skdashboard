@@ -19,6 +19,20 @@ function value(metric) { return metric.value == null ? "Unknown" : `${metric.val
 function metrics(snapshot) { return snapshot ? snapshot.sections.flatMap((section) => section.metric_results) : []; }
 function insights(snapshot) { return snapshot ? snapshot.sections.flatMap((section) => section.insights) : []; }
 
+function renderUnavailable(message) {
+  projection = null;
+  document.getElementById("reports-status").textContent = `Unavailable: ${message}`;
+  document.getElementById("reports-summary").innerHTML = `<article><span>Report projection</span><strong>Unavailable</strong><small>No report value is inferred.</small></article>`;
+  document.getElementById("snapshot-count").textContent = "Unavailable";
+  document.getElementById("snapshot-rows").innerHTML = `<tr><td colspan="9">No report value is inferred.</td></tr>`;
+  document.getElementById("metric-count").textContent = "Unavailable";
+  document.getElementById("metric-rows").innerHTML = `<tr><td colspan="7">No frozen metric value is inferred.</td></tr>`;
+  document.getElementById("comparison-state").textContent = "Unavailable";
+  document.getElementById("comparison-rows").innerHTML = `<tr><td colspan="7">No comparison value is inferred.</td></tr>`;
+  document.getElementById("narrative-count").textContent = "Unavailable";
+  document.getElementById("narrative-rows").innerHTML = `<tr><td colspan="7">No narrative value is inferred.</td></tr>`;
+}
+
 function updateContext(changes, mode = "push") {
   context = { ...context, ...changes };
   Object.keys(context).forEach((key) => { if (context[key] == null || context[key] === "") delete context[key]; });
@@ -66,12 +80,12 @@ function render() {
 async function load() {
   document.getElementById("reports-status").textContent = "Loading";
   try { projection = await getJSON(`/api/v1/reports/projection?${query()}`); render(); }
-  catch (error) { document.getElementById("reports-status").textContent = `Unavailable: ${error.message}`; document.getElementById("snapshot-rows").innerHTML = `<tr><td colspan="9">No report value is inferred.</td></tr>`; }
+  catch (error) { renderUnavailable(error.message); }
 }
 
 function initialize() {
   const parsed = parseContext();
-  if (!parsed) { document.getElementById("reports-status").textContent = "Unavailable: unsupported or protected scope"; return; }
+  if (!parsed) { renderUnavailable("unsupported or protected scope"); return; }
   context = parsed; updateContext({}, "replace");
   document.getElementById("reports-context").addEventListener("change", () => { updateContext({ role: document.getElementById("reports-role").value, report_type: document.getElementById("reports-type").value, snapshot: null, compare: null }); load(); });
   window.addEventListener("popstate", () => { const next = parseContext(); if (next) { context = next; updateContext({}, "replace"); load(); } });

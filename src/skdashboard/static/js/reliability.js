@@ -32,6 +32,17 @@ function value(metric) {
 function metric(id) { return projection.metrics.find((item) => item.metric_id === id); }
 function yn(value) { return value ? "Recorded" : "Unknown"; }
 
+function renderUnavailable(message) {
+  projection = null;
+  document.getElementById("reliability-status").textContent = `Unavailable: ${message}`;
+  document.getElementById("reliability-summary").innerHTML = `<article><span>Reliability projection</span><strong>Unavailable</strong><small>No reliability value is inferred.</small></article>`;
+  document.getElementById("reliability-metric-rows").innerHTML = `<tr><td colspan="7">No reliability value is inferred.</td></tr>`;
+  document.getElementById("breach-count").textContent = "Unavailable";
+  document.getElementById("reliability-breach-rows").innerHTML = `<tr><td colspan="6">No response-target value is inferred.</td></tr>`;
+  document.getElementById("reliability-lineage-rows").innerHTML = `<tr><td colspan="6">No lifecycle value is inferred.</td></tr>`;
+  document.getElementById("reliability-kedb-rows").innerHTML = `<tr><td colspan="6">No KEDB value is inferred.</td></tr>`;
+}
+
 function render() {
   document.getElementById("reliability-status").textContent = `${projection.truth_state} | ${projection.projection_hash}`;
   const summary = [
@@ -68,14 +79,13 @@ async function load() {
     projection = await getJSON(`/api/v1/reliability/projection?${query()}`);
     render();
   } catch (error) {
-    document.getElementById("reliability-status").textContent = `Unavailable: ${error.message}`;
-    document.getElementById("reliability-metric-rows").innerHTML = `<tr><td colspan="7">No reliability value is inferred.</td></tr>`;
+    renderUnavailable(error.message);
   }
 }
 
 function initialize() {
   const parsed = parseContext();
-  if (!parsed) { document.getElementById("reliability-status").textContent = "Unavailable: unsupported or protected scope"; return; }
+  if (!parsed) { renderUnavailable("unsupported or protected scope"); return; }
   context = parsed;
   updateContext(context.role, "replace");
   document.getElementById("reliability-context").addEventListener("change", () => { updateContext(document.getElementById("reliability-role").value); load(); });

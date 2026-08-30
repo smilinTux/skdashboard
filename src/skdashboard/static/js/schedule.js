@@ -73,6 +73,17 @@ function bar(item, timeline) {
   return `<div class="schedule-track"><span class="schedule-bar ${esc(item.truth_state)}" style="left:${start}%;width:${Math.max(1, end - start)}%;transform:scaleX(${zoom});transform-origin:left" aria-label="${esc(item.title)} ${esc(dateValue(item.dates.planned_start))} to ${esc(dateValue(item.dates.planned_target))}"></span></div>`;
 }
 
+function renderUnavailable(message) {
+  projection = null;
+  document.getElementById("schedule-status").textContent = `Unavailable: ${message}`;
+  document.getElementById("schedule-warning").hidden = true;
+  document.getElementById("schedule-meta").textContent = "Schedule projection unavailable";
+  document.getElementById("schedule-truth").textContent = "Unavailable";
+  document.getElementById("schedule-rows").innerHTML = `<p>No schedule value is inferred.</p>`;
+  document.getElementById("schedule-table-rows").innerHTML = `<tr><td colspan="9">No schedule value is inferred.</td></tr>`;
+  document.getElementById("schedule-dependency-rows").innerHTML = `<tr><td colspan="7">No dependency value is inferred.</td></tr>`;
+}
+
 function render() {
   const timeline = range();
   const visual = document.getElementById("schedule-visual");
@@ -115,8 +126,7 @@ async function load() {
     render();
     if (context.selected_item) openDetail(context.selected_item, document.querySelector(`[data-detail="${CSS.escape(context.selected_item)}"]`));
   } catch (error) {
-    document.getElementById("schedule-status").textContent = `Unavailable: ${error.message}`;
-    document.getElementById("schedule-rows").innerHTML = `<p>No schedule value is inferred.</p>`;
+    renderUnavailable(error.message);
   }
 }
 
@@ -132,7 +142,7 @@ function exportSnapshot() {
 
 function initialize() {
   const parsed = parseContext();
-  if (!parsed) { document.getElementById("schedule-status").textContent = "Unavailable: unsupported or protected schedule scope"; return; }
+  if (!parsed) { renderUnavailable("unsupported or protected schedule scope"); return; }
   context = parsed; updateContext(context, "replace");
   document.getElementById("schedule-context").addEventListener("change", () => {
     const next = { role: document.getElementById("schedule-role").value, lens: document.getElementById("schedule-lens").value, timezone: document.getElementById("schedule-timezone").value, selected_item: "" };

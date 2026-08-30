@@ -16,6 +16,19 @@ function query() { return new URLSearchParams(context).toString(); }
 function show(value, fallback = "Unknown") { return value == null || value === "" ? fallback : String(value); }
 function coverage(value) { return value.expected == null || value.reporting == null ? "Unknown" : `${value.reporting}/${value.expected}`; }
 
+function renderUnavailable(message) {
+  document.getElementById("governance-status").textContent = `Unavailable: ${message}`;
+  document.getElementById("governance-summary").innerHTML = `<article><span>Governance projection</span><strong>Unavailable</strong><small>No governance value is inferred.</small></article>`;
+  document.getElementById("finding-count").textContent = "Unavailable";
+  document.getElementById("finding-rows").innerHTML = `<tr><td colspan="7">No governance value is inferred.</td></tr>`;
+  document.getElementById("lineage-count").textContent = "Unavailable";
+  document.getElementById("lineage-rows").innerHTML = `<tr><td colspan="7">No metric lineage value is inferred.</td></tr>`;
+  document.getElementById("source-count").textContent = "Unavailable";
+  document.getElementById("source-rows").innerHTML = `<tr><td colspan="7">No source value is inferred.</td></tr>`;
+  document.getElementById("history-count").textContent = "Unavailable";
+  document.getElementById("history-rows").innerHTML = `<tr><td colspan="6">No history value is inferred.</td></tr>`;
+}
+
 function updateContext(role, mode = "push") {
   context = { ...context, role };
   const url = new URL(location.href);
@@ -54,14 +67,13 @@ async function load() {
   try {
     render(await getJSON(`/api/v1/governance/projection?${query()}`));
   } catch (error) {
-    document.getElementById("governance-status").textContent = `Unavailable: ${error.message}`;
-    document.getElementById("finding-rows").innerHTML = `<tr><td colspan="7">No governance value is inferred.</td></tr>`;
+    renderUnavailable(error.message);
   }
 }
 
 function initialize() {
   const parsed = parseContext();
-  if (!parsed) { document.getElementById("governance-status").textContent = "Unavailable: unsupported or protected scope"; return; }
+  if (!parsed) { renderUnavailable("unsupported or protected scope"); return; }
   context = parsed;
   updateContext(context.role, "replace");
   document.getElementById("governance-context").addEventListener("change", () => { updateContext(document.getElementById("governance-role").value); load(); });

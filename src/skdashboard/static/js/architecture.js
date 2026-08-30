@@ -19,6 +19,18 @@ function metric(id) { return projection.metrics.find((item) => item.metric_id ==
 function value(item) { return !item || item.value == null ? "Unknown" : `${item.value}${item.unit === "percent" ? "%" : ` ${item.unit}`}`; }
 function show(value, fallback = "Unknown") { return value == null || value === "" ? fallback : String(value); }
 
+function renderUnavailable(message) {
+  projection = null;
+  document.getElementById("architecture-status").textContent = `Unavailable: ${message}`;
+  document.getElementById("architecture-summary").innerHTML = `<article><span>Architecture projection</span><strong>Unavailable</strong><small>No architecture value is inferred.</small></article>`;
+  document.getElementById("architecture-metric-rows").innerHTML = `<tr><td colspan="7">No architecture value is inferred.</td></tr>`;
+  document.getElementById("architecture-exception-count").textContent = "Unavailable";
+  document.getElementById("architecture-exception-rows").innerHTML = `<tr><td colspan="6">No architecture exception is inferred.</td></tr>`;
+  document.getElementById("architecture-topology-count").textContent = "Unavailable";
+  document.getElementById("architecture-node-rows").innerHTML = `<tr><td colspan="8">No topology value is inferred.</td></tr>`;
+  document.getElementById("architecture-edge-rows").innerHTML = `<tr><td colspan="6">No relationship value is inferred.</td></tr>`;
+}
+
 function updateContext(role, mode = "push") {
   context = { ...context, role };
   const url = new URL(location.href);
@@ -70,14 +82,13 @@ async function load() {
     projection = await getJSON(`/api/v1/architecture/projection?${query()}`);
     render();
   } catch (error) {
-    document.getElementById("architecture-status").textContent = `Unavailable: ${error.message}`;
-    document.getElementById("architecture-metric-rows").innerHTML = `<tr><td colspan="7">No architecture value is inferred.</td></tr>`;
+    renderUnavailable(error.message);
   }
 }
 
 function initialize() {
   const parsed = parseContext();
-  if (!parsed) { document.getElementById("architecture-status").textContent = "Unavailable: unsupported or protected scope"; return; }
+  if (!parsed) { renderUnavailable("unsupported or protected scope"); return; }
   context = parsed;
   updateContext(context.role, "replace");
   document.getElementById("architecture-context").addEventListener("change", () => { updateContext(document.getElementById("architecture-role").value); load(); });
