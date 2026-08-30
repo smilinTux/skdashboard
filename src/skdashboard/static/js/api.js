@@ -1,5 +1,7 @@
 // Shared API + UI helpers for the SKDashboard board.
 
+import "./read_only_api.js";
+
 // The operator identity + capability token this page presents on every
 // privileged (write) call (Unified Consent Plane P1.3, coord card
 // a638b490). Fetched once from GET /api/auth/capability and cached: today

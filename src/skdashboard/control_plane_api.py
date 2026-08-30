@@ -16,6 +16,7 @@ from uuid import uuid4
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .build_info import build_information
 from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
 
 SCHEMA_VERSION = "1.1.0"
@@ -1426,6 +1427,7 @@ def routes(
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     return [
+        Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
