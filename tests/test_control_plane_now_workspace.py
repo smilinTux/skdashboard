@@ -63,6 +63,8 @@ def test_now_workspace_declares_exact_breadth_and_fail_closed_ai_boundary() -> N
     assert "dialog.open) dialog.close()" in js
     assert 'document.getElementById("estate-evidence-body").replaceChildren()' in js
     assert 'clearLegacyOverview("Protected estate evidence unavailable")' in js
+    assert 'new EventSource("/api/v1/events")' in js
+    assert 'new EventSource("/api/events")' not in js
     assert "fetch(" not in js
     assert "prefers-reduced-motion:reduce" in css
     assert "@media(max-width:560px)" in css

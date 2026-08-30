@@ -599,7 +599,7 @@ function renderHealth(agent) {
 function connectSSE() {
   const dot = document.getElementById("live-dot"), text = document.getElementById("live-text");
   let deb = null;
-  const es = new EventSource("/api/events");
+  const es = new EventSource("/api/v1/events");
   const refresh = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
   es.addEventListener("open", () => { dot.classList.add("on"); text.textContent = "live"; });
   es.addEventListener("board_changed", refresh);
