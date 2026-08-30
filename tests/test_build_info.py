@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 from skdashboard.read_only import create_read_only_app
@@ -66,3 +69,31 @@ def test_every_current_surface_loads_one_runtime_badge_seam(tmp_path: Path) -> N
         assert client.get(f"/control-plane/{route}").status_code == 200
         script = client.get(f"/static/js/{asset}.js")
         assert 'from "./read_only_api.js"' in script.text
+
+
+def test_badge_attaches_with_and_without_live_anchor() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    module = Path("src/skdashboard/static/js/read_only_api.js").resolve().as_uri()
+    program = """
+const { attachBuildBadge } = await import(process.argv[1]);
+for (const hasLive of [true, false]) {
+  const calls = [];
+  const badge = {};
+  const live = hasLive ? { before(value) { calls.push(["before", value]); } } : null;
+  const navigation = {
+    querySelector(selector) { return selector === ".live" ? live : null; },
+    append(value) { calls.push(["append", value]); },
+  };
+  attachBuildBadge(navigation, badge);
+  const expected = hasLive ? "before" : "append";
+  if (calls.length !== 1 || calls[0][0] !== expected || calls[0][1] !== badge) process.exit(1);
+}
+"""
+    subprocess.run(
+        [node, "--input-type=module", "--eval", program, module],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

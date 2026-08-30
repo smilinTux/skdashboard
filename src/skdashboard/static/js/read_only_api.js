@@ -33,6 +33,12 @@ export function timeShort(timestamp) {
   }
 }
 
+export function attachBuildBadge(navigation, badge) {
+  const live = navigation.querySelector(".live");
+  if (live) live.before(badge);
+  else navigation.append(badge);
+}
+
 export async function renderBuildBadge() {
   const navigation = document.querySelector(".topbar, .sidebar");
   if (!navigation) return;
@@ -41,7 +47,7 @@ export async function renderBuildBadge() {
   badge.className = "build-badge mono";
   badge.setAttribute("role", "status");
   badge.textContent = "Version unavailable";
-  navigation.querySelector(".live")?.before(badge);
+  attachBuildBadge(navigation, badge);
   try {
     const info = await getJSON("/api/v1/build-info");
     const fields = [info.package_version, info.source_commit, info.release_identifier];
