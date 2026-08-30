@@ -45,7 +45,12 @@ def config(tmp_path: Path, *, board="https://legacy.example/board") -> LiveContr
     )
 
 
-def request(*, path=TARGET, origin=ORIGIN, request_id="request-1") -> Request:
+def request(
+    *, path=TARGET, origin=ORIGIN, request_id="request-1", host="10.0.0.139:7778"
+) -> Request:
+    headers = [(b"host", host.encode()), (b"x-request-id", request_id.encode())]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
     return Request(
         {
             "type": "http",
@@ -56,11 +61,7 @@ def request(*, path=TARGET, origin=ORIGIN, request_id="request-1") -> Request:
             "path": path,
             "raw_path": path.encode(),
             "query_string": b"",
-            "headers": [
-                (b"host", b"10.0.0.139:7778"),
-                (b"origin", origin.encode()),
-                (b"x-request-id", request_id.encode()),
-            ],
+            "headers": headers,
         }
     )
 
@@ -89,6 +90,35 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     assert invocation.resource_id == RESOURCE_ID
     assert invocation.boundary.origin == ORIGIN
     assert isinstance(composition.schedule_provider, ScheduleProjectionProvider)
+
+
+def test_invocation_factory_derives_exact_same_origin_when_browser_omits_origin(
+    tmp_path,
+) -> None:
+    composition = compose_live_control_plane(
+        config=config(tmp_path),
+        capability_authorizer=Mock(),
+        owner_policy_backend=Mock(),
+        store_factory=Mock(),
+    )
+
+    invocation = composition.invocation_factory(request(origin=None), CAPABILITY, TARGET)
+
+    assert invocation.boundary.origin == "https://10.0.0.139:7778"
+
+
+def test_invocation_factory_rejects_unapproved_derived_origin(tmp_path) -> None:
+    composition = compose_live_control_plane(
+        config=config(tmp_path),
+        capability_authorizer=Mock(),
+        owner_policy_backend=Mock(),
+        store_factory=Mock(),
+    )
+
+    with pytest.raises(PermissionError, match="origin is not approved"):
+        composition.invocation_factory(
+            request(origin=None, host="untrusted.example"), CAPABILITY, TARGET
+        )
 
 
 def test_verified_owner_policy_bytes_survive_post_verification_path_swap(

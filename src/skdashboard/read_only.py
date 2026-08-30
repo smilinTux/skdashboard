@@ -394,6 +394,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--operator-policy-revisions-sha256")
     parser.add_argument("--signer-fingerprint")
     parser.add_argument("--signer-gnupg-home", type=Path)
+    parser.add_argument("--signer-passphrase-file", type=Path)
+    parser.add_argument("--trusted-issuer-policy-file", type=Path)
+    parser.add_argument("--trusted-issuer-policy-sha256")
+    parser.add_argument("--trusted-issuer-signature-file", type=Path)
+    parser.add_argument("--trusted-issuer-signature-sha256")
+    parser.add_argument("--capability-state-db", type=Path)
     parser.add_argument(
         "--capability-authorizer-factory",
         choices=(RUNTIME_AUTHORIZER_FACTORY,),
@@ -425,6 +431,12 @@ def main(argv: list[str] | None = None) -> None:
         args.operator_policy_revisions_sha256,
         args.signer_fingerprint,
         args.signer_gnupg_home,
+        args.signer_passphrase_file,
+        args.trusted_issuer_policy_file,
+        args.trusted_issuer_policy_sha256,
+        args.trusted_issuer_signature_file,
+        args.trusted_issuer_signature_sha256,
+        args.capability_state_db,
     )
     if any(live_values) and not all(live_values):
         parser.error("all live control-plane options are required together")
@@ -452,6 +464,7 @@ def main(argv: list[str] | None = None) -> None:
         from capauth import (
             CurrentPolicyRevisions,
             OperatorSessionManager,
+            Principal,
             SQLiteOperatorSessionBackend,
         )
         from skcoord.authorized_card_policy import AuthorizedCardPolicyDocumentV1
@@ -475,12 +488,24 @@ def main(argv: list[str] | None = None) -> None:
             )
             owner_document = AuthorizedCardPolicyDocumentV1.model_validate_json(owner_payload)
             current = datetime.now(timezone.utc)
-            if not any(
+            matching_entries = tuple(
                 entry.node_id == "chiap08"
                 and entry.resource_id == args.authorized_resource_id
                 and entry.owner_policy_revision == args.owner_policy_revision
                 and entry.valid_from <= current < entry.expires_at
                 for entry in owner_document.entries
+            )
+            selected_entries = tuple(
+                entry
+                for entry, matches in zip(owner_document.entries, matching_entries)
+                if matches
+            )
+            if len(selected_entries) != 1:
+                raise ValueError
+            selected_entry = selected_entries[0]
+            if (
+                selected_entry.subject != "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
+                or selected_entry.acting_principal_id != selected_entry.subject
             ):
                 raise ValueError
             revisions_payload = _read_exact_value_free_config(
@@ -489,9 +514,27 @@ def main(argv: list[str] | None = None) -> None:
                 expected_uid=expected_uid,
             )
             revisions = CurrentPolicyRevisions.model_validate_json(revisions_payload, strict=True)
-            if revisions.owner != args.owner_policy_revision:
+            if (
+                revisions.owner != args.owner_policy_revision
+                or revisions.issuer != args.trusted_issuer_policy_sha256
+            ):
                 raise ValueError
-            capability_authorizer = build_capability_authorizer()
+            capability_authorizer = build_capability_authorizer(
+                trusted_issuer_policy_file=args.trusted_issuer_policy_file,
+                trusted_issuer_policy_sha256=args.trusted_issuer_policy_sha256,
+                trusted_issuer_signature_file=args.trusted_issuer_signature_file,
+                trusted_issuer_signature_sha256=args.trusted_issuer_signature_sha256,
+                issuer_fingerprint=args.signer_fingerprint,
+                verifier_gnupg_home=args.signer_gnupg_home,
+                principal=Principal(
+                    principal_id=selected_entry.acting_principal_id,
+                    subject=selected_entry.subject,
+                    kind="human",
+                ),
+                principal_revision=revisions.principal,
+                state_db=args.capability_state_db,
+                expected_uid=expected_uid,
+            )
         except Exception as exc:
             parser.error(f"runtime policy composition is unavailable: {type(exc).__name__}")
         try:
@@ -512,6 +555,7 @@ def main(argv: list[str] | None = None) -> None:
             signer = GPGAgentCredentialSigner(
                 issuer_fingerprint=args.signer_fingerprint,
                 gnupg_home=args.signer_gnupg_home,
+                passphrase_file=args.signer_passphrase_file,
             )
         except Exception as exc:
             parser.error(f"in-process authorization is unavailable: {type(exc).__name__}")

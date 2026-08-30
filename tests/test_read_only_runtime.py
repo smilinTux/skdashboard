@@ -179,6 +179,10 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "skdashboard.session_adapter.EncryptedSessionAdapter",
         lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
     )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: observed.update(authorizer=values) or "durable-authorizer",
+    )
     monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
     for name in ("session.key", "client.secret"):
         path = tmp_path / name
@@ -186,8 +190,8 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         path.chmod(0o600)
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
-        subject="jarvis",
-        acting_principal_id="jarvis",
+        subject="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
+        acting_principal_id="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
         node_id="chiap08",
         scope=AuthorizedCardScopeV1(role="project-manager"),
         valid_from=current - timedelta(minutes=5),
@@ -216,6 +220,21 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
     revisions.chmod(0o600)
     gnupg = tmp_path / "gnupg"
     gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"bounded test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
+    revisions.write_text(
+        revisions.read_text(encoding="utf-8").replace("1" * 64, trusted_sha256),
+        encoding="utf-8",
+    )
 
     main(
         [
@@ -259,6 +278,18 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
             "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
             "--signer-gnupg-home",
             str(gnupg),
+            "--signer-passphrase-file",
+            str(signer_passphrase),
+            "--trusted-issuer-policy-file",
+            str(trusted),
+            "--trusted-issuer-policy-sha256",
+            trusted_sha256,
+            "--trusted-issuer-signature-file",
+            str(trusted_signature),
+            "--trusted-issuer-signature-sha256",
+            trusted_signature_sha256,
+            "--capability-state-db",
+            str(tmp_path / "capability-state.db"),
             "--capability-authorizer-factory",
             "skdashboard.runtime_authorizer:build",
         ]
@@ -268,10 +299,9 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
     assert observed["composition"]["owner_policy_document"] == AuthorizedCardPolicyDocumentV1(
         entries=(entry,)
     )
-    assert (
-        observed["composition"]["capability_authorizer"].__class__.__name__
-        == "SessionOnlyCapabilityAuthorizer"
-    )
+    assert observed["composition"]["capability_authorizer"] == "durable-authorizer"
+    assert observed["authorizer"]["trusted_issuer_policy_file"] == trusted
+    assert observed["authorizer"]["principal"].principal_id == entry.acting_principal_id
     routes = {route.path for route in observed["app"].routes}
     assert {
         "/control-plane/now",
@@ -290,7 +320,6 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
 
 def test_runtime_authorizer_and_config_drift_fail_closed(tmp_path: Path) -> None:
     from skdashboard.read_only import _read_exact_value_free_config
-    from skdashboard.runtime_authorizer import build
 
     config = tmp_path / "policy.json"
     config.write_text("{}", encoding="utf-8")
@@ -305,8 +334,6 @@ def test_runtime_authorizer_and_config_drift_fail_closed(tmp_path: Path) -> None
     config.write_text('{"changed":true}', encoding="utf-8")
     with pytest.raises(ValueError, match="SHA256 mismatch"):
         _read_exact_value_free_config(config, exact, expected_uid=config.stat().st_uid)
-    with pytest.raises(PermissionError, match="direct browser bearer"):
-        build().authorize_with_receipt(None, None)
 
 
 def test_unavailable_schedule_sources_report_degraded_state(tmp_path: Path) -> None:

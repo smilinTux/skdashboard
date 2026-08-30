@@ -53,6 +53,17 @@ RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
 MAX_OPERATOR_PROOFS = 1024
 
 
+def _approved_request_origin(request) -> str:
+    """Return an explicit or exact same-origin browser base origin."""
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        origin = str(request.base_url).rstrip("/")
+    if origin not in ALLOWED_BROWSER_ORIGINS:
+        raise PermissionError("control-plane invocation origin is not approved")
+    return origin
+
+
 @dataclass(frozen=True)
 class LiveControlPlaneConfig:
     """Non-secret exact bindings for one deployed read-only composition."""
@@ -235,7 +246,10 @@ class InProcessOperatorBridge:
         proof = getattr(session, "control_plane_request", None)
         if not isinstance(proof, InProcessIssuerRequest):
             return None
-        origin = request.headers.get("origin")
+        try:
+            origin = _approved_request_origin(request)
+        except PermissionError:
+            return None
         factory = self._factories.get((origin, target))
         if factory is None:
             return None
@@ -604,9 +618,7 @@ def compose_live_control_plane(
             or request.url.path != target
         ):
             raise PermissionError("control-plane invocation is outside the exact binding")
-        origin = request.headers.get("origin")
-        if origin not in ALLOWED_BROWSER_ORIGINS:
-            raise PermissionError("control-plane invocation origin is not approved")
+        origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
             node_id=NODE_ID,
             purpose=PURPOSE,

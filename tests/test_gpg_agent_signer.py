@@ -16,9 +16,13 @@ def signer(tmp_path: Path) -> GPGAgentCredentialSigner:
     executable = tmp_path / "gpg"
     executable.write_bytes(b"binary")
     executable.chmod(0o755)
+    passphrase = tmp_path / "passphrase"
+    passphrase.write_bytes(b"bounded test passphrase")
+    passphrase.chmod(0o600)
     return GPGAgentCredentialSigner(
         issuer_fingerprint=FINGERPRINT,
         gnupg_home=home,
+        passphrase_file=passphrase,
         executable=executable,
     )
 
@@ -34,9 +38,17 @@ def test_signer_uses_exact_agent_key_without_passphrase_or_shell(tmp_path, monke
     monkeypatch.setattr(subprocess, "run", run)
     assert adapter.sign(b"payload") == SIGNATURE.decode("ascii")
     command, options = calls[0]
-    assert command[-4:] == ("--local-user", FINGERPRINT, "--output", "-")
+    assert command[-8:] == (
+        "--local-user",
+        FINGERPRINT,
+        "--pinentry-mode",
+        "loopback",
+        "--passphrase-file",
+        str(adapter._passphrase_file),
+        "--output",
+        "-",
+    )
     assert "--passphrase" not in command
-    assert "--pinentry-mode" not in command
     assert options == {
         "input": b"payload",
         "capture_output": True,
@@ -56,6 +68,7 @@ def test_signer_rejects_invalid_fingerprint(tmp_path, fingerprint) -> None:
         GPGAgentCredentialSigner(
             issuer_fingerprint=fingerprint,
             gnupg_home=home,
+            passphrase_file=tmp_path / "passphrase",
         )
 
 
@@ -88,3 +101,13 @@ def test_signer_rejects_unsafe_home_before_invoking_gpg(tmp_path, monkeypatch) -
 def test_signer_rejects_empty_payload(tmp_path) -> None:
     with pytest.raises(ValueError, match="nonempty"):
         signer(tmp_path).sign(b"")
+
+
+def test_signer_rejects_unsafe_passphrase_file_before_invoking_gpg(tmp_path, monkeypatch) -> None:
+    adapter = signer(tmp_path)
+    adapter._passphrase_file.chmod(0o640)
+    called = []
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: called.append(True))
+    with pytest.raises(PermissionError, match="custody boundary"):
+        adapter.sign(b"payload")
+    assert called == []
