@@ -60,7 +60,7 @@ jobs:
         # module errors at COLLECTION, which reads as a broken gate rather
         # than a failing test. skcoord is pulled in for the ITIL consent
         # store for the same reason.
-        run: pip install skcapstone skcoord capauth starlette pytest
+        run: pip install -r requirements-qualified.txt skcapstone skcoord starlette pytest
       - name: Install skdashboard from the checkout, on top
         run: pip install --no-deps -e .
       - name: Smoke test (package imports, static assets + modules intact)
