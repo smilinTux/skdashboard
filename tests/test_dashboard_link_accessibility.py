@@ -4,7 +4,9 @@ import json
 import os
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -12,6 +14,72 @@ STATIC = Path(__file__).parents[1] / "src" / "skdashboard" / "static"
 CDP_QUALIFIER = (
     Path(__file__).parents[1] / "scripts" / "qualify_dashboard_navigation_contrast_cdp.mjs"
 )
+
+LIVE_SURFACES = (
+    "overview.html",
+    "projects.html",
+    "schedule.html",
+    "reliability.html",
+    "architecture.html",
+    "ai.html",
+    "governance.html",
+    "reports.html",
+    "cockpit.html",
+    "cmdb.html",
+    "board.html",
+    "assistant.html",
+    "trust.html",
+    "models.html",
+    "economy.html",
+    "fleet.html",
+)
+CANONICAL_NAVIGATION = (
+    ("Now", "/control-plane/now"),
+    ("Portfolio", "/control-plane/portfolio"),
+    ("Schedule", "/control-plane/schedule"),
+    ("Reliability", "/control-plane/reliability"),
+    ("Architecture", "/control-plane/architecture"),
+    ("AI outcomes", "/control-plane/ai"),
+    ("Governance", "/control-plane/governance"),
+    ("Reports", "/control-plane/reports"),
+    ("ITIL Cockpit", "/cockpit"),
+    ("Assets (CMDB)", "/cmdb"),
+    ("Kanban Board", "/board"),
+    ("Assistant", "/assistant"),
+    ("Trust", "/trust"),
+    ("Models", "/models"),
+    ("Economy", "/economy"),
+    ("Fleet Drift", "/fleet"),
+)
+
+
+class _SidebarLinks(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_tabs = False
+        self.current_href: str | None = None
+        self.current_label: list[str] = []
+        self.links: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if tag == "div" and "tabs" in (attributes.get("class") or "").split():
+            self.in_tabs = True
+        elif self.in_tabs and tag == "a":
+            self.current_href = attributes.get("href")
+            self.current_label = []
+
+    def handle_data(self, data: str) -> None:
+        if self.current_href is not None:
+            self.current_label.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.in_tabs and tag == "a" and self.current_href is not None:
+            self.links.append((" ".join("".join(self.current_label).split()), self.current_href))
+            self.current_href = None
+            self.current_label = []
+        elif self.in_tabs and tag == "div":
+            self.in_tabs = False
 
 
 def test_every_dashboard_surface_links_now_and_portfolio() -> None:
@@ -32,6 +100,15 @@ def test_every_dashboard_surface_links_now_and_portfolio() -> None:
         assert 'href="/control-plane/now"' in html, name
         assert 'href="/control-plane/portfolio?' in html, name
         assert 'href="/control-plane/schedule?' in html, name
+
+
+def test_every_live_surface_has_the_complete_canonical_sidebar() -> None:
+    expected = tuple((label, path) for label, path in CANONICAL_NAVIGATION)
+    for name in LIVE_SURFACES:
+        parser = _SidebarLinks()
+        parser.feed((STATIC / name).read_text(encoding="utf-8"))
+        actual = tuple((label, urlsplit(href).path) for label, href in parser.links)
+        assert actual == expected, name
 
 
 def test_board_filters_have_explicit_accessible_labels() -> None:
