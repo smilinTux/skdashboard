@@ -20,8 +20,8 @@ from starlette.routing import Route
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .control_plane_api import routes as control_plane_routes
 from .dashboard import _get_agent_status, _get_board_state
+from .runtime_boundary import ALLOWED_BIND_HOSTS
 
-ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
@@ -388,6 +388,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--owner-policy-sha256")
     parser.add_argument("--owner-policy-revision")
     parser.add_argument("--tenant-id")
+    parser.add_argument("--node-id", choices=("chiap04", "chiap08"), default="chiap08")
     parser.add_argument("--owner-policy-uid", type=int)
     parser.add_argument("--operator-session-db", type=Path)
     parser.add_argument("--operator-policy-revisions-file", type=Path)
@@ -476,7 +477,7 @@ def main(argv: list[str] | None = None) -> None:
             owner_document = AuthorizedCardPolicyDocumentV1.model_validate_json(owner_payload)
             current = datetime.now(timezone.utc)
             if not any(
-                entry.node_id == "chiap08"
+                entry.node_id == args.node_id
                 and entry.resource_id == args.authorized_resource_id
                 and entry.owner_policy_revision == args.owner_policy_revision
                 and entry.valid_from <= current < entry.expires_at
@@ -520,6 +521,7 @@ def main(argv: list[str] | None = None) -> None:
             "resource_id": args.authorized_resource_id,
             "owner_policy_revision": args.owner_policy_revision,
             "tenant_id": args.tenant_id,
+            "node_id": args.node_id,
         }
         composition = compose_file_backed_live_control_plane(
             config=LiveControlPlaneConfig(**config_options),

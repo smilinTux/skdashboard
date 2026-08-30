@@ -1,0 +1,24 @@
+[Unit]
+Description=SKDashboard dedicated chiap04 read-only HTTPS runtime (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=SKDASHBOARD_ALLOWED_BIND_HOSTS=127.0.0.1,10.0.0.101,100.84.237.127
+Environment=SKDASHBOARD_ALLOWED_BROWSER_ORIGINS=https://10.0.0.101:7780,https://100.84.237.127:7780
+EnvironmentFile=%h/.config/skdashboard-chiap04/runtime.env
+ExecStart=%h/.local/share/skdashboard-readonly-chiap04/approved-venv/bin/skdashboard-read-only --home %h/.skcapstone --host %i --port 7780 --tls-certfile %h/.config/skdashboard-chiap04/tls/fullchain.pem --tls-keyfile %h/.config/skdashboard-chiap04/tls/privkey.pem --session-db %h/.local/state/skdashboard-chiap04/session.db --session-key-file %h/.config/skdashboard-chiap04/session/session.key --oidc-issuer https://100.81.238.58:8420 --oidc-redirect-uri https://%i:7780/auth/callback --oidc-client-secret-file %h/.config/skdashboard-chiap04/oidc/client.secret --legacy-board-url ${SKDASHBOARD_LEGACY_BOARD_URL} --authorized-resource-id ${SKDASHBOARD_AUTHORIZED_RESOURCE_ID} --owner-policy-file %h/.config/skdashboard-chiap04/owner-policy.json --owner-policy-sha256 ${SKDASHBOARD_OWNER_POLICY_SHA256} --owner-policy-revision ${SKDASHBOARD_OWNER_POLICY_REVISION} --tenant-id ${SKDASHBOARD_TENANT_ID} --node-id chiap04 --operator-session-db %h/.local/state/skdashboard-chiap04/operator-session.db --operator-policy-revisions-file %h/.config/skdashboard-chiap04/operator-policy-revisions.json --operator-policy-revisions-sha256 ${SKDASHBOARD_OPERATOR_REVISIONS_SHA256} --signer-fingerprint ${SKDASHBOARD_SIGNER_FINGERPRINT} --signer-gnupg-home ${SKDASHBOARD_SIGNER_GNUPG_HOME} --capability-authorizer-factory skdashboard.runtime_authorizer:build
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.skcapstone %h/.local/state/skdashboard-chiap04
+UMask=0077
+
+[Install]
+WantedBy=default.target
