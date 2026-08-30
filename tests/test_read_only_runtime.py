@@ -38,6 +38,23 @@ def test_route_inventory_is_read_only(tmp_path: Path) -> None:
 def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) -> None:
     client = _client(tmp_path)
     assert client.get("/").status_code == 200
+    workspaces = {
+        "now": "overview",
+        "portfolio": "projects",
+        "schedule": "schedule",
+        "reliability": "reliability",
+        "architecture": "architecture",
+        "ai": "ai",
+        "governance": "governance",
+        "reports": "reports",
+    }
+    for route, asset in workspaces.items():
+        assert client.get(f"/control-plane/{route}").status_code == 200
+        script = client.get(f"/static/js/{asset}.js")
+        assert script.status_code == 200
+        assert 'from "./api.js"' not in script.text
+        assert 'from "./read_only_api.js"' in script.text
+        assert client.get(f"/static/css/{asset}.css").status_code == 200
     assert client.get("/.well-known/skworld-module.json").status_code == 200
     manifest = client.get("/.well-known/skworld-module.json").json()
     assert manifest["health"].endswith("/api/v1/health")

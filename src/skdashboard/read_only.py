@@ -21,15 +21,25 @@ ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
 READ_ONLY_STATIC_ASSETS = frozenset(
     {
+        "css/ai.css",
+        "css/architecture.css",
         "css/board.css",
         "css/cockpit.css",
+        "css/governance.css",
         "css/overview.css",
         "css/projects.css",
+        "css/reliability.css",
+        "css/reports.css",
         "css/schedule.css",
+        "js/ai.js",
+        "js/architecture.js",
         "js/control_plane_scope.js",
+        "js/governance.js",
         "js/overview.js",
         "js/projects.js",
         "js/read_only_api.js",
+        "js/reliability.js",
+        "js/reports.js",
         "js/schedule.js",
     }
 )
@@ -178,7 +188,16 @@ def create_read_only_app(
             return JSONResponse({"error": "not_found"}, status_code=404)
         if not candidate.is_file():
             return JSONResponse({"error": "not_found"}, status_code=404)
-        if relative in {"js/overview.js", "js/projects.js", "js/schedule.js"}:
+        if relative in {
+            "js/ai.js",
+            "js/architecture.js",
+            "js/governance.js",
+            "js/overview.js",
+            "js/projects.js",
+            "js/reliability.js",
+            "js/reports.js",
+            "js/schedule.js",
+        }:
             javascript = candidate.read_text(encoding="utf-8").replace(
                 'from "./api.js"', 'from "./read_only_api.js"'
             )
@@ -215,6 +234,11 @@ def create_read_only_app(
         Route("/control-plane/now", page("overview.html")),
         Route("/control-plane/portfolio", page("projects.html")),
         Route("/control-plane/schedule", page("schedule.html")),
+        Route("/control-plane/reliability", page("reliability.html")),
+        Route("/control-plane/architecture", page("architecture.html")),
+        Route("/control-plane/ai", page("ai.html")),
+        Route("/control-plane/governance", page("governance.html")),
+        Route("/control-plane/reports", page("reports.html")),
         Route("/.well-known/skworld-module.json", manifest),
     ]
     routes.extend(
