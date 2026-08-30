@@ -1,8 +1,11 @@
+import hashlib
 import io
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from starlette.responses import Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -151,10 +154,13 @@ def test_launcher_requires_exact_tls_files_without_persistent_transport_state(
 def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, monkeypatch) -> None:
     from types import SimpleNamespace
 
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
     observed = {}
-    factory_module = tmp_path / "approved_factory.py"
-    factory_module.write_text("def build():\n    return object()\n", encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(
         "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
         lambda **values: (
@@ -178,6 +184,22 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         path = tmp_path / name
         path.write_text("non-secret-fixture", encoding="utf-8")
         path.chmod(0o600)
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject="jarvis",
+        acting_principal_id="jarvis",
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
     revisions = tmp_path / "revisions.json"
     revisions.write_text(
         json.dumps(
@@ -186,7 +208,7 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
                 "principal": "2" * 64,
                 "acting_principal": "3" * 64,
                 "revocation": "4" * 64,
-                "owner": "b" * 64,
+                "owner": entry.owner_policy_revision,
             }
         ),
         encoding="utf-8",
@@ -218,28 +240,35 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
             "--legacy-board-url",
             "https://legacy.example/board",
             "--authorized-resource-id",
-            "authorized-card-set:sha256:" + "a" * 64,
+            entry.resource_id,
             "--owner-policy-file",
-            str(tmp_path / "owner-policy.json"),
+            str(owner_policy),
+            "--owner-policy-sha256",
+            owner_policy_sha256,
             "--owner-policy-revision",
-            "b" * 64,
+            entry.owner_policy_revision,
             "--tenant-id",
             "platform",
             "--operator-session-db",
             str(tmp_path / "operator-sessions.db"),
             "--operator-policy-revisions-file",
             str(revisions),
+            "--operator-policy-revisions-sha256",
+            hashlib.sha256(revisions.read_bytes()).hexdigest(),
             "--signer-fingerprint",
             "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
             "--signer-gnupg-home",
             str(gnupg),
             "--capability-authorizer-factory",
-            "approved_factory:build",
+            "skdashboard.runtime_authorizer:build",
         ]
     )
 
-    assert observed["composition"]["owner_policy_file"] == tmp_path / "owner-policy.json"
-    assert observed["composition"]["capability_authorizer"].__class__ is object
+    assert observed["composition"]["owner_policy_file"] == owner_policy
+    assert (
+        observed["composition"]["capability_authorizer"].__class__.__name__
+        == "SessionOnlyCapabilityAuthorizer"
+    )
     routes = {route.path for route in observed["app"].routes}
     assert {
         "/control-plane/now",
@@ -254,6 +283,27 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "/api/v1/events",
     } <= routes
     assert observed["app"].routes
+
+
+def test_runtime_authorizer_and_config_drift_fail_closed(tmp_path: Path) -> None:
+    from skdashboard.read_only import _read_exact_value_free_config
+    from skdashboard.runtime_authorizer import build
+
+    config = tmp_path / "policy.json"
+    config.write_text("{}", encoding="utf-8")
+    config.chmod(0o600)
+    exact = hashlib.sha256(config.read_bytes()).hexdigest()
+
+    assert _read_exact_value_free_config(config, exact, expected_uid=config.stat().st_uid) == b"{}"
+    config.chmod(0o620)
+    with pytest.raises(ValueError, match="configuration file is unsafe"):
+        _read_exact_value_free_config(config, exact, expected_uid=config.stat().st_uid)
+    config.chmod(0o600)
+    config.write_text('{"changed":true}', encoding="utf-8")
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        _read_exact_value_free_config(config, exact, expected_uid=config.stat().st_uid)
+    with pytest.raises(PermissionError, match="direct browser bearer"):
+        build().authorize_with_receipt(None, None)
 
 
 def test_unavailable_schedule_sources_report_degraded_state(tmp_path: Path) -> None:

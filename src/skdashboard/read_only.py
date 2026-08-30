@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import os
+import stat
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -19,6 +23,8 @@ from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
+RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
+MAX_RUNTIME_POLICY_BYTES = 1 << 20
 READ_ONLY_STATIC_ASSETS = frozenset(
     {
         "css/ai.css",
@@ -112,6 +118,77 @@ def _secure_host_only_cookie(value: bytes) -> bytes:
     if not any(part.lower() == "secure" for part in attributes):
         attributes.append("Secure")
     return "; ".join([parts[0], *attributes]).encode("latin-1")
+
+
+def _safe_identity(value) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_exact_value_free_config(path: Path, expected_sha256: str, *, expected_uid: int) -> bytes:
+    if (
+        len(expected_sha256) != 64
+        or expected_sha256.lower() != expected_sha256
+        or any(character not in "0123456789abcdef" for character in expected_sha256)
+    ):
+        raise ValueError("an exact lowercase configuration SHA256 is required")
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None or path.name in {"", ".", ".."}:
+        raise ValueError("configuration path is unsafe")
+    directory = os.open(path.parent, os.O_RDONLY | directory_flag | no_follow)
+    descriptor = -1
+    try:
+        parent = os.fstat(directory)
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != expected_uid
+            or parent.st_mode & 0o022
+        ):
+            raise ValueError("configuration directory is unsafe")
+        listed = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+        descriptor = os.open(path.name, os.O_RDONLY | no_follow, dir_fd=directory)
+        opened = os.fstat(descriptor)
+        identity = _safe_identity(opened)
+        if (
+            _safe_identity(listed) != identity
+            or not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != expected_uid
+            or opened.st_nlink != 1
+            or opened.st_mode & 0o022
+            or opened.st_size > MAX_RUNTIME_POLICY_BYTES
+        ):
+            raise ValueError("configuration file is unsafe")
+        payload = bytearray()
+        while len(payload) <= MAX_RUNTIME_POLICY_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_RUNTIME_POLICY_BYTES + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > MAX_RUNTIME_POLICY_BYTES:
+            raise ValueError("configuration file exceeds the safe cap")
+        if (
+            _safe_identity(os.stat(path.name, dir_fd=directory, follow_symlinks=False)) != identity
+            or _safe_identity(os.fstat(descriptor)) != identity
+        ):
+            raise ValueError("configuration changed during read")
+        result = bytes(payload)
+        if hashlib.sha256(result).hexdigest() != expected_sha256:
+            raise ValueError("configuration SHA256 mismatch")
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory)
 
 
 def create_read_only_app(
@@ -291,15 +368,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--legacy-board-url")
     parser.add_argument("--authorized-resource-id")
     parser.add_argument("--owner-policy-file", type=Path)
+    parser.add_argument("--owner-policy-sha256")
     parser.add_argument("--owner-policy-revision")
     parser.add_argument("--tenant-id")
     parser.add_argument("--owner-policy-uid", type=int)
     parser.add_argument("--operator-session-db", type=Path)
     parser.add_argument("--operator-policy-revisions-file", type=Path)
+    parser.add_argument("--operator-policy-revisions-sha256")
     parser.add_argument("--signer-fingerprint")
     parser.add_argument("--signer-gnupg-home", type=Path)
     parser.add_argument(
         "--capability-authorizer-factory",
+        choices=(RUNTIME_AUTHORIZER_FACTORY,),
         help="module:callable returning the approved durable CapAuth authorizer",
     )
     args = parser.parse_args(argv)
@@ -319,11 +399,13 @@ def main(argv: list[str] | None = None) -> None:
         args.legacy_board_url,
         args.authorized_resource_id,
         args.owner_policy_file,
+        args.owner_policy_sha256,
         args.owner_policy_revision,
         args.tenant_id,
         args.capability_authorizer_factory,
         args.operator_session_db,
         args.operator_policy_revisions_file,
+        args.operator_policy_revisions_sha256,
         args.signer_fingerprint,
         args.signer_gnupg_home,
     )
@@ -350,13 +432,12 @@ def main(argv: list[str] | None = None) -> None:
 
     app_options = {"session_adapter": session_adapter}
     if all(live_values):
-        from importlib import import_module
-
         from capauth import (
             CurrentPolicyRevisions,
             OperatorSessionManager,
             SQLiteOperatorSessionBackend,
         )
+        from skcoord.authorized_card_policy import AuthorizedCardPolicyDocumentV1
         from skcoord.card_store import CardStore
 
         from .gpg_agent_signer import GPGAgentCredentialSigner
@@ -364,26 +445,48 @@ def main(argv: list[str] | None = None) -> None:
             LiveControlPlaneConfig,
             compose_file_backed_live_control_plane,
         )
+        from .runtime_authorizer import build as build_capability_authorizer
 
         try:
-            module_name, separator, attribute = args.capability_authorizer_factory.partition(":")
-            if not separator or not module_name or not attribute:
+            expected_uid = args.owner_policy_uid
+            if expected_uid is None:
+                expected_uid = os.geteuid()
+            owner_payload = _read_exact_value_free_config(
+                args.owner_policy_file,
+                args.owner_policy_sha256,
+                expected_uid=expected_uid,
+            )
+            owner_document = AuthorizedCardPolicyDocumentV1.model_validate_json(owner_payload)
+            current = datetime.now(timezone.utc)
+            if not any(
+                entry.node_id == "chiap08"
+                and entry.resource_id == args.authorized_resource_id
+                and entry.owner_policy_revision == args.owner_policy_revision
+                and entry.valid_from <= current < entry.expires_at
+                for entry in owner_document.entries
+            ):
                 raise ValueError
-            capability_authorizer = getattr(import_module(module_name), attribute)()
+            revisions_payload = _read_exact_value_free_config(
+                args.operator_policy_revisions_file,
+                args.operator_policy_revisions_sha256,
+                expected_uid=expected_uid,
+            )
+            revisions = CurrentPolicyRevisions.model_validate_json(revisions_payload, strict=True)
+            if revisions.owner != args.owner_policy_revision:
+                raise ValueError
+            capability_authorizer = build_capability_authorizer()
         except Exception as exc:
-            parser.error(f"capability authorizer factory is unavailable: {type(exc).__name__}")
+            parser.error(f"runtime policy composition is unavailable: {type(exc).__name__}")
         try:
 
             def current_revisions(_binding=None):
-                revisions_file = args.operator_policy_revisions_file
-                status = revisions_file.stat()
-                if status.st_mode & 0o022:
-                    raise PermissionError
-                return CurrentPolicyRevisions.model_validate_json(
-                    revisions_file.read_text(encoding="utf-8"), strict=True
+                payload = _read_exact_value_free_config(
+                    args.operator_policy_revisions_file,
+                    args.operator_policy_revisions_sha256,
+                    expected_uid=expected_uid,
                 )
+                return CurrentPolicyRevisions.model_validate_json(payload, strict=True)
 
-            revisions = current_revisions()
             sessions = OperatorSessionManager(
                 backend=SQLiteOperatorSessionBackend(args.operator_session_db),
                 current_revisions=current_revisions,
