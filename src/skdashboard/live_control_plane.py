@@ -46,10 +46,22 @@ NODE_ID = "chiap08"
 PURPOSE = "project-management-reporting"
 AUDIENCE = "skdashboard"
 CAPABILITY = "skdashboard.read"
+EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
-AUTHENTICATED_TARGETS = frozenset({TARGET, SCHEDULE_TARGET})
+BOARD_TARGET = "/api/v1/board/summary"
+EVENTS_TARGET = "/api/v1/events"
+AUTHENTICATED_BINDINGS = frozenset(
+    {
+        (CAPABILITY, TARGET),
+        (CAPABILITY, SCHEDULE_TARGET),
+        (CAPABILITY, BOARD_TARGET),
+        (EVENTS_CAPABILITY, EVENTS_TARGET),
+    }
+)
+AUTHENTICATED_TARGETS = frozenset(target for _capability, target in AUTHENTICATED_BINDINGS)
 RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
+EVENTS_RESOURCE_TYPE = "tenant"
 MAX_OPERATOR_PROOFS = 1024
 
 
@@ -156,21 +168,25 @@ class InProcessOperatorBridge:
     ) -> None:
         issuer = _InjectedCapabilityIssuer(signer, clock=clock)
         self._config = config
-        self._proofs: dict[str, tuple[str, str, str]] = {}
+        self._proofs: dict[str, dict[str, tuple[str, str, str]]] = {}
         self._sessions = sessions
         self._revisions = revisions
         self._factories = {
-            (origin, target): InProcessIssuerFactory(
+            (origin, capability, target): InProcessIssuerFactory(
                 sessions=sessions,
                 config=DashboardIssuerAuthorizationConfigV1(
                     allowed_origin=origin,
                     node_id=NODE_ID,
                     purpose=PURPOSE,
-                    capability=CAPABILITY,
+                    capability=capability,
                     operation="read",
                     target=target,
-                    resource_type=RESOURCE_TYPE,
-                    resource_id=config.resource_id,
+                    resource_type=(
+                        EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+                    ),
+                    resource_id=(
+                        config.tenant_id if capability == EVENTS_CAPABILITY else config.resource_id
+                    ),
                     owner_policy_revision=config.owner_policy_revision,
                     ttl_seconds=config.capability_ttl_seconds,
                 ),
@@ -179,7 +195,7 @@ class InProcessOperatorBridge:
                 clock=clock,
             )
             for origin in ALLOWED_BROWSER_ORIGINS
-            for target in AUTHENTICATED_TARGETS
+            for capability, target in AUTHENTICATED_BINDINGS
         }
 
     def enroll(self, subject: str, origin: str) -> str:
@@ -193,31 +209,42 @@ class InProcessOperatorBridge:
             raise PermissionError("validated operator subject is unavailable")
         principal = Principal(principal_id=subject, subject=subject, kind="human")
         device = secrets.token_urlsafe(32)
-        material = self._sessions.create(
-            principal=principal,
-            acting_principal=principal,
-            device_fingerprint=device,
-            capability_ceiling=(CAPABILITY,),
-            purpose=PURPOSE,
-            allowed_origin=origin,
-            revisions=self._revisions,
-            ttl_seconds=8 * 60 * 60,
-            idle_seconds=30 * 60,
-        )
-        cookie, csrf = material.take()
+        proofs = {}
+        for capability in (CAPABILITY, EVENTS_CAPABILITY):
+            material = self._sessions.create(
+                principal=principal,
+                acting_principal=principal,
+                device_fingerprint=device,
+                capability_ceiling=(capability,),
+                purpose=PURPOSE,
+                allowed_origin=origin,
+                revisions=self._revisions,
+                ttl_seconds=8 * 60 * 60,
+                idle_seconds=30 * 60,
+            )
+            cookie, csrf = material.take()
+            proofs[capability] = (cookie, csrf, device)
         if len(self._proofs) >= MAX_OPERATOR_PROOFS:
             self._proofs.pop(next(iter(self._proofs)))
         handle = secrets.token_urlsafe(32)
-        self._proofs[handle] = (cookie, csrf, device)
+        self._proofs[handle] = proofs
         return handle
 
     def request(self, handle: str, request) -> InProcessIssuerRequest:
         if not isinstance(handle, str) or not handle.isascii():
             raise PermissionError("operator session material is unavailable")
-        proof = self._proofs.get(handle)
-        if proof is None:
+        proofs = self._proofs.get(handle)
+        capability = next(
+            (
+                candidate
+                for candidate, target in AUTHENTICATED_BINDINGS
+                if target == request.url.path
+            ),
+            None,
+        )
+        if proofs is None or capability is None or capability not in proofs:
             raise PermissionError("operator session material is unavailable")
-        cookie, csrf, device = proof
+        cookie, csrf, device = proofs[capability]
         nonce = request.headers.get("x-request-id", "")[:256]
         if len(nonce) < 16:
             nonce = secrets.token_hex(16)
@@ -241,7 +268,7 @@ class InProcessOperatorBridge:
         authorizer,
         invocation_factory,
     ):
-        if capability != CAPABILITY or target not in AUTHENTICATED_TARGETS:
+        if (capability, target) not in AUTHENTICATED_BINDINGS:
             return None
         proof = getattr(session, "control_plane_request", None)
         if not isinstance(proof, InProcessIssuerRequest):
@@ -250,7 +277,7 @@ class InProcessOperatorBridge:
             origin = _approved_request_origin(request)
         except PermissionError:
             return None
-        factory = self._factories.get((origin, target))
+        factory = self._factories.get((origin, capability, target))
         if factory is None:
             return None
         invocation = invocation_factory(request, capability, target)
@@ -512,26 +539,44 @@ class AuthorizedCardScheduleSource:
 
 
 class _LiveOwnerPolicyProvider:
-    """Reuse the exact project owner policy for the unavailable Schedule seam."""
+    """Reuse the exact project owner policy for approved read projections."""
 
-    __slots__ = ("_project_provider",)
+    __slots__ = ("_project_provider", "_project_resource_id")
 
-    def __init__(self, project_provider: AuthorizedCardPolicyProvider) -> None:
+    def __init__(
+        self, project_provider: AuthorizedCardPolicyProvider, project_resource_id: str
+    ) -> None:
         self._project_provider = project_provider
+        self._project_resource_id = project_resource_id
 
     def decide(self, binding, capauth_decision):
-        if binding.target == TARGET:
+        if binding.target == TARGET and binding.capability == CAPABILITY:
             return self._project_provider.decide(binding, capauth_decision)
-        if binding.target != SCHEDULE_TARGET:
+        if (binding.capability, binding.target) not in AUTHENTICATED_BINDINGS:
             return None
-        # CapAuth already approved the actual Schedule target. These copies are
-        # used only to select the same exact resource owner entry. The returned
-        # decision is still joined against the original Schedule binding.
-        overview_binding = binding.model_copy(update={"target": TARGET})
+        # CapAuth already approved the actual target. These copies are used only
+        # to select the same exact resource owner entry. The returned decision is
+        # still joined against the original binding.
+        overview_binding = binding.model_copy(
+            update={
+                "capability": CAPABILITY,
+                "target": TARGET,
+                "resource_type": RESOURCE_TYPE,
+                "resource_id": self._project_resource_id,
+            }
+        )
         overview_decision = capauth_decision.model_copy(
             update={"scope": overview_binding.capability_scope()}
         )
-        return self._project_provider.decide(overview_binding, overview_decision)
+        decision = self._project_provider.decide(overview_binding, overview_decision)
+        if decision is None:
+            return None
+        return decision.model_copy(
+            update={
+                "resource_type": binding.resource_type,
+                "resource_id": binding.resource_id,
+            }
+        )
 
 
 def compose_file_backed_live_control_plane(
@@ -589,7 +634,7 @@ def compose_live_control_plane(
     if clock is not None:
         provider_options["clock"] = clock
     provider = AuthorizedCardPolicyProvider(owner_policy_backend, **provider_options)
-    live_owner_policy = _LiveOwnerPolicyProvider(provider)
+    live_owner_policy = _LiveOwnerPolicyProvider(provider, config.resource_id)
     authorizer_options = {
         "capability_authorizer": capability_authorizer,
         "owner_policy": live_owner_policy,
@@ -612,21 +657,21 @@ def compose_live_control_plane(
     )
 
     def invocation_factory(request, capability: str, target: str) -> ControlPlaneInvocationV1:
-        if (
-            capability != CAPABILITY
-            or target not in AUTHENTICATED_TARGETS
-            or request.url.path != target
-        ):
+        if (capability, target) not in AUTHENTICATED_BINDINGS or request.url.path != target:
             raise PermissionError("control-plane invocation is outside the exact binding")
         origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
             node_id=NODE_ID,
             purpose=PURPOSE,
             audience=AUDIENCE,
-            capability=CAPABILITY,
+            capability=capability,
             target=target,
-            resource_type=RESOURCE_TYPE,
-            resource_id=config.resource_id,
+            resource_type=(
+                EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+            ),
+            resource_id=config.tenant_id
+            if capability == EVENTS_CAPABILITY
+            else config.resource_id,
             correlation_id=request.headers.get("x-request-id", "")[:128] or uuid4().hex,
             boundary=RequestBoundary(client_kind=ClientKind.BROWSER, origin=origin),
         )
@@ -658,8 +703,12 @@ def compose_live_control_plane(
 
 __all__ = [
     "AUDIENCE",
+    "AUTHENTICATED_BINDINGS",
     "AUTHENTICATED_TARGETS",
+    "BOARD_TARGET",
     "CAPABILITY",
+    "EVENTS_CAPABILITY",
+    "EVENTS_TARGET",
     "AuthorizedCardScheduleSource",
     "LiveControlPlaneComposition",
     "LiveControlPlaneConfig",

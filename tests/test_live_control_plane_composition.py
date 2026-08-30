@@ -20,7 +20,11 @@ from skdashboard.dashboard_schedule import (
     ScheduleProjectionProvider,
 )
 from skdashboard.live_control_plane import (
+    BOARD_TARGET,
     CAPABILITY,
+    EVENTS_CAPABILITY,
+    EVENTS_RESOURCE_TYPE,
+    EVENTS_TARGET,
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
@@ -90,6 +94,32 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     assert invocation.resource_id == RESOURCE_ID
     assert invocation.boundary.origin == ORIGIN
     assert isinstance(composition.schedule_provider, ScheduleProjectionProvider)
+
+
+@pytest.mark.parametrize(
+    ("capability", "target", "resource_type", "resource_id"),
+    [
+        (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
+    ],
+)
+def test_invocation_factory_binds_board_and_events_exactly(
+    tmp_path, capability, target, resource_type, resource_id
+) -> None:
+    composition = compose_live_control_plane(
+        config=config(tmp_path),
+        capability_authorizer=Mock(),
+        owner_policy_backend=Mock(),
+        store_factory=Mock(),
+    )
+
+    invocation = composition.invocation_factory(request(path=target), capability, target)
+
+    assert invocation.capability == capability
+    assert invocation.target == target
+    assert invocation.resource_type == resource_type
+    assert invocation.resource_id == resource_id
+    assert invocation.audience == "skdashboard"
 
 
 def test_invocation_factory_derives_exact_same_origin_when_browser_omits_origin(
@@ -232,7 +262,8 @@ def test_composed_schedule_provider_is_honestly_unavailable(tmp_path) -> None:
     ("capability", "target", "origin"),
     [
         ("skdashboard.events.read", TARGET, ORIGIN),
-        (CAPABILITY, "/api/v1/board/summary", ORIGIN),
+        (CAPABILITY, EVENTS_TARGET, ORIGIN),
+        (EVENTS_CAPABILITY, BOARD_TARGET, ORIGIN),
         (CAPABILITY, TARGET, "https://untrusted.example"),
     ],
 )
@@ -329,7 +360,7 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
             (
                 IssuerGrant(
                     fingerprint=signer.issuer_fingerprint,
-                    capabilities=frozenset({CAPABILITY}),
+                    capabilities=frozenset({CAPABILITY, EVENTS_CAPABILITY}),
                     audiences=frozenset({"skdashboard"}),
                     principal_kinds=frozenset({"human"}),
                 ),
@@ -404,6 +435,31 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
     )
     assert direct_projection["items"][0]["item_id"] == source.id
     direct_watermarks = direct_projection["items"][0]["source_watermarks"]
+    for capability, target, resource_type, resource_id in (
+        (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
+    ):
+        projection_request = request(
+            path=target,
+            request_id=f"{capability}-{target}-direct-read",
+        )
+        authority = bridge(
+            projection_request,
+            SimpleNamespace(
+                control_plane_request=bridge.request(session_record, projection_request)
+            ),
+            capability,
+            target,
+            composition.decision_authorizer,
+            composition.invocation_factory,
+        )
+        assert authority is not None
+        context, verifier = authority
+        assert context.binding.capability == capability
+        assert context.binding.target == target
+        assert context.binding.resource_type == resource_type
+        assert context.binding.resource_id == resource_id
+        verifier.close()
     source.dependencies[:] = ["different-hidden-card"]
 
     async def resolve_session(incoming_request):
