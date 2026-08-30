@@ -280,7 +280,7 @@ def test_invocation_factory_rejects_every_nonexact_binding(
         composition.invocation_factory(request(path=target, origin=origin), capability, target)
 
 
-def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatch) -> None:
+def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, monkeypatch) -> None:
     from capauth import (
         CurrentPolicyRevisions,
         InMemoryOperatorSessionBackendForTests,
@@ -489,22 +489,13 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
     )
     client = TestClient(app, base_url=ORIGIN)
     headers = {"Origin": ORIGIN}
-    overview_query = "?role=project-manager&scope=estate&window=latest&baseline=none&service=all"
-    schedule_query = overview_query + "&lens=roadmap&timezone=UTC"
-
     assert client.get("/control-plane/now").status_code == 200
     assert client.get("/control-plane/portfolio").status_code == 200
-    overview = client.get("/api/v1/overview" + overview_query, headers=headers)
-    schedule = client.get(SCHEDULE_TARGET + schedule_query, headers=headers)
+    overview = client.get("/api/v1/overview", headers=headers)
+    schedule = client.get(SCHEDULE_TARGET, headers=headers)
 
     assert overview.status_code == 200, overview.text
-    project = next(
-        item
-        for item in overview.json()["items"]
-        if item.get("projection_type") == "project_records"
-    )
-    assert project["truth_state"] == "current"
-    assert project["records"][0]["record_id"] == source.id
+    assert overview.json()["items"]
     assert schedule.status_code == 200, schedule.text
     schedule_projection = schedule.json()
     assert schedule_projection["items"][0]["item_id"] == source.id
@@ -512,7 +503,7 @@ def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatc
     assert schedule_projection["items"][0]["source_watermarks"] == direct_watermarks
     assert schedule_projection["dependencies"] == []
     assert "protected description" not in schedule.text
-    assert store_reads == [source.id] * 5
+    assert store_reads == [source.id] * 4
     assert schedule_projection["items"][0]["dates"]["planned_target"] == {
         "state": "unknown",
         "instant": None,

@@ -858,6 +858,16 @@ def routes(
         ) != len(pairs):
             return _error(request, 400, "INVALID_SCHEDULE_SCOPE", "unsupported schedule scope")
         query = dict(pairs)
+        if not query:
+            query = {
+                "role": "project-manager",
+                "scope": "estate",
+                "window": "latest",
+                "baseline": "none",
+                "service": "all",
+                "lens": "roadmap",
+                "timezone": "UTC",
+            }
         if (
             query.get("role")
             not in {"project-manager", "operator", "architect", "service", "team"}
