@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from copy import deepcopy
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
@@ -18,6 +19,35 @@ from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
+
+# Eight legacy sidebar destinations that route to the configured legacy runtime
+LEGACY_PATHS = frozenset(
+    {
+        "/cockpit",
+        "/cmdb",
+        "/board",
+        "/assistant",
+        "/trust",
+        "/models",
+        "/economy",
+        "/fleet",
+    }
+)
+
+READ_ONLY_STATIC_ASSETS = frozenset(
+    {
+        "css/board.css",
+        "css/cockpit.css",
+        "css/overview.css",
+        "css/projects.css",
+        "css/schedule.css",
+        "js/control_plane_scope.js",
+        "js/overview.js",
+        "js/projects.js",
+        "js/read_only_api.js",
+        "js/schedule.js",
+    }
+)
 
 
 class CallbackAccessLogFilter(logging.Filter):
@@ -89,6 +119,47 @@ def _secure_host_only_cookie(value: bytes) -> bytes:
     return "; ".join([parts[0], *attributes]).encode("latin-1")
 
 
+def _validate_and_extract_legacy_origin(url: str | None) -> str | None:
+    """Validate and extract the origin from a legacy board URL.
+
+    Returns the origin (scheme://netloc) if valid, None otherwise.
+    Rejects URLs that:
+    - Are not HTTPS
+    - Contain credentials (user:pass@)
+    - Have a query string
+    - Have a fragment
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return None
+    if parsed.scheme != "https":
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if parsed.query:
+        return None
+    if parsed.fragment:
+        return None
+    # Return only the origin (scheme + netloc)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _rewrite_legacy_links(html: str, legacy_origin: str | None) -> str:
+    """Rewrite legacy sidebar links to use the configured legacy origin.
+
+    Preserves labels, order, active state, and query behavior.
+    Only rewrites the eight legacy paths in LEGACY_PATHS.
+    """
+    if not legacy_origin:
+        return html
+    for path in LEGACY_PATHS:
+        html = html.replace(f'href="{path}"', f'href="{legacy_origin}{path}"')
+    return html
+
+
 def create_read_only_app(
     home: Path,
     *,
@@ -104,6 +175,7 @@ def create_read_only_app(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    legacy_board_url=None,
 ) -> Starlette:
     """Build the least-privilege app without importing legacy route tables."""
 
@@ -125,9 +197,49 @@ def create_read_only_app(
 
         report_provider = ReportProjectionProvider()
 
+    # Validate and extract legacy origin before startup
+    legacy_origin = _validate_and_extract_legacy_origin(legacy_board_url)
+    if legacy_board_url and not legacy_origin:
+        raise ValueError(
+            "--legacy-board-url must be HTTPS, without credentials, query string, or fragment"
+        )
+
+    def page(name: str):
+        async def serve(_request):
+            html = (static_dir / name).read_text(encoding="utf-8")
+            html = _rewrite_legacy_links(html, legacy_origin)
+            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+        return serve
+
     async def index(_request):
         name = "read_only_session.html" if session_adapter is not None else "read_only.html"
-        return HTMLResponse((static_dir / name).read_text(encoding="utf-8"))
+        return await page(name)(_request)
+
+    async def static_asset(request):
+        relative = request.url.path.removeprefix("/static/")
+        if relative not in READ_ONLY_STATIC_ASSETS:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        candidate = (static_dir / relative).resolve()
+        try:
+            candidate.relative_to(static_dir.resolve())
+        except ValueError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if not candidate.is_file():
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if relative in {"js/overview.js", "js/projects.js", "js/schedule.js"}:
+            javascript = candidate.read_text(encoding="utf-8").replace(
+                'from "./api.js"', 'from "./read_only_api.js"'
+            )
+            if relative == "js/overview.js":
+                javascript = javascript.replace(
+                    'import { openCard, initPanel } from "./editor.js";',
+                    "const openCard = () => {};\nconst initPanel = () => {};",
+                )
+            if legacy_origin is not None and relative in {"js/overview.js", "js/projects.js"}:
+                javascript = javascript.replace('"/board"', json.dumps(f"{legacy_origin}/board"))
+            return Response(javascript, media_type="text/javascript")
+        return FileResponse(candidate)
 
     async def manifest(request):
         base = str(request.base_url).rstrip("/")
@@ -141,10 +253,17 @@ def create_read_only_app(
                 "nav": {"icon": "dashboard", "order": 40, "label": "Control Plane"},
                 "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
                 "health": f"{base}/api/v1/health",
+                "legacyOrigin": legacy_origin,
             }
         )
 
-    routes = [Route("/", index), Route("/.well-known/skworld-module.json", manifest)]
+    routes = [
+        Route("/", index),
+        Route("/control-plane/now", page("overview.html")),
+        Route("/control-plane/portfolio", page("projects.html")),
+        Route("/control-plane/schedule", page("schedule.html")),
+        Route("/.well-known/skworld-module.json", manifest),
+    ]
     routes.extend(
         control_plane_routes(
             home,
@@ -166,6 +285,14 @@ def create_read_only_app(
     )
     if session_adapter is not None:
         routes.extend(session_adapter.routes())
+    for asset in sorted(READ_ONLY_STATIC_ASSETS):
+        routes.append(
+            Route(
+                f"/static/{asset}",
+                static_asset,
+                name=asset,
+            )
+        )
     app = Starlette(routes=routes)
     app.add_middleware(SecureTransportMiddleware)
     return app
@@ -183,6 +310,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--oidc-issuer")
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
+    parser.add_argument("--issuer-socket", type=Path)
+    parser.add_argument("--legacy-board-url")
+    parser.add_argument("--authorized-resource-id")
+    parser.add_argument("--owner-policy-file", type=Path)
+    parser.add_argument("--owner-policy-revision")
+    parser.add_argument("--issuer-uid", type=int)
+    parser.add_argument("--owner-policy-uid", type=int)
+    parser.add_argument(
+        "--capability-authorizer-factory",
+        help="module:callable returning the approved durable CapAuth authorizer",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
@@ -196,6 +334,19 @@ def main(argv: list[str] | None = None) -> None:
     )
     if any(session_values) and not all(session_values):
         parser.error("all session and OIDC options are required together")
+    live_values = (
+        args.issuer_socket,
+        args.legacy_board_url,
+        args.authorized_resource_id,
+        args.owner_policy_file,
+        args.owner_policy_revision,
+        args.capability_authorizer_factory,
+    )
+    if any(live_values) and not all(live_values):
+        parser.error("all live control-plane options are required together")
+    if all(live_values) and not all(session_values):
+        parser.error("live control-plane composition requires the same-origin session options")
+
     session_adapter = None
     if all(session_values):
         from .session_adapter import EncryptedSessionAdapter, SessionConfig
@@ -210,6 +361,55 @@ def main(argv: list[str] | None = None) -> None:
                 redirect_uri=args.oidc_redirect_uri,
                 client_secret=args.oidc_client_secret_file.read_text(encoding="utf-8").strip(),
             ),
+        )
+
+    app_options = {"session_adapter": session_adapter}
+    if all(live_values):
+        # Validate and extract legacy origin for live composition
+        legacy_origin = _validate_and_extract_legacy_origin(args.legacy_board_url)
+        if args.legacy_board_url and not legacy_origin:
+            parser.error(
+                "--legacy-board-url must be HTTPS, without credentials, query string, or fragment"
+            )
+        from importlib import import_module
+
+        from skcoord.card_store import CardStore
+
+        from .live_control_plane import (
+            LiveControlPlaneConfig,
+            compose_file_backed_live_control_plane,
+        )
+
+        try:
+            module_name, separator, attribute = args.capability_authorizer_factory.partition(":")
+            if not separator or not module_name or not attribute:
+                raise ValueError
+            capability_authorizer = getattr(import_module(module_name), attribute)()
+        except Exception as exc:
+            parser.error(f"capability authorizer factory is unavailable: {type(exc).__name__}")
+        config_options = {
+            "issuer_socket": args.issuer_socket,
+            "legacy_board_url": args.legacy_board_url,
+            "resource_id": args.authorized_resource_id,
+            "owner_policy_revision": args.owner_policy_revision,
+        }
+        if args.issuer_uid is not None:
+            config_options["issuer_uid"] = args.issuer_uid
+        composition = compose_file_backed_live_control_plane(
+            config=LiveControlPlaneConfig(**config_options),
+            capability_authorizer=capability_authorizer,
+            owner_policy_file=args.owner_policy_file,
+            expected_policy_uid=args.owner_policy_uid,
+            store_factory=CardStore,
+        )
+        app_options.update(
+            decision_authorizer=composition.decision_authorizer,
+            invocation_factory=composition.invocation_factory,
+            project_provider=composition.project_provider,
+            session_capability_issuer=composition.session_capability_issuer,
+            legacy_board_url=legacy_origin,
+            schedule_provider=None,
+            schedule_forecast_provider=None,
         )
 
     import uvicorn
@@ -227,7 +427,7 @@ def main(argv: list[str] | None = None) -> None:
     ]
 
     uvicorn.run(
-        create_read_only_app(args.home, session_adapter=session_adapter),
+        create_read_only_app(args.home, **app_options),
         host=args.host,
         port=args.port,
         ssl_certfile=str(args.tls_certfile),
@@ -241,7 +441,10 @@ __all__ = [
     "ALLOWED_BROWSER_ORIGINS",
     "CallbackAccessLogFilter",
     "HSTS_POLICY",
+    "LEGACY_PATHS",
     "SecureTransportMiddleware",
+    "_rewrite_legacy_links",
+    "_validate_and_extract_legacy_origin",
     "create_read_only_app",
     "main",
 ]
