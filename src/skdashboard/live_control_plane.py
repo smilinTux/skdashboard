@@ -32,9 +32,11 @@ from capauth import (
 from capauth.control_plane import RequestBoundary
 from skcoord.authorized_card_policy import (
     AuthorizedCardPolicyBackend,
+    AuthorizedCardPolicyDocumentV1,
     AuthorizedCardPolicyProvider,
     AuthorizedCardPolicySelectionV1,
     FileAuthorizedCardPolicyBackend,
+    StaticAuthorizedCardPolicyBackend,
 )
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
@@ -524,6 +526,7 @@ def compose_file_backed_live_control_plane(
     capability_authorizer,
     owner_policy_file: Path,
     store_factory,
+    owner_policy_document: AuthorizedCardPolicyDocumentV1 | None = None,
     expected_policy_uid: int | None = None,
     credential_signer=None,
     operator_sessions: OperatorSessionManager | None = None,
@@ -532,12 +535,17 @@ def compose_file_backed_live_control_plane(
 ) -> LiveControlPlaneComposition:
     """Compose the live runtime with SKCoord's durable fail-closed backend."""
 
-    backend_options = {}
-    if expected_policy_uid is not None:
-        backend_options["expected_uid"] = expected_policy_uid
-    if clock is not None:
-        backend_options["clock"] = clock
-    backend = FileAuthorizedCardPolicyBackend(owner_policy_file, **backend_options)
+    if owner_policy_document is not None:
+        if not isinstance(owner_policy_document, AuthorizedCardPolicyDocumentV1):
+            raise TypeError("verified owner policy document is required")
+        backend = StaticAuthorizedCardPolicyBackend(owner_policy_document.entries)
+    else:
+        backend_options = {}
+        if expected_policy_uid is not None:
+            backend_options["expected_uid"] = expected_policy_uid
+        if clock is not None:
+            backend_options["clock"] = clock
+        backend = FileAuthorizedCardPolicyBackend(owner_policy_file, **backend_options)
     return compose_live_control_plane(
         config=config,
         capability_authorizer=capability_authorizer,

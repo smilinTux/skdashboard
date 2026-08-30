@@ -265,6 +265,9 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
     )
 
     assert observed["composition"]["owner_policy_file"] == owner_policy
+    assert observed["composition"]["owner_policy_document"] == AuthorizedCardPolicyDocumentV1(
+        entries=(entry,)
+    )
     assert (
         observed["composition"]["capability_authorizer"].__class__.__name__
         == "SessionOnlyCapabilityAuthorizer"

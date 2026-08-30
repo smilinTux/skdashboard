@@ -508,6 +508,7 @@ def main(argv: list[str] | None = None) -> None:
             config=LiveControlPlaneConfig(**config_options),
             capability_authorizer=capability_authorizer,
             owner_policy_file=args.owner_policy_file,
+            owner_policy_document=owner_document,
             expected_policy_uid=args.owner_policy_uid,
             store_factory=CardStore,
             credential_signer=signer,

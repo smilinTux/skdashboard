@@ -1,9 +1,16 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from skcoord.authorized_card_policy import (
+    AuthorizedCardPolicyDocumentV1,
+    AuthorizedCardPolicyEntryV1,
+    AuthorizedCardPolicySelectionV1,
+    AuthorizedCardScopeV1,
+)
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
@@ -21,7 +28,7 @@ from skdashboard.live_control_plane import (
     compose_file_backed_live_control_plane,
     compose_live_control_plane,
 )
-from skdashboard.read_only import create_read_only_app
+from skdashboard.read_only import _read_exact_value_free_config, create_read_only_app
 
 ORIGIN = sorted(ALLOWED_BROWSER_ORIGINS)[0]
 RESOURCE_ID = "authorized-card-set:sha256:" + "a" * 64
@@ -82,6 +89,79 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     assert invocation.resource_id == RESOURCE_ID
     assert invocation.boundary.origin == ORIGIN
     assert isinstance(composition.schedule_provider, ScheduleProjectionProvider)
+
+
+def test_verified_owner_policy_bytes_survive_post_verification_path_swap(
+    tmp_path: Path, monkeypatch
+) -> None:
+    current = datetime.now(timezone.utc)
+    first = AuthorizedCardPolicyEntryV1.issue(
+        subject="jarvis",
+        acting_principal_id="jarvis",
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=1),
+        expires_at=current + timedelta(hours=1),
+        visible_card_ids=("alpha",),
+    )
+    second = AuthorizedCardPolicyEntryV1.issue(
+        subject="jarvis",
+        acting_principal_id="jarvis",
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=1),
+        expires_at=current + timedelta(hours=1),
+        visible_card_ids=("beta",),
+    )
+    first_document = AuthorizedCardPolicyDocumentV1(entries=(first,))
+    policy = tmp_path / "owner-policy.json"
+    policy.write_text(first_document.model_dump_json(), encoding="utf-8")
+    policy.chmod(0o600)
+    verified = AuthorizedCardPolicyDocumentV1.model_validate_json(
+        _read_exact_value_free_config(
+            policy,
+            hashlib.sha256(policy.read_bytes()).hexdigest(),
+            expected_uid=policy.stat().st_uid,
+        )
+    )
+    policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(second,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_live_control_plane",
+        lambda **values: values["owner_policy_backend"],
+    )
+
+    backend = compose_file_backed_live_control_plane(
+        config=LiveControlPlaneConfig(
+            legacy_board_url="https://legacy.example/board",
+            resource_id=first.resource_id,
+            owner_policy_revision=first.owner_policy_revision,
+            tenant_id="platform",
+        ),
+        capability_authorizer=Mock(),
+        owner_policy_file=policy,
+        owner_policy_document=verified,
+        store_factory=Mock(),
+    )
+    first_selection = AuthorizedCardPolicySelectionV1(
+        subject=first.subject,
+        acting_principal_id=first.acting_principal_id,
+        node_id=first.node_id,
+        resource_id=first.resource_id,
+        owner_policy_revision=first.owner_policy_revision,
+    )
+    second_selection = AuthorizedCardPolicySelectionV1(
+        subject=second.subject,
+        acting_principal_id=second.acting_principal_id,
+        node_id=second.node_id,
+        resource_id=second.resource_id,
+        owner_policy_revision=second.owner_policy_revision,
+    )
+
+    assert backend.snapshot(first_selection) == first
+    assert backend.snapshot(second_selection) is None
 
 
 def test_composed_schedule_provider_is_honestly_unavailable(tmp_path) -> None:
