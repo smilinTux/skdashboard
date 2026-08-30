@@ -92,6 +92,10 @@ def test_chiap04_unit_is_dedicated_and_never_owns_legacy_ports() -> None:
     assert "EnvironmentFile=%h/.config/skdashboard-chiap04/runtime.env" in unit
     assert "skdashboard-readonly-chiap04/approved-venv" in unit
     assert "--host %i --port 7780" in unit
+    assert "--session-db %h/.local/state/skdashboard-chiap04/session-%i.db" in unit
+    assert (
+        "--operator-session-db %h/.local/state/skdashboard-chiap04/operator-session-%i.db" in unit
+    )
     assert "--node-id chiap04" in unit
     assert "ProtectSystem=strict" in unit
     assert "ProtectHome=read-only" in unit
