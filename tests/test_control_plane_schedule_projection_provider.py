@@ -29,7 +29,7 @@ class Context:
 
 class Verifier:
     def __init__(self, *states):
-        self.states = iter(states or ("allow", "allow", "allow"))
+        self.states = iter(states or ("allow", "allow"))
 
     def check_before_owner_read(self, _context):
         return Mock(value=next(self.states))
@@ -248,7 +248,7 @@ def test_tenant_role_scope_owner_and_authorization_mismatch_fail_closed(
 
 
 def test_currentness_before_and_during_read_fail_closed() -> None:
-    for states in (("deny",), ("allow", "deny"), ("allow", "allow", "deny")):
+    for states in (("deny",), ("allow", "deny")):
         provider = ScheduleProjectionProvider(
             Source(_snapshot()), tenant_id=TENANT, clock=lambda: NOW
         )

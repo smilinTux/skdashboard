@@ -154,10 +154,9 @@ class ScheduleProjectionProvider:
             if currentness_verifier.check_before_owner_read(context).value != "allow":
                 raise PermissionError
             snapshot = self._source.read(context, request, Path(home))
-            if currentness_verifier.check_after_owner_read(context).value != "allow":
-                raise PermissionError
             projection = self._project(snapshot, request, query)
-            # A final check closes a policy change during validation/serialization.
+            # The verifier is single use: one check before the owner read and
+            # one check after projection, immediately before release.
             if currentness_verifier.check_after_owner_read(context).value != "allow":
                 raise PermissionError
             return projection

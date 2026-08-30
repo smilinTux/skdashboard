@@ -139,9 +139,7 @@ def test_invocation_factory_rejects_every_nonexact_binding(
         composition.invocation_factory(request(path=target, origin=origin), capability, target)
 
 
-def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
-    tmp_path, monkeypatch
-) -> None:
+def test_live_composition_serves_real_projects_and_schedule(tmp_path, monkeypatch) -> None:
     from capauth import (
         CurrentPolicyRevisions,
         InMemoryOperatorSessionBackendForTests,
@@ -188,8 +186,8 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
     source = Card(
         id="source",
         kind=Kind.TASK,
-        title="not projected",
-        description="not projected",
+        title="Authorized schedule record",
+        description="protected description must never be projected",
         status=Column.DOING,
         swimlane="feature",
         priority="high",
@@ -197,15 +195,18 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
         owner="project-owner",
         labels=["project"],
         acceptance_criteria=[],
-        dependencies=[],
+        dependencies=["hidden-card"],
         links={},
         meta={},
         created_at="2026-08-20T00:00:00Z",
         updated_at="2026-08-29T20:00:00Z",
     )
 
+    store_reads = []
+
     class Store:
         def fold(self, card_id):
+            store_reads.append(card_id)
             return source if card_id == source.id else None
 
     signer = Signer()
@@ -267,6 +268,32 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
     assert session_record.isascii()
     assert 32 <= len(session_record) <= 128
 
+    direct_request = request(path=SCHEDULE_TARGET, request_id="schedule-direct-read")
+    direct_authority = bridge(
+        direct_request,
+        SimpleNamespace(control_plane_request=bridge.request(session_record, direct_request)),
+        CAPABILITY,
+        SCHEDULE_TARGET,
+        composition.decision_authorizer,
+        composition.invocation_factory,
+    )
+    direct_context, direct_verifier = direct_authority
+    direct_projection = composition.schedule_provider.read(
+        direct_context,
+        {
+            "role": "project-manager",
+            "scope": "estate",
+            "window": "latest",
+            "baseline": "none",
+            "service": "all",
+            "lens": "roadmap",
+            "timezone": "UTC",
+        },
+        tmp_path,
+        currentness_verifier=direct_verifier,
+    )
+    assert direct_projection["items"][0]["item_id"] == source.id
+
     async def resolve_session(incoming_request):
         return SimpleNamespace(
             state="authenticated",
@@ -310,8 +337,18 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
     )
     assert project["truth_state"] == "current"
     assert project["records"][0]["record_id"] == source.id
-    assert schedule.status_code == 503
-    assert schedule.json()["code"] == "SCHEDULE_UNAVAILABLE"
+    assert schedule.status_code == 200, schedule.text
+    schedule_projection = schedule.json()
+    assert schedule_projection["items"][0]["item_id"] == source.id
+    assert schedule_projection["items"][0]["title"] == source.title
+    assert schedule_projection["dependencies"] == []
+    assert "protected description" not in schedule.text
+    assert store_reads == [source.id] * 5
+    assert schedule_projection["items"][0]["dates"]["planned_target"] == {
+        "state": "unknown",
+        "instant": None,
+        "reason": "no canonical planned_target is recorded",
+    }
 
 
 def test_file_backed_composition_constructs_the_durable_owner_backend(

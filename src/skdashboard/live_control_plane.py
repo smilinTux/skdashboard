@@ -6,8 +6,11 @@ capability material remains inside the in-process issuer factory.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -24,16 +27,18 @@ from capauth import (
     InProcessIssuerRequest,
     OperatorSessionManager,
     Principal,
+    SanitizedControlPlaneDecisionV1,
 )
 from capauth.control_plane import RequestBoundary
 from skcoord.authorized_card_policy import (
     AuthorizedCardPolicyBackend,
     AuthorizedCardPolicyProvider,
+    AuthorizedCardPolicySelectionV1,
     FileAuthorizedCardPolicyBackend,
 )
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
-from .dashboard_schedule import ScheduleProjectionProvider
+from .dashboard_schedule import DATE_FIELDS, ScheduleProjectionProvider, ScheduleSourceRequest
 
 NODE_ID = "chiap08"
 PURPOSE = "project-management-reporting"
@@ -241,11 +246,251 @@ class InProcessOperatorBridge:
         return result.context, verifier
 
 
-class _UnavailableScheduleSource:
-    """Keep Schedule fail closed until a canonical owner source is deployed."""
+class AuthorizedCardScheduleSource:
+    """Project only owner-authorized CardStore records into Schedule input."""
 
-    def read(self, _context, _request, _home):
-        return None
+    __slots__ = ("_backend", "_clock", "_store_factory", "_tenant_id")
+
+    def __init__(self, backend, store_factory, tenant_id: str, *, clock=None) -> None:
+        self._backend = backend
+        self._store_factory = store_factory
+        self._tenant_id = tenant_id
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def read(self, context, request, home):
+        if type(context) is not SanitizedControlPlaneDecisionV1:
+            raise PermissionError("authorized schedule source is unavailable")
+        if type(request) is not ScheduleSourceRequest:
+            raise PermissionError("authorized schedule source is unavailable")
+        binding = context.binding
+        acting = binding.agent_id or binding.principal.principal_id
+        if (
+            binding.target != SCHEDULE_TARGET
+            or binding.capability != CAPABILITY
+            or binding.resource_type != RESOURCE_TYPE
+            or binding.resource_id is None
+            or binding.owner_policy_revision is None
+            or not context.joined_decision.allow
+            or request.tenant_id != self._tenant_id
+        ):
+            raise PermissionError("authorized schedule source is unavailable")
+        selection = AuthorizedCardPolicySelectionV1(
+            subject=binding.principal.subject,
+            acting_principal_id=acting,
+            node_id=binding.node_id,
+            resource_id=binding.resource_id,
+            owner_policy_revision=binding.owner_policy_revision,
+        )
+
+        def project(entry):
+            now = self._now()
+            if (
+                entry.subject != binding.principal.subject
+                or entry.acting_principal_id != acting
+                or entry.node_id != binding.node_id
+                or entry.resource_id != binding.resource_id
+                or entry.owner_policy_revision != binding.owner_policy_revision
+                or not entry.valid_from <= now < entry.expires_at
+                or not context.issued_at <= now < context.expires_at
+                or entry.scope.role.replace("-", "_") != request.role
+                or entry.scope.scope != request.scope
+                or entry.scope.service != request.service_id
+                or entry.scope.window != "latest"
+                or entry.scope.baseline != "none"
+            ):
+                raise PermissionError("authorized schedule source is unavailable")
+            store = self._store_factory(Path(home))
+            before = self._fold(store, entry.visible_card_ids)
+            before_facts = [self._card_facts(card) for card in before]
+            after = self._fold(store, entry.visible_card_ids)
+            if before_facts != [self._card_facts(card) for card in after]:
+                raise PermissionError("authorized schedule source changed during read")
+            visible_ids = frozenset(entry.visible_card_ids)
+            field_mask = frozenset(entry.field_mask)
+            items = [
+                self._item(card, request, entry.owner_policy_revision)
+                for card in after
+                if not card.archived
+            ]
+            included_ids = frozenset(item["record_id"] for item in items)
+            dependencies = (
+                self._dependencies(after, included_ids, request)
+                if "visible_edges" in field_mask
+                else []
+            )
+            facts = {
+                "owner_policy_revision": entry.owner_policy_revision,
+                "visible_card_ids": sorted(visible_ids),
+                "items": items,
+                "dependencies": dependencies,
+            }
+            revision = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+            )
+            timestamp = now.isoformat().replace("+00:00", "Z")
+            return {
+                "schema_version": "1.0.0",
+                "tenant_id": request.tenant_id,
+                "snapshot_revision": revision,
+                "observed_at": timestamp,
+                "projected_at": timestamp,
+                "authorization": {
+                    "state": "authorized",
+                    "target": SCHEDULE_TARGET,
+                    "tenant_id": request.tenant_id,
+                    "role": request.role,
+                    "scope": request.scope,
+                    "policy_decision_ref": entry.owner_policy_revision,
+                    "owner_policy_revision": entry.owner_policy_revision,
+                },
+                "source_watermarks": [
+                    {
+                        "source": "skcoord.owner_policy",
+                        "value": entry.owner_policy_revision,
+                    },
+                    {"source": "skcoord.card_store", "value": revision},
+                ],
+                "items": items,
+                "dependencies": dependencies,
+                "overlays": [],
+            }
+
+        result = self._backend.read_if_current(
+            selection,
+            binding.owner_policy_revision,
+            project,
+        )
+        if not isinstance(result, dict):
+            raise PermissionError("authorized schedule source is unavailable")
+        return result
+
+    @staticmethod
+    def _fold(store, card_ids):
+        cards = [store.fold(card_id) for card_id in card_ids]
+        if any(card is None or card.id != card_id for card_id, card in zip(card_ids, cards)):
+            raise PermissionError("authorized schedule source is unavailable")
+        return cards
+
+    @staticmethod
+    def _card_facts(card):
+        return {
+            "id": card.id,
+            "kind": card.kind.value,
+            "title": card.title,
+            "status": card.status.value,
+            "labels": list(card.labels),
+            "dependencies": list(card.dependencies),
+            "archived": bool(card.archived),
+            "created_at": card.created_at,
+            "updated_at": card.updated_at,
+        }
+
+    @staticmethod
+    def _semantic_type(card) -> str:
+        labels = set(card.labels)
+        if "milestone" in labels:
+            return "milestone"
+        if "project" in labels:
+            return "project"
+        if card.kind.value == "epic":
+            return "epic"
+        return "work_package"
+
+    @staticmethod
+    def _service(card) -> str:
+        services = sorted(
+            label[5:]
+            for label in card.labels
+            if isinstance(label, str)
+            and label.startswith("repo:")
+            and 5 < len(label) <= 133
+            and label[5:].isascii()
+        )
+        return services[0] if services else "skcoord"
+
+    @staticmethod
+    def _unknown_dates():
+        return {
+            field: {
+                "state": "unknown",
+                "instant": None,
+                "reason": f"no canonical {field} is recorded",
+            }
+            for field in DATE_FIELDS
+        }
+
+    def _item(self, card, request, owner_policy_revision):
+        facts = self._card_facts(card)
+        card_revision = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        )
+        service = self._service(card)
+        return {
+            "tenant_id": request.tenant_id,
+            "record_id": card.id,
+            "display_title": card.title,
+            "semantic_type": self._semantic_type(card),
+            "owner_service_id": service,
+            "service_id": service,
+            "lifecycle_status": card.status.value,
+            "truth_state": "current",
+            "visibility": {
+                "state": "visible",
+                "authorization": "authorized",
+                "policy_decision_ref": owner_policy_revision,
+            },
+            "dates": self._unknown_dates(),
+            "explicit_progress": None,
+            "source_watermarks": [{"source": "skcoord.card_store", "value": card_revision}],
+            "evidence_refs": [f"skcoord.card_store:{card.id}"],
+        }
+
+    @staticmethod
+    def _dependencies(cards, included_ids, request):
+        status_by_id = {card.id: card.status.value for card in cards}
+        edges = []
+        for card in cards:
+            if card.id not in included_ids:
+                continue
+            for target in sorted(set(card.dependencies) & included_ids):
+                digest = hashlib.sha256(f"{card.id}\0{target}".encode()).hexdigest()
+                edges.append(
+                    {
+                        "tenant_id": request.tenant_id,
+                        "dependency_id": f"dependency:sha256:{digest}",
+                        "source_item_id": card.id,
+                        "target_item_id": target,
+                        "edge_type": "finish_to_start",
+                        "direction": "known",
+                        "lag_seconds": 0,
+                        "truth_state": "current",
+                        "visibility": {
+                            "state": "visible",
+                            "authorization": "authorized",
+                        },
+                        "blocker_state": (
+                            "not_blocking" if status_by_id[target] == "done" else "blocking"
+                        ),
+                        "evidence_refs": [f"skcoord.card_store:{card.id}#dependency"],
+                    }
+                )
+        return edges
+
+    def _now(self):
+        value = self._clock()
+        if (
+            not isinstance(value, datetime)
+            or value.tzinfo is None
+            or value.utcoffset() != timezone.utc.utcoffset(value)
+        ):
+            raise ValueError("schedule source clock must use UTC")
+        return value.astimezone(timezone.utc)
 
 
 class _LiveOwnerPolicyProvider:
@@ -333,7 +578,12 @@ def compose_live_control_plane(
     if clock is not None:
         schedule_options["clock"] = clock
     schedule_provider = ScheduleProjectionProvider(
-        _UnavailableScheduleSource(),
+        AuthorizedCardScheduleSource(
+            owner_policy_backend,
+            store_factory,
+            config.tenant_id,
+            clock=clock,
+        ),
         **schedule_options,
     )
 
@@ -388,6 +638,7 @@ __all__ = [
     "AUDIENCE",
     "AUTHENTICATED_TARGETS",
     "CAPABILITY",
+    "AuthorizedCardScheduleSource",
     "LiveControlPlaneComposition",
     "LiveControlPlaneConfig",
     "InProcessOperatorBridge",
