@@ -10,6 +10,7 @@ import os
 import stat
 from copy import deepcopy
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -31,6 +32,10 @@ from .runtime_boundary import ALLOWED_BIND_HOSTS
 HSTS_POLICY = "max-age=31536000"
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
+BUILD_INFO_SCHEMA = "skdashboard.build-info/v1"
+BUILD_VALUE_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
+)
 READ_ONLY_STATIC_ASSETS = frozenset(
     {
         "css/ai.css",
@@ -134,6 +139,39 @@ def _secure_host_only_cookie(value: bytes) -> bytes:
     if not any(part.lower() == "secure" for part in attributes):
         attributes.append("Secure")
     return "; ".join([parts[0], *attributes]).encode("latin-1")
+
+
+def _bounded_build_value(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if (
+        not candidate
+        or len(candidate) > 128
+        or any(c not in BUILD_VALUE_CHARACTERS for c in candidate)
+    ):
+        return "unavailable"
+    return candidate
+
+
+def _build_information() -> dict[str, str]:
+    try:
+        package_version = _bounded_build_value(metadata.version("skdashboard"))
+    except metadata.PackageNotFoundError:
+        package_version = "unavailable"
+    source_commit = _bounded_build_value(os.environ.get("SKDASHBOARD_SOURCE_COMMIT"))
+    if source_commit != "unavailable":
+        if len(source_commit) < 7 or any(c not in "0123456789abcdefABCDEF" for c in source_commit):
+            source_commit = "unavailable"
+        else:
+            source_commit = source_commit.lower()[:12]
+    return {
+        "schema_version": BUILD_INFO_SCHEMA,
+        "application": "SKDashboard",
+        "package_version": package_version,
+        "source_commit": source_commit,
+        "release_identifier": _bounded_build_value(
+            os.environ.get("SKDASHBOARD_RELEASE_IDENTIFIER")
+        ),
+    }
 
 
 def _safe_identity(value) -> tuple[int, ...]:
@@ -282,7 +320,9 @@ def create_read_only_app(
 
     def redirect(location: str):
         async def serve(_request):
-            return RedirectResponse(location, status_code=307, headers={"Cache-Control": "no-store"})
+            return RedirectResponse(
+                location, status_code=307, headers={"Cache-Control": "no-store"}
+            )
 
         return serve
 
@@ -346,6 +386,9 @@ def create_read_only_app(
             }
         )
 
+    async def build_information(_request):
+        return JSONResponse(_build_information(), headers={"Cache-Control": "no-store"})
+
     routes = [
         Route("/", index),
         Route("/control-plane/now", page("overview.html")),
@@ -365,6 +408,7 @@ def create_read_only_app(
         Route("/control-plane/ai", page("ai.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
+        Route("/api/v1/build-info", build_information),
         Route("/.well-known/skworld-module.json", manifest),
     ]
     routes.extend(

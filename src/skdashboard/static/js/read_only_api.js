@@ -32,3 +32,29 @@ export function timeShort(timestamp) {
     return "";
   }
 }
+
+export async function renderBuildBadge() {
+  const navigation = document.querySelector(".topbar, .sidebar");
+  if (!navigation) return;
+  const badge = document.createElement("span");
+  badge.id = "build-version";
+  badge.className = "build-badge mono";
+  badge.setAttribute("role", "status");
+  badge.textContent = "Version unavailable";
+  navigation.querySelector(".live")?.before(badge);
+  try {
+    const info = await getJSON("/api/v1/build-info");
+    const fields = [info.package_version, info.source_commit, info.release_identifier];
+    if (
+      info.schema_version !== "skdashboard.build-info/v1" ||
+      info.application !== "SKDashboard" ||
+      fields.some((value) => typeof value !== "string" || !value || value === "unavailable")
+    ) return;
+    badge.textContent = `${info.application} ${info.package_version} | ${info.source_commit} | ${info.release_identifier}`;
+    badge.setAttribute("aria-label", `Deployed ${badge.textContent}`);
+  } catch (_error) {
+    // The initialized fallback is deliberately honest when runtime metadata is unavailable.
+  }
+}
+
+if (typeof document !== "undefined") void renderBuildBadge();
