@@ -46,10 +46,10 @@ def test_public_metadata_is_pypi_safe_and_exact_qualification_pin_is_retained() 
     lines = PYPROJECT.read_text(encoding="utf-8").splitlines()
     requirements = [line.strip().rstrip(",") for line in lines if line.lstrip().startswith('"')]
 
-    assert '"capauth>=0.3.9"' in requirements
+    assert '"capauth>=0.3.9.dev50"' in requirements
     assert '"skcoord>=0.1.55"' in requirements
     assert not [line for line in requirements if " @ " in line]
     assert QUALIFIED_REQUIREMENTS.read_text(encoding="utf-8").splitlines()[-1] == (
         "capauth @ git+https://github.com/smilinTux/capauth.git"
-        "@6f144ef2d324d35f68567bf72ab2376715318a67"
+        "@222ffe76b309c4415b488209da6e4b2c27cc7335"
     )
