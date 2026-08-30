@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from skcoord.card_store import CardCore, CardStore
 
 from skdashboard import consent
 
@@ -317,7 +318,11 @@ def test_record_and_query_change_consent_round_trip(home):
 def test_queue_ai_pep_persists_consent_granted(home, monkeypatch):
     from skdashboard.dashboard import create_app
 
-    def _fake_request_run(home, card_id, instruction, agent="lumina", mode="propose", requester="operator"):
+    CardStore(home).create(CardCore(id="task-42", title="seeded"))
+
+    def _fake_request_run(
+        home, card_id, instruction, agent="lumina", mode="propose", requester="operator"
+    ):
         return {"ok": True, "run_id": "run-fake", "card_id": card_id, "state": "queued"}
 
     monkeypatch.setattr("skcapstone.agent_run.request_run", _fake_request_run)
@@ -458,6 +463,8 @@ def test_change_consent_query_route_answers_who_and_when(home):
 def test_card_consent_query_route_answers_who_and_when(home, monkeypatch):
     from skdashboard.dashboard import create_app
 
+    CardStore(home).create(CardCore(id="task-99", title="seeded"))
+
     monkeypatch.setattr(
         "skcapstone.agent_run.request_run",
         lambda home, card_id, instruction, agent="lumina", mode="propose", requester="operator": {
@@ -543,7 +550,9 @@ def test_consent_events_fold_converges_regardless_of_writer_arrival_order(tmp_pa
     store2 = _build_store(tmp_path / "node2", [(actor_b, event_b), (actor_a, event_a)])
 
     def _consent_events(store):
-        return [e for e in store._read_events(card_id) if e.get("action") == consent.CONSENT_ACTION]
+        return [
+            e for e in store._read_events(card_id) if e.get("action") == consent.CONSENT_ACTION
+        ]
 
     def _fingerprint(events):
         return [(e["actor"]["id"], e["ts"]) for e in events]
@@ -609,7 +618,9 @@ def test_change_consent_events_fold_converges_regardless_of_writer_arrival_order
         core_path.parent.mkdir(parents=True, exist_ok=True)
         core_path.write_text(core, encoding="utf-8")
         for actor, event in write_order:
-            mgr._append_event(mgr.changes_dir, change_id, actor["id"], consent.CONSENT_ACTION, **event)
+            mgr._append_event(
+                mgr.changes_dir, change_id, actor["id"], consent.CONSENT_ACTION, **event
+            )
         return mgr
 
     mgr1 = _build_mgr(tmp_path / "node1", [(actor_a, event_a), (actor_b, event_b)])
