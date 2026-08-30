@@ -467,26 +467,52 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     tmp_path,
 ) -> None:
     board = "https://legacy.example/explicit-board"
+    legacy_origin = "https://legacy.example"
+    legacy_paths = (
+        "/cockpit",
+        "/cmdb",
+        "/board",
+        "/assistant",
+        "/trust",
+        "/models",
+        "/economy",
+        "/fleet",
+    )
     app = create_read_only_app(tmp_path, legacy_board_url=board)
     client = TestClient(app, base_url=ORIGIN)
 
-    now = client.get("/control-plane/now")
-    portfolio = client.get("/control-plane/portfolio")
-    schedule = client.get("/control-plane/schedule")
+    pages = {
+        name: client.get(f"/control-plane/{name}")
+        for name in (
+            "now",
+            "portfolio",
+            "schedule",
+            "reliability",
+            "architecture",
+            "ai",
+            "governance",
+            "reports",
+        )
+    }
     css = client.get("/static/css/overview.css")
     javascript = client.get("/static/js/overview.js")
-    assert (
-        now.status_code == portfolio.status_code == schedule.status_code == css.status_code == 200
-    )
-    assert "<h2>Now</h2>" in now.text
-    assert "Portfolio" in portfolio.text
-    assert "Schedule" in schedule.text
-    assert f'href="{board}"' in now.text
-    assert f'href="{board}"' in portfolio.text
-    assert f'href="{board}"' in schedule.text
-    assert 'href="/board"' not in now.text + portfolio.text + schedule.text
+    assert all(response.status_code == 200 for response in pages.values())
+    assert css.status_code == 200
+    assert "<h2>Now</h2>" in pages["now"].text
+    assert "Portfolio" in pages["portfolio"].text
+    assert "Schedule" in pages["schedule"].text
+    for response in pages.values():
+        for path in legacy_paths:
+            expected = board if path == "/board" else f"{legacy_origin}{path}"
+            assert f'href="{expected}"' in response.text
+            assert f'href="{path}"' not in response.text
+    for asset in ("overview.js", "projects.js"):
+        rewritten = client.get(f"/static/js/{asset}")
+        for path in legacy_paths:
+            assert f'href="{path}"' not in rewritten.text
     assert board in javascript.text
-    assert 'href="/board"' not in javascript.text
+    assert f'href="{legacy_origin}/cockpit"' in javascript.text
+    assert f'href="{legacy_origin}/cmdb"' in javascript.text
     for asset in ("overview.js", "projects.js", "schedule.js"):
         script = client.get(f"/static/js/{asset}")
         assert script.status_code == 200

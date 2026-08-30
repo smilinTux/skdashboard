@@ -49,6 +49,16 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "js/schedule.js",
     }
 )
+LEGACY_RUNTIME_PATHS = (
+    "/cockpit",
+    "/cmdb",
+    "/board",
+    "/assistant",
+    "/trust",
+    "/models",
+    "/economy",
+    "/fleet",
+)
 
 
 class CallbackAccessLogFilter(logging.Filter):
@@ -240,12 +250,22 @@ def create_read_only_app(
             or parsed_board_url.fragment
         ):
             raise ValueError("legacy board URL must be a credential-free exact HTTPS URL")
+        legacy_runtime_urls = {
+            path: (
+                legacy_board_url
+                if path == "/board"
+                else f"{parsed_board_url.scheme}://{parsed_board_url.netloc}{path}"
+            )
+            for path in LEGACY_RUNTIME_PATHS
+        }
+    else:
+        legacy_runtime_urls = {}
 
     def page(name: str):
         async def serve(_request):
             html = (static_dir / name).read_text(encoding="utf-8")
-            if legacy_board_url is not None:
-                html = html.replace('href="/board"', f'href="{legacy_board_url}"')
+            for path, url in legacy_runtime_urls.items():
+                html = html.replace(f'href="{path}"', f'href="{url}"')
             return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
         return serve
@@ -283,11 +303,8 @@ def create_read_only_app(
                     'import { openCard, initPanel } from "./editor.js";',
                     "const openCard = () => {};\nconst initPanel = () => {};",
                 )
-            if legacy_board_url is not None and relative in {
-                "js/overview.js",
-                "js/projects.js",
-            }:
-                javascript = javascript.replace('"/board"', json.dumps(legacy_board_url))
+            for path, url in legacy_runtime_urls.items():
+                javascript = javascript.replace(json.dumps(path), json.dumps(url))
             return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
 
