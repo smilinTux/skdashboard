@@ -196,6 +196,7 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     tmp_path,
 ) -> None:
     board = "https://legacy.example/explicit-board"
+    board_origin = "https://legacy.example"
     app = create_read_only_app(tmp_path, legacy_board_url=board)
     client = TestClient(app, base_url=ORIGIN)
 
@@ -210,11 +211,23 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     assert "<h2>Now</h2>" in now.text
     assert "Portfolio" in portfolio.text
     assert "Schedule" in schedule.text
-    assert f'href="{board}"' in now.text
-    assert f'href="{board}"' in portfolio.text
-    assert f'href="{board}"' in schedule.text
+    # Legacy links are rewritten to the configured origin, not the full board URL
+    for path in (
+        "/cockpit",
+        "/cmdb",
+        "/board",
+        "/assistant",
+        "/trust",
+        "/models",
+        "/economy",
+        "/fleet",
+    ):
+        assert f'href="{board_origin}{path}"' in now.text
+        assert f'href="{board_origin}{path}"' in portfolio.text
+        assert f'href="{board_origin}{path}"' in schedule.text
     assert 'href="/board"' not in now.text + portfolio.text + schedule.text
-    assert board in javascript.text
+    assert board_origin in javascript.text
+    assert f'"{board_origin}/board"' in javascript.text
     assert 'href="/board"' not in javascript.text
     for asset in ("overview.js", "projects.js", "schedule.js"):
         script = client.get(f"/static/js/{asset}")

@@ -19,6 +19,21 @@ from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 HSTS_POLICY = "max-age=31536000"
+
+# Eight legacy sidebar destinations that route to the configured legacy runtime
+LEGACY_PATHS = frozenset(
+    {
+        "/cockpit",
+        "/cmdb",
+        "/board",
+        "/assistant",
+        "/trust",
+        "/models",
+        "/economy",
+        "/fleet",
+    }
+)
+
 READ_ONLY_STATIC_ASSETS = frozenset(
     {
         "css/board.css",
@@ -104,6 +119,47 @@ def _secure_host_only_cookie(value: bytes) -> bytes:
     return "; ".join([parts[0], *attributes]).encode("latin-1")
 
 
+def _validate_and_extract_legacy_origin(url: str | None) -> str | None:
+    """Validate and extract the origin from a legacy board URL.
+
+    Returns the origin (scheme://netloc) if valid, None otherwise.
+    Rejects URLs that:
+    - Are not HTTPS
+    - Contain credentials (user:pass@)
+    - Have a query string
+    - Have a fragment
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return None
+    if parsed.scheme != "https":
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if parsed.query:
+        return None
+    if parsed.fragment:
+        return None
+    # Return only the origin (scheme + netloc)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _rewrite_legacy_links(html: str, legacy_origin: str | None) -> str:
+    """Rewrite legacy sidebar links to use the configured legacy origin.
+
+    Preserves labels, order, active state, and query behavior.
+    Only rewrites the eight legacy paths in LEGACY_PATHS.
+    """
+    if not legacy_origin:
+        return html
+    for path in LEGACY_PATHS:
+        html = html.replace(f'href="{path}"', f'href="{legacy_origin}{path}"')
+    return html
+
+
 def create_read_only_app(
     home: Path,
     *,
@@ -141,23 +197,17 @@ def create_read_only_app(
 
         report_provider = ReportProjectionProvider()
 
-    if legacy_board_url is not None:
-        parsed_board_url = urlsplit(legacy_board_url)
-        if (
-            parsed_board_url.scheme != "https"
-            or not parsed_board_url.netloc
-            or parsed_board_url.username is not None
-            or parsed_board_url.password is not None
-            or parsed_board_url.query
-            or parsed_board_url.fragment
-        ):
-            raise ValueError("legacy board URL must be a credential-free exact HTTPS URL")
+    # Validate and extract legacy origin before startup
+    legacy_origin = _validate_and_extract_legacy_origin(legacy_board_url)
+    if legacy_board_url and not legacy_origin:
+        raise ValueError(
+            "--legacy-board-url must be HTTPS, without credentials, query string, or fragment"
+        )
 
     def page(name: str):
         async def serve(_request):
             html = (static_dir / name).read_text(encoding="utf-8")
-            if legacy_board_url is not None:
-                html = html.replace('href="/board"', f'href="{legacy_board_url}"')
+            html = _rewrite_legacy_links(html, legacy_origin)
             return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
         return serve
@@ -186,8 +236,8 @@ def create_read_only_app(
                     'import { openCard, initPanel } from "./editor.js";',
                     "const openCard = () => {};\nconst initPanel = () => {};",
                 )
-            if legacy_board_url is not None and relative in {"js/overview.js", "js/projects.js"}:
-                javascript = javascript.replace('"/board"', json.dumps(legacy_board_url))
+            if legacy_origin is not None and relative in {"js/overview.js", "js/projects.js"}:
+                javascript = javascript.replace('"/board"', json.dumps(f"{legacy_origin}/board"))
             return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
 
@@ -203,6 +253,7 @@ def create_read_only_app(
                 "nav": {"icon": "dashboard", "order": 40, "label": "Control Plane"},
                 "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
                 "health": f"{base}/api/v1/health",
+                "legacyOrigin": legacy_origin,
             }
         )
 
@@ -314,6 +365,12 @@ def main(argv: list[str] | None = None) -> None:
 
     app_options = {"session_adapter": session_adapter}
     if all(live_values):
+        # Validate and extract legacy origin for live composition
+        legacy_origin = _validate_and_extract_legacy_origin(args.legacy_board_url)
+        if args.legacy_board_url and not legacy_origin:
+            parser.error(
+                "--legacy-board-url must be HTTPS, without credentials, query string, or fragment"
+            )
         from importlib import import_module
 
         from skcoord.card_store import CardStore
@@ -350,7 +407,7 @@ def main(argv: list[str] | None = None) -> None:
             invocation_factory=composition.invocation_factory,
             project_provider=composition.project_provider,
             session_capability_issuer=composition.session_capability_issuer,
-            legacy_board_url=composition.legacy_board_url,
+            legacy_board_url=legacy_origin,
             schedule_provider=None,
             schedule_forecast_provider=None,
         )
@@ -384,7 +441,10 @@ __all__ = [
     "ALLOWED_BROWSER_ORIGINS",
     "CallbackAccessLogFilter",
     "HSTS_POLICY",
+    "LEGACY_PATHS",
     "SecureTransportMiddleware",
+    "_rewrite_legacy_links",
+    "_validate_and_extract_legacy_origin",
     "create_read_only_app",
     "main",
 ]
