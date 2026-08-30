@@ -214,8 +214,9 @@ and then cuts the next patch tag. The same gated workflow checks out that exact 
 verifies its main ancestry and release version, builds it, and uploads it through PyPI
 Trusted Publishing. There is no manual dispatch or off-main override.
 
-Public metadata depends on `capauth>=0.3.8`. To reproduce the exact reviewed CapAuth
-source stack from a repository checkout, apply the separate operator constraint:
+Public metadata depends on `capauth>=0.3.9` and `skcoord>=0.1.55`. To reproduce the
+exact reviewed CapAuth source stack from a repository checkout, apply the separate
+operator constraint:
 
 ```bash
 python -m pip install -c requirements-qualified.txt .

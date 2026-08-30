@@ -43,6 +43,13 @@ class Tokens:
         self.revoked = refresh_token
 
 
+class SubjectTokens(Tokens):
+    async def exchange(self, values, *, expected_nonce=None):
+        token = await super().exchange(values, expected_nonce=expected_nonce)
+        token["_verified_subject"] = "operator@example.test"
+        return token
+
+
 def adapter(tmp_path: Path, clock=lambda: 1_000, tokens=None):
     key = tmp_path / "session.key"
     key.write_bytes(Fernet.generate_key())
@@ -205,12 +212,60 @@ def test_session_capability_issuer_rejects_browser_bearer_and_absent_session(tmp
         ),
         base_url=ORIGIN,
     )
-    assert client.get(
-        "/api/v1/overview",
-        headers={"Origin": ORIGIN, "Authorization": "Bearer browser-token"},
-    ).status_code == 401
+    assert (
+        client.get(
+            "/api/v1/overview",
+            headers={"Origin": ORIGIN, "Authorization": "Bearer browser-token"},
+        ).status_code
+        == 401
+    )
     assert client.get("/api/v1/overview", headers={"Origin": ORIGIN}).status_code == 401
     assert minted == []
+
+
+def test_control_plane_bridge_persists_only_an_opaque_handle(tmp_path):
+    class Bridge:
+        def enroll(self, subject, origin):
+            assert subject == "operator@example.test"
+            assert origin == ORIGIN
+            return "opaque-control-plane-handle-" + "a" * 32
+
+        def request(self, handle, _request):
+            assert handle == "opaque-control-plane-handle-" + "a" * 32
+            return object()
+
+        def discard(self, _handle):
+            return None
+
+    session = adapter(tmp_path, tokens=SubjectTokens())
+    session.control_plane_bridge = Bridge()
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    login(client)
+    handle = client.cookies.get(COOKIE_NAME)
+    with session._connect() as connection:
+        row = connection.execute(
+            "SELECT encrypted FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+        ).fetchone()
+    record = session._open(row["encrypted"])
+
+    assert record["control_plane_session"] == "opaque-control-plane-handle-" + "a" * 32
+    assert isinstance(record["control_plane_session"], str)
+
+
+def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
+    class UnsafeBridge:
+        def enroll(self, *_args):
+            return {"cookie": "raw-cookie", "csrf": "raw-csrf", "device": "raw-device"}
+
+    session = adapter(tmp_path, tokens=SubjectTokens())
+    session.control_plane_bridge = UnsafeBridge()
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    _query, response = login(client)
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "authentication_unavailable"
 
 
 def test_legacy_refresh_reservation_without_timestamp_is_recovered(tmp_path):
@@ -326,7 +381,10 @@ def test_logout_requires_upstream_revocation(tmp_path):
     client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
     login(client)
     csrf = client.get("/auth/session").json()["csrf_token"]
-    assert client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}).status_code == 204
+    assert (
+        client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}).status_code
+        == 204
+    )
     assert tokens.revoked == "refresh-1"
 
 
@@ -401,7 +459,11 @@ def test_oidc_http_failure_keeps_only_allowlisted_detail(monkeypatch, detail, ex
 
 @pytest.mark.parametrize(
     ("failure", "category"),
-    [("tls", "tls_unavailable"), ("network", "network_unavailable"), ("timeout", "upstream_timeout")],
+    [
+        ("tls", "tls_unavailable"),
+        ("network", "network_unavailable"),
+        ("timeout", "upstream_timeout"),
+    ],
 )
 def test_oidc_transport_failures_are_distinct(monkeypatch, failure, category):
     real_client = httpx.AsyncClient
@@ -493,9 +555,7 @@ def test_oidc_uses_capauth_idp_discovery_not_legacy_pgp_discovery(monkeypatch):
     monkeypatch.setattr(jwt, "decode", lambda *_args, **_kwargs: {"nonce": "n"})
 
     client = OIDCClient(SessionConfig(issuer, f"{ORIGIN}/auth/callback", "s"))
-    result = asyncio.run(
-        client.exchange({"grant_type": "authorization_code"}, expected_nonce="n")
-    )
+    result = asyncio.run(client.exchange({"grant_type": "authorization_code"}, expected_nonce="n"))
 
     assert result == {"id_token": "opaque"}
     assert "/oidc/.well-known/openid-configuration" in requested_paths
@@ -505,9 +565,7 @@ def test_oidc_uses_capauth_idp_discovery_not_legacy_pgp_discovery(monkeypatch):
 def test_callback_returns_reference_and_logs_only_safe_denial(tmp_path, caplog):
     class DeniedTokens(Tokens):
         async def exchange(self, values, *, expected_nonce=None):
-            raise OIDCExchangeError(
-                "upstream_denied", status_code=403, detail="grant_not_current"
-            )
+            raise OIDCExchangeError("upstream_denied", status_code=403, detail="grant_not_current")
 
     session = adapter(tmp_path, tokens=DeniedTokens())
     client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)

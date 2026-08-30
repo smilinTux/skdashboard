@@ -1,16 +1,12 @@
 """Production-safe composition for the authenticated read-only control plane.
 
-This module deliberately contains no signing implementation.  It can only ask an
-independently administered Unix-socket issuer for one request-bound capability.
+Signing stays behind the injected host-local credential signer. Request-bound
+capability material remains inside the in-process issuer factory.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 import secrets
-import stat
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -36,7 +32,7 @@ from skcoord.authorized_card_policy import (
     FileAuthorizedCardPolicyBackend,
 )
 
-from .control_plane_api import ALLOWED_BROWSER_ORIGINS, MAX_BEARER_BYTES
+from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .dashboard_schedule import ScheduleProjectionProvider
 
 NODE_ID = "chiap08"
@@ -47,19 +43,17 @@ TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
 AUTHENTICATED_TARGETS = frozenset({TARGET, SCHEDULE_TARGET})
 RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
-MAX_ISSUER_MESSAGE_BYTES = MAX_BEARER_BYTES + 16 * 1024
+MAX_OPERATOR_PROOFS = 1024
 
 
 @dataclass(frozen=True)
 class LiveControlPlaneConfig:
     """Non-secret exact bindings for one deployed read-only composition."""
 
-    issuer_socket: Path
     legacy_board_url: str
     resource_id: str
     owner_policy_revision: str
     tenant_id: str
-    issuer_uid: int = os.getuid()
     capability_ttl_seconds: int = 300
 
     def __post_init__(self) -> None:
@@ -90,98 +84,6 @@ class LiveControlPlaneConfig:
             raise ValueError("capability TTL must be between 1 and 300 seconds")
 
 
-class EphemeralIssuerClient:
-    """Request one bearer over a permission-restricted local Unix socket.
-
-    The client has no credential cache and returns no object capable of signing.
-    One invocation opens one connection, sends one bounded request, receives one
-    bounded response, closes the connection, and forgets the response after its
-    caller finishes authorization.
-    """
-
-    __slots__ = ("_config",)
-
-    def __init__(self, config: LiveControlPlaneConfig) -> None:
-        self._config = config
-
-    def _validate_socket(self) -> None:
-        status = self._config.issuer_socket.stat(follow_symlinks=False)
-        if not stat.S_ISSOCK(status.st_mode):
-            raise ConnectionError("issuer channel is unavailable")
-        if status.st_uid != self._config.issuer_uid or status.st_mode & 0o007:
-            raise PermissionError("issuer channel permissions are invalid")
-
-    async def __call__(self, request, session, capability: str, target: str) -> str:
-        if capability != CAPABILITY or target not in AUTHENTICATED_TARGETS:
-            raise PermissionError("issuer request binding is not approved")
-        if request.method != "GET" or request.url.path != target:
-            raise PermissionError("issuer request method or target is not approved")
-        origin = request.headers.get("origin")
-        if origin not in ALLOWED_BROWSER_ORIGINS:
-            raise PermissionError("issuer request origin is not approved")
-        credential = getattr(session, "access_token", None)
-        if not isinstance(credential, str) or not credential:
-            raise PermissionError("authenticated session credential is unavailable")
-        self._validate_socket()
-        payload = {
-            "schema_version": "skdashboard-issuer-request/v1",
-            "request_id": request.headers.get("x-request-id", "")[:128] or uuid4().hex,
-            "session_credential": credential,
-            "node_id": NODE_ID,
-            "purpose": PURPOSE,
-            "audience": AUDIENCE,
-            "capability": CAPABILITY,
-            "target": target,
-            "resource_type": RESOURCE_TYPE,
-            "resource_id": self._config.resource_id,
-            "owner_policy_revision": self._config.owner_policy_revision,
-            "origin": origin,
-            "ttl_seconds": self._config.capability_ttl_seconds,
-            "use_limit": 1,
-            "store": False,
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-        if len(encoded) > MAX_ISSUER_MESSAGE_BYTES:
-            raise ValueError("issuer request exceeds the safe bound")
-        reader = writer = None
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(self._config.issuer_socket)), timeout=2
-            )
-            writer.write(encoded)
-            await asyncio.wait_for(writer.drain(), timeout=2)
-            response = await asyncio.wait_for(reader.readline(), timeout=2)
-            if (
-                not response
-                or len(response) > MAX_ISSUER_MESSAGE_BYTES
-                or not response.endswith(b"\n")
-            ):
-                raise ConnectionError("issuer response is unavailable")
-            decoded = json.loads(response)
-            if set(decoded) != {"schema_version", "bearer"}:
-                raise ValueError("issuer response is malformed")
-            bearer = decoded["bearer"]
-            if (
-                decoded["schema_version"] != "skdashboard-issuer-response/v1"
-                or not isinstance(bearer, str)
-                or not bearer
-                or not bearer.isascii()
-                or len(bearer.encode()) > MAX_BEARER_BYTES
-                or bearer == credential
-            ):
-                raise ValueError("issuer response is malformed")
-            return bearer
-        finally:
-            if writer is not None:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-            reader = None
-            credential = None
-
-
 @dataclass(frozen=True)
 class LiveControlPlaneComposition:
     """The exact components injected into the read-only application."""
@@ -190,7 +92,6 @@ class LiveControlPlaneComposition:
     invocation_factory: object
     project_provider: AuthorizedCardPolicyProvider
     schedule_provider: ScheduleProjectionProvider
-    session_capability_issuer: object | None
     session_authorizer: object | None
     legacy_board_url: str
 
@@ -214,10 +115,17 @@ class _InjectedCapabilityIssuer:
         )
 
 
+class _UnavailableSessionAuthorizer:
+    """Keep incomplete compositions fail closed without a bearer fallback."""
+
+    def __call__(self, *_args, **_kwargs):
+        return None
+
+
 class InProcessOperatorBridge:
     """Bind a validated browser login to atomic in-process authorization."""
 
-    __slots__ = ("_config", "_factories", "_revisions", "_sessions")
+    __slots__ = ("_config", "_factories", "_proofs", "_revisions", "_sessions")
 
     def __init__(
         self,
@@ -230,6 +138,7 @@ class InProcessOperatorBridge:
     ) -> None:
         issuer = _InjectedCapabilityIssuer(signer, clock=clock)
         self._config = config
+        self._proofs: dict[str, tuple[str, str, str]] = {}
         self._sessions = sessions
         self._revisions = revisions
         self._factories = {
@@ -255,7 +164,7 @@ class InProcessOperatorBridge:
             for target in AUTHENTICATED_TARGETS
         }
 
-    def enroll(self, subject: str, origin: str) -> dict[str, str]:
+    def enroll(self, subject: str, origin: str) -> str:
         if (
             not isinstance(subject, str)
             or not subject.isascii()
@@ -278,20 +187,32 @@ class InProcessOperatorBridge:
             idle_seconds=30 * 60,
         )
         cookie, csrf = material.take()
-        return {"cookie": cookie, "csrf": csrf, "device": device}
+        if len(self._proofs) >= MAX_OPERATOR_PROOFS:
+            self._proofs.pop(next(iter(self._proofs)))
+        handle = secrets.token_urlsafe(32)
+        self._proofs[handle] = (cookie, csrf, device)
+        return handle
 
-    def request(self, record: dict, request) -> InProcessIssuerRequest:
-        if set(record) != {"cookie", "csrf", "device"}:
+    def request(self, handle: str, request) -> InProcessIssuerRequest:
+        if not isinstance(handle, str) or not handle.isascii():
             raise PermissionError("operator session material is unavailable")
+        proof = self._proofs.get(handle)
+        if proof is None:
+            raise PermissionError("operator session material is unavailable")
+        cookie, csrf, device = proof
         nonce = request.headers.get("x-request-id", "")[:256]
         if len(nonce) < 16:
             nonce = secrets.token_hex(16)
         return InProcessIssuerRequest(
-            session_cookie=record["cookie"],
-            csrf_token=record["csrf"],
+            session_cookie=cookie,
+            csrf_token=csrf,
             request_nonce=nonce,
-            device_fingerprint=record["device"],
+            device_fingerprint=device,
         )
+
+    def discard(self, handle: str) -> None:
+        if isinstance(handle, str):
+            self._proofs.pop(handle, None)
 
     def __call__(
         self,
@@ -443,8 +364,7 @@ def compose_live_control_plane(
         value is not None for value in in_process_values
     ):
         raise ValueError("in-process authorization components must be supplied together")
-    session_authorizer = None
-    session_capability_issuer = EphemeralIssuerClient(config)
+    session_authorizer = _UnavailableSessionAuthorizer()
     if all(value is not None for value in in_process_values):
         session_authorizer = InProcessOperatorBridge(
             config=config,
@@ -453,14 +373,12 @@ def compose_live_control_plane(
             signer=credential_signer,
             clock=clock,
         )
-        session_capability_issuer = None
 
     return LiveControlPlaneComposition(
         decision_authorizer=authorizer,
         invocation_factory=invocation_factory,
         project_provider=provider,
         schedule_provider=schedule_provider,
-        session_capability_issuer=session_capability_issuer,
         session_authorizer=session_authorizer,
         legacy_board_url=config.legacy_board_url,
     )
@@ -470,7 +388,6 @@ __all__ = [
     "AUDIENCE",
     "AUTHENTICATED_TARGETS",
     "CAPABILITY",
-    "EphemeralIssuerClient",
     "LiveControlPlaneComposition",
     "LiveControlPlaneConfig",
     "InProcessOperatorBridge",

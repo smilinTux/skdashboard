@@ -143,26 +143,20 @@ def test_unreachable_unknown_and_unauthorized_remain_distinct() -> None:
         ("unauthorized", "unknown", "SOURCE_UNAUTHORIZED", "denied"),
     )
     for failure, truth, code, authorization in cases:
-        item = project_estate(
-            {spec.adapter_id: Reader(failure=failure)}, now=NOW
-        )[0]
+        item = project_estate({spec.adapter_id: Reader(failure=failure)}, now=NOW)[0]
         assert item["truth_state"] == truth
         assert item["errors"][0]["code"] == code
         assert item["visibility"]["authorization"] == authorization
         assert item["truth_state"] != "current"
 
-    unavailable = project_estate(
-        {spec.adapter_id: Reader(failure="unavailable")}, now=NOW
-    )[0]
+    unavailable = project_estate({spec.adapter_id: Reader(failure="unavailable")}, now=NOW)[0]
     assert unavailable["truth_state"] == "unavailable"
     assert unavailable["errors"][0]["code"] == "SOURCE_UNAVAILABLE"
 
 
 def test_sklegal_success_stays_policy_filtered_without_matter_detail() -> None:
     spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
-    reader = aggregate_reader(
-        {field: 1 for field in spec.fields}, observed_at=NOW.isoformat()
-    )
+    reader = aggregate_reader({field: 1 for field in spec.fields}, observed_at=NOW.isoformat())
     item = next(
         value
         for value in project_estate({spec.adapter_id: reader}, now=NOW)
@@ -211,17 +205,20 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         }
 
     stats = Mock(agent_balances={"jarvis": 7}, active_agents=1)
-    with patch("skdashboard.dashboard_itil.get_overview", return_value={
-        "kpis": {"open_incidents": 0, "sev1": 0, "sev2": 0, "awaiting_cab": 0},
-        "activity": [],
-    }), patch("skdashboard.dashboard_cmdb.get_overview", return_value=cmdb), patch(
-        "skdashboard.dashboard_fleet.get_drift", return_value=fleet
-    ), patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage), patch(
-        "skcapstone.skjoule.JouleEngine.get_network_stats", return_value=stats
+    with (
+        patch(
+            "skdashboard.dashboard_itil.get_overview",
+            return_value={
+                "kpis": {"open_incidents": 0, "sev1": 0, "sev2": 0, "awaiting_cab": 0},
+                "activity": [],
+            },
+        ),
+        patch("skdashboard.dashboard_cmdb.get_overview", return_value=cmdb),
+        patch("skdashboard.dashboard_fleet.get_drift", return_value=fleet),
+        patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage),
+        patch("skcapstone.skjoule.JouleEngine.get_network_stats", return_value=stats),
     ):
-        local = _local_readers(
-            tmp_path, board_data=board, default_observed_at=NOW.isoformat()
-        )
+        local = _local_readers(tmp_path, board_data=board, default_observed_at=NOW.isoformat())
         new_adapter_ids = {
             "skcapstone.service_release",
             "skperf.aggregate",
@@ -313,9 +310,7 @@ def test_query_timeout_returns_within_declared_budget() -> None:
     elapsed = time.monotonic() - started
     assert elapsed < 1.4
 
-    item = project_estate(
-        {SPECS[0].adapter_id: Reader(failure="timeout")}, now=NOW
-    )[0]
+    item = project_estate({SPECS[0].adapter_id: Reader(failure="timeout")}, now=NOW)[0]
     assert item["truth_state"] == "unavailable"
     assert item["errors"][0]["code"] == "SOURCE_TIMEOUT"
 
@@ -326,12 +321,10 @@ def test_empty_or_malformed_owner_folds_never_become_current_zero(tmp_path: Path
         "errors": [],
     }
     with patch("skdashboard.dashboard_fleet.get_drift", return_value=empty_fleet):
-        local = _local_readers(
-            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
-        )["skcapstone.fleet"]
-        items = project_estate(
-            {"skcapstone.fleet": Reader(payload=local())}, now=NOW
-        )
+        local = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
+            "skcapstone.fleet"
+        ]
+        items = project_estate({"skcapstone.fleet": Reader(payload=local())}, now=NOW)
     fleet = next(item for item in items if item["adapter_id"] == "skcapstone.fleet")
     assert fleet["truth_state"] == "unknown"
     assert fleet["truth_state"] != "current"
@@ -362,11 +355,7 @@ def test_http_timeout_is_bounded_and_projection_clock_follows_source_clock() -> 
     assert item["errors"][0]["code"] == "SOURCE_TIMEOUT"
 
     item = project_estate(
-        {
-            SPECS[0].adapter_id: aggregate_reader(
-                {field: 1 for field in SPECS[0].fields}
-            )
-        }
+        {SPECS[0].adapter_id: aggregate_reader({field: 1 for field in SPECS[0].fields})}
     )[0]
     observed = datetime.fromisoformat(item["observed_at"].replace("Z", "+00:00"))
     projected = datetime.fromisoformat(item["projected_at"].replace("Z", "+00:00"))
@@ -637,18 +626,18 @@ def test_capauth_policy_adapter_reads_sanitized_estate(tmp_path: Path) -> None:
     estate_data = {
         "version": 1,
         "identities": [
-                {
-                    "fingerprint": "A" * 40,
-                    "status": "active",
-                    "identity_type": "human",
-                    "label": "Test Identity",
-                },
-                {
-                    "fingerprint": "B" * 40,
-                    "status": "retired",
-                    "identity_type": "service",
-                    "label": "Retired Identity",
-                },
+            {
+                "fingerprint": "A" * 40,
+                "status": "active",
+                "identity_type": "human",
+                "label": "Test Identity",
+            },
+            {
+                "fingerprint": "B" * 40,
+                "status": "retired",
+                "identity_type": "service",
+                "label": "Retired Identity",
+            },
         ],
     }
     estate_path.write_text(json.dumps(estate_data))
@@ -689,9 +678,9 @@ def test_file_adapters_reject_oversized_sources(
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b" " * (MAX_SOURCE_BYTES + 1))
 
-    reader = _local_readers(
-        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
-    )[adapter_id]
+    reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
+        adapter_id
+    ]
     with pytest.raises(ValueError, match="malformed"):
         reader()
 
@@ -710,14 +699,20 @@ def test_capauth_policy_adapter_fails_closed_on_missing_estate(tmp_path: Path) -
 def test_capauth_rejects_unsupported_manifest_version(tmp_path: Path) -> None:
     estate = tmp_path / "capauth" / "estate.json"
     estate.parent.mkdir(parents=True)
-    estate.write_text(json.dumps({
-        "version": 999,
-        "identities": [{
-            "fingerprint": "A" * 40,
-            "status": "active",
-            "identity_type": "human",
-        }],
-    }))
+    estate.write_text(
+        json.dumps(
+            {
+                "version": 999,
+                "identities": [
+                    {
+                        "fingerprint": "A" * 40,
+                        "status": "active",
+                        "identity_type": "human",
+                    }
+                ],
+            }
+        )
+    )
 
     reader = _local_readers(tmp_path, board_data={})["capauth.policy"]
     with pytest.raises(ValueError, match="malformed"):
@@ -743,14 +738,20 @@ def test_capauth_preserves_permission_denial(tmp_path: Path) -> None:
 def test_capauth_source_mtime_drives_stale_and_future_truth(tmp_path: Path) -> None:
     estate = tmp_path / "capauth" / "estate.json"
     estate.parent.mkdir(parents=True)
-    estate.write_text(json.dumps({
-        "version": 1,
-        "identities": [{
-            "fingerprint": "A" * 40,
-            "status": "active",
-            "identity_type": "human",
-        }],
-    }))
+    estate.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "identities": [
+                    {
+                        "fingerprint": "A" * 40,
+                        "status": "active",
+                        "identity_type": "human",
+                    }
+                ],
+            }
+        )
+    )
     reader = _local_readers(tmp_path, board_data={})["capauth.policy"]
 
     stale_at = NOW - timedelta(seconds=61)
@@ -779,14 +780,20 @@ def test_capauth_rejects_change_during_authoritative_validation(tmp_path: Path) 
 
     estate = tmp_path / "capauth" / "estate.json"
     estate.parent.mkdir(parents=True)
-    estate.write_text(json.dumps({
-        "version": 1,
-        "identities": [{
-            "fingerprint": "A" * 40,
-            "status": "active",
-            "identity_type": "human",
-        }],
-    }))
+    estate.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "identities": [
+                    {
+                        "fingerprint": "A" * 40,
+                        "status": "active",
+                        "identity_type": "human",
+                    }
+                ],
+            }
+        )
+    )
     load = EstateManifest.load
 
     def mutate_after_load(path: Path):
@@ -879,6 +886,7 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
     operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
     if operator_seat_path.exists():
         import shutil
+
         shutil.rmtree(operator_seat_path)
 
     fleet_path = tmp_path / "fleet" / "observations"
@@ -915,9 +923,13 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
 def test_atlas_missing_timestamp_uses_source_mtime(tmp_path: Path) -> None:
     observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
     observations.parent.mkdir(parents=True)
-    observations.write_text(json.dumps({
-        "conditions": [{"status": "Healthy", "ready_for_action": False}],
-    }))
+    observations.write_text(
+        json.dumps(
+            {
+                "conditions": [{"status": "Healthy", "ready_for_action": False}],
+            }
+        )
+    )
     stale_at = NOW - timedelta(seconds=61)
     os.utime(observations, (stale_at.timestamp(), stale_at.timestamp()))
 
@@ -936,6 +948,7 @@ def test_atlas_conditions_adapter_returns_unknown_when_no_observations(tmp_path:
     """Atlas conditions adapter returns unknown or unavailable when no observations file exists."""
     # Clean up any existing observations from previous tests
     import shutil
+
     operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
     fleet_path = tmp_path / "fleet" / "observations"
 
@@ -1093,9 +1106,7 @@ def test_new_adapters_follow_bounded_contract(tmp_path: Path) -> None:
         )
         assert result["schema_version"] == SCHEMA_VERSION
         assert result["adapter_id"] == adapter_id
-        assert result["truth_state"] in {
-            "current", "stale", "partial", "unavailable", "unknown"
-        }
+        assert result["truth_state"] in {"current", "stale", "partial", "unavailable", "unknown"}
         assert result["classification"] in {"internal", "confidential"}
         assert isinstance(result["coverage"], dict)
         assert "expected" in result["coverage"]

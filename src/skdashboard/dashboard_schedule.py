@@ -220,7 +220,11 @@ class ScheduleProjectionProvider:
         if observed is None or projected is None or revision is None or projected < observed:
             raise ValueError
         age = (now - observed).total_seconds()
-        if age < -5 or age > self._max_source_age_seconds or (now - projected).total_seconds() < -5:
+        if (
+            age < -5
+            or age > self._max_source_age_seconds
+            or (now - projected).total_seconds() < -5
+        ):
             raise PermissionError
 
         items = snapshot["items"]
@@ -245,7 +249,9 @@ class ScheduleProjectionProvider:
         )
         projected_overlays = [self._overlay(value, request) for value in overlays]
         cycles = _cycles(projected_dependencies, set(ids))
-        reasons = _critical_path_reasons(projected_items, projected_dependencies, projected_overlays, cycles)
+        reasons = _critical_path_reasons(
+            projected_items, projected_dependencies, projected_overlays, cycles
+        )
 
         scope = {"role": request.role, "tenant_id": request.tenant_id}
         projection = {
@@ -271,7 +277,9 @@ class ScheduleProjectionProvider:
             "cycle_analysis": {
                 "state": "cycles_detected" if cycles else "acyclic",
                 "cycle_item_ids": sorted(cycles),
-                "evidence_refs": [f"schedule://dependency-cycle/{item_id}" for item_id in sorted(cycles)],
+                "evidence_refs": [
+                    f"schedule://dependency-cycle/{item_id}" for item_id in sorted(cycles)
+                ],
             },
             "critical_path": {
                 "state": "unavailable" if reasons else "not_applicable",
@@ -288,9 +296,19 @@ class ScheduleProjectionProvider:
         if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
             raise PermissionError
         required = {
-            "tenant_id", "record_id", "display_title", "semantic_type", "owner_service_id",
-            "service_id", "lifecycle_status", "truth_state", "visibility", "dates",
-            "explicit_progress", "source_watermarks", "evidence_refs",
+            "tenant_id",
+            "record_id",
+            "display_title",
+            "semantic_type",
+            "owner_service_id",
+            "service_id",
+            "lifecycle_status",
+            "truth_state",
+            "visibility",
+            "dates",
+            "explicit_progress",
+            "source_watermarks",
+            "evidence_refs",
         }
         if set(value) != required or value["semantic_type"] not in ITEM_TYPES:
             raise ValueError
@@ -302,7 +320,11 @@ class ScheduleProjectionProvider:
             raise ValueError
         projected_dates = {field: _date(dates[field]) for field in DATE_FIELDS}
         progress = value["explicit_progress"]
-        if progress is not None and (isinstance(progress, bool) or not isinstance(progress, (int, float)) or not 0 <= progress <= 1):
+        if progress is not None and (
+            isinstance(progress, bool)
+            or not isinstance(progress, (int, float))
+            or not 0 <= progress <= 1
+        ):
             raise ValueError
         variance = _variance(projected_dates["baseline_target"], projected_dates["planned_target"])
         item_id = _bounded(value["record_id"], 128)
@@ -324,13 +346,27 @@ class ScheduleProjectionProvider:
             "dates": projected_dates,
             "baseline_variance": variance,
             "progress": progress,
-            "progress_basis": "canonical explicit_progress; no value inferred" if progress is None else "canonical explicit_progress",
+            "progress_basis": "canonical explicit_progress; no value inferred"
+            if progress is None
+            else "canonical explicit_progress",
             "rollup": {
                 "state": "not_applicable",
                 "eligible_children": 0,
                 "included_children": 0,
-                "start": _date({"state": "not_applicable", "instant": None, "reason": "no canonical rollup supplied"}),
-                "end": _date({"state": "not_applicable", "instant": None, "reason": "no canonical rollup supplied"}),
+                "start": _date(
+                    {
+                        "state": "not_applicable",
+                        "instant": None,
+                        "reason": "no canonical rollup supplied",
+                    }
+                ),
+                "end": _date(
+                    {
+                        "state": "not_applicable",
+                        "instant": None,
+                        "reason": "no canonical rollup supplied",
+                    }
+                ),
                 "progress": None,
                 "progress_basis": "no canonical rollup supplied",
                 "exclusions": [],
@@ -343,8 +379,17 @@ class ScheduleProjectionProvider:
         if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
             raise PermissionError
         required = {
-            "tenant_id", "dependency_id", "source_item_id", "target_item_id", "edge_type",
-            "direction", "lag_seconds", "truth_state", "visibility", "blocker_state", "evidence_refs",
+            "tenant_id",
+            "dependency_id",
+            "source_item_id",
+            "target_item_id",
+            "edge_type",
+            "direction",
+            "lag_seconds",
+            "truth_state",
+            "visibility",
+            "blocker_state",
+            "evidence_refs",
         }
         if set(value) != required:
             raise ValueError
@@ -370,30 +415,94 @@ class ScheduleProjectionProvider:
             "cycle_state": "unknown",
             "evidence_refs": _refs(value["evidence_refs"], minimum=1),
         }
-        if None in (edge["dependency_id"], source) or edge["edge_type"] not in {"finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish", "unknown"} or edge["truth_state"] not in TRUTH_STATES or edge["blocker_state"] not in {"blocking", "not_blocking", "unknown"} or (edge["lag_seconds"] is not None and (isinstance(edge["lag_seconds"], bool) or not isinstance(edge["lag_seconds"], int))):
+        if (
+            None in (edge["dependency_id"], source)
+            or edge["edge_type"]
+            not in {
+                "finish_to_start",
+                "start_to_start",
+                "finish_to_finish",
+                "start_to_finish",
+                "unknown",
+            }
+            or edge["truth_state"] not in TRUTH_STATES
+            or edge["blocker_state"] not in {"blocking", "not_blocking", "unknown"}
+            or (
+                edge["lag_seconds"] is not None
+                and (
+                    isinstance(edge["lag_seconds"], bool)
+                    or not isinstance(edge["lag_seconds"], int)
+                )
+            )
+        ):
             raise ValueError
         return edge
 
     def _overlay(self, value, request: ScheduleSourceRequest) -> dict:
         if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
             raise PermissionError
-        required = {"tenant_id", "overlay_id", "overlay_type", "owner_service_id", "start", "end", "truth_state", "visibility", "conflict_state", "evidence_refs"}
+        required = {
+            "tenant_id",
+            "overlay_id",
+            "overlay_type",
+            "owner_service_id",
+            "start",
+            "end",
+            "truth_state",
+            "visibility",
+            "conflict_state",
+            "evidence_refs",
+        }
         if set(value) != required:
             raise ValueError
-        result = {key: value[key] for key in ("overlay_id", "overlay_type", "owner_service_id", "truth_state", "conflict_state")}
-        if not all(_bounded(result[key], 128) for key in ("overlay_id", "owner_service_id")) or result["overlay_type"] not in {"itil_change_window", "blackout", "architecture_migration", "architecture_deprecation"} or result["truth_state"] not in TRUTH_STATES or result["conflict_state"] not in {"clear", "conflict", "unknown"}:
+        result = {
+            key: value[key]
+            for key in (
+                "overlay_id",
+                "overlay_type",
+                "owner_service_id",
+                "truth_state",
+                "conflict_state",
+            )
+        }
+        if (
+            not all(_bounded(result[key], 128) for key in ("overlay_id", "owner_service_id"))
+            or result["overlay_type"]
+            not in {
+                "itil_change_window",
+                "blackout",
+                "architecture_migration",
+                "architecture_deprecation",
+            }
+            or result["truth_state"] not in TRUTH_STATES
+            or result["conflict_state"] not in {"clear", "conflict", "unknown"}
+        ):
             raise ValueError
-        return {**result, "start": _date(value["start"]), "end": _date(value["end"]), "visibility": _visibility(value["visibility"]), "evidence_refs": _refs(value["evidence_refs"])}
+        return {
+            **result,
+            "start": _date(value["start"]),
+            "end": _date(value["end"]),
+            "visibility": _visibility(value["visibility"]),
+            "evidence_refs": _refs(value["evidence_refs"]),
+        }
 
     def _now(self) -> datetime:
         value = self._clock()
-        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timezone.utc.utcoffset(value):
+        if (
+            not isinstance(value, datetime)
+            or value.tzinfo is None
+            or value.utcoffset() != timezone.utc.utcoffset(value)
+        ):
             raise ValueError
         return value.astimezone(timezone.utc)
 
 
 def _date(value) -> dict:
-    if not isinstance(value, Mapping) or set(value) - {"state", "instant", "reason"} or set(value) < {"state", "instant"}:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) - {"state", "instant", "reason"}
+        or set(value) < {"state", "instant"}
+    ):
         raise ValueError
     state = value["state"]
     if state not in DATE_STATES:
@@ -410,7 +519,9 @@ def _date(value) -> dict:
 
 def _variance(baseline: dict, planned: dict) -> dict:
     if baseline["state"] == planned["state"] == "known":
-        seconds = int((_instant(planned["instant"]) - _instant(baseline["instant"])).total_seconds())
+        seconds = int(
+            (_instant(planned["instant"]) - _instant(baseline["instant"])).total_seconds()
+        )
         return {"state": "known", "seconds": seconds}
     states = {baseline["state"], planned["state"]}
     if "not_applicable" in states:
@@ -419,11 +530,20 @@ def _variance(baseline: dict, planned: dict) -> dict:
         state = "unavailable"
     else:
         state = "unknown"
-    return {"state": state, "seconds": None, "reason": "canonical baseline or planned target is not known"}
+    return {
+        "state": state,
+        "seconds": None,
+        "reason": "canonical baseline or planned target is not known",
+    }
 
 
 def _visibility(value) -> dict:
-    if not isinstance(value, Mapping) or value.get("state") != "visible" or value.get("authorization") != "authorized" or set(value) - {"state", "authorization", "policy_decision_ref"}:
+    if (
+        not isinstance(value, Mapping)
+        or value.get("state") != "visible"
+        or value.get("authorization") != "authorized"
+        or set(value) - {"state", "authorization", "policy_decision_ref"}
+    ):
         raise PermissionError
     result = {"state": "visible", "authorization": "authorized"}
     if "policy_decision_ref" in value:
@@ -438,14 +558,23 @@ def _watermarks(values) -> list[dict]:
         raise ValueError
     result = []
     for value in values:
-        if not isinstance(value, Mapping) or set(value) != {"source", "value"} or not _bounded(value["source"], 128) or not _bounded(value["value"], 256):
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != {"source", "value"}
+            or not _bounded(value["source"], 128)
+            or not _bounded(value["value"], 256)
+        ):
             raise ValueError
         result.append(dict(value))
     return result
 
 
 def _refs(values, *, minimum=0) -> list[str]:
-    if not isinstance(values, list) or not minimum <= len(values) <= 128 or any(not _bounded(value, 512) for value in values):
+    if (
+        not isinstance(values, list)
+        or not minimum <= len(values) <= 128
+        or any(not _bounded(value, 512) for value in values)
+    ):
         raise ValueError
     return list(values)
 
@@ -482,7 +611,11 @@ def _cycles(edges: list[dict], ids: set[str]) -> set[str]:
             elif target not in visited:
                 stack.append((target, 0))
     for edge in edges:
-        edge["cycle_state"] = "cycle_member" if edge["source_item_id"] in cyclic and edge["target_item_id"] in cyclic else ("unknown" if edge["direction"] == "unknown" else "acyclic")
+        edge["cycle_state"] = (
+            "cycle_member"
+            if edge["source_item_id"] in cyclic and edge["target_item_id"] in cyclic
+            else ("unknown" if edge["direction"] == "unknown" else "acyclic")
+        )
     return cyclic
 
 
@@ -494,9 +627,16 @@ def _critical_path_reasons(items, edges, overlays, cycles) -> list[str]:
         reasons.append("unknown_edge_direction")
     if any(edge["target_item_id"] is None for edge in edges):
         reasons.append("inaccessible_required_node")
-    if any(item["dates"][field]["state"] != "known" for item in items for field in ("planned_start", "planned_target")):
+    if any(
+        item["dates"][field]["state"] != "known"
+        for item in items
+        for field in ("planned_start", "planned_target")
+    ):
         reasons.append("missing_required_dates")
-    if any(overlay["overlay_type"] == "blackout" and overlay["conflict_state"] == "conflict" for overlay in overlays):
+    if any(
+        overlay["overlay_type"] == "blackout" and overlay["conflict_state"] == "conflict"
+        for overlay in overlays
+    ):
         reasons.append("conflicting_blackout")
     return reasons
 
@@ -531,7 +671,11 @@ def _text(value: datetime) -> str:
 
 
 def _bounded(value, maximum: int) -> str | None:
-    return value if isinstance(value, str) and 0 < len(value) <= maximum and "\x00" not in value else None
+    return (
+        value
+        if isinstance(value, str) and 0 < len(value) <= maximum and "\x00" not in value
+        else None
+    )
 
 
 def _identifier(value) -> bool:

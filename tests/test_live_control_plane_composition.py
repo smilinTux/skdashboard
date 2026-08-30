@@ -1,7 +1,3 @@
-import asyncio
-import json
-import os
-import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +17,6 @@ from skdashboard.live_control_plane import (
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
-    EphemeralIssuerClient,
     LiveControlPlaneConfig,
     compose_file_backed_live_control_plane,
     compose_live_control_plane,
@@ -35,7 +30,6 @@ POLICY_REVISION = "b" * 64
 
 def config(tmp_path: Path, *, board="https://legacy.example/board") -> LiveControlPlaneConfig:
     return LiveControlPlaneConfig(
-        issuer_socket=tmp_path / "issuer.sock",
         legacy_board_url=board,
         resource_id=RESOURCE_ID,
         owner_policy_revision=POLICY_REVISION,
@@ -238,7 +232,6 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
         clock=clock,
     )
     cfg = LiveControlPlaneConfig(
-        issuer_socket=tmp_path / "issuer.sock",
         legacy_board_url="https://legacy.example/board",
         resource_id=entry.resource_id,
         owner_policy_revision=entry.owner_policy_revision,
@@ -268,9 +261,11 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
         ),
         clock=clock,
     )
-    assert composition.session_capability_issuer is None
     bridge = composition.session_authorizer
     session_record = bridge.enroll(principal.subject, ORIGIN)
+    assert isinstance(session_record, str)
+    assert session_record.isascii()
+    assert 32 <= len(session_record) <= 128
 
     async def resolve_session(incoming_request):
         return SimpleNamespace(
@@ -294,7 +289,6 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
         project_provider=composition.project_provider,
         schedule_provider=composition.schedule_provider,
         session_adapter=session,
-        session_capability_issuer=composition.session_capability_issuer,
         session_authorizer=composition.session_authorizer,
         legacy_board_url=composition.legacy_board_url,
     )
@@ -318,74 +312,6 @@ def test_live_composition_serves_real_projects_and_reaches_unavailable_schedule(
     assert project["records"][0]["record_id"] == source.id
     assert schedule.status_code == 503
     assert schedule.json()["code"] == "SCHEDULE_UNAVAILABLE"
-
-
-def test_issuer_opens_a_fresh_channel_for_every_request_and_sends_exact_facts(
-    tmp_path,
-) -> None:
-    cfg = config(tmp_path)
-    calls = []
-
-    async def scenario():
-        async def serve(reader, writer):
-            line = await reader.readline()
-            calls.append(json.loads(line))
-            writer.write(
-                json.dumps(
-                    {
-                        "schema_version": "skdashboard-issuer-response/v1",
-                        "bearer": f"fresh-{len(calls)}",
-                    }
-                ).encode()
-                + b"\n"
-            )
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-
-        server = await asyncio.start_unix_server(serve, path=cfg.issuer_socket)
-        os.chmod(cfg.issuer_socket, 0o660)
-        try:
-            issuer = EphemeralIssuerClient(cfg)
-            session = SimpleNamespace(access_token="server-session-credential")
-            first = await issuer(request(request_id="one"), session, CAPABILITY, TARGET)
-            second = await issuer(request(request_id="two"), session, CAPABILITY, TARGET)
-            return first, second
-        finally:
-            server.close()
-            await server.wait_closed()
-
-    assert asyncio.run(scenario()) == ("fresh-1", "fresh-2")
-    assert len(calls) == 2
-    assert calls[0]["request_id"] == "one" and calls[1]["request_id"] == "two"
-    for payload in calls:
-        assert payload["audience"] == "skdashboard"
-        assert payload["capability"] == "skdashboard.read"
-        assert payload["target"] == TARGET
-        assert payload["resource_type"] == RESOURCE_TYPE
-        assert payload["resource_id"] == RESOURCE_ID
-        assert payload["owner_policy_revision"] == POLICY_REVISION
-        assert payload["ttl_seconds"] == 60
-        assert payload["use_limit"] == 1
-        assert payload["store"] is False
-
-
-def test_issuer_fails_closed_before_connecting_for_wrong_binding(tmp_path, monkeypatch) -> None:
-    cfg = config(tmp_path)
-    raw = socket.socket(socket.AF_UNIX)
-    raw.bind(str(cfg.issuer_socket))
-    raw.close()
-    os.chmod(cfg.issuer_socket, 0o666)
-    connected = Mock()
-    monkeypatch.setattr(asyncio, "open_unix_connection", connected)
-
-    with pytest.raises(PermissionError):
-        asyncio.run(
-            EphemeralIssuerClient(cfg)(
-                request(), SimpleNamespace(access_token="session"), CAPABILITY, TARGET
-            )
-        )
-    connected.assert_not_called()
 
 
 def test_file_backed_composition_constructs_the_durable_owner_backend(

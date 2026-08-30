@@ -166,7 +166,9 @@ def test_maps_pinned_canonical_sources_and_validates_contract() -> None:
         / "docs/contracts/schedule/v1.0.0/control-plane-schedule-projection.v1.0.0.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(result)
+    Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(
+        result
+    )
 
     assert result["schema_version"] == SCHEMA_VERSION
     assert result["scope"] == {"role": "project_manager", "tenant_id": TENANT}
@@ -202,7 +204,14 @@ def test_truth_states_remain_distinct_and_nothing_is_invented_from_text() -> Non
     result, _ = _read(snapshot)
     projected = result["items"][0]
     assert [projected["dates"][field]["state"] for field in DATE_FIELDS] == [
-        "known", "known", "unknown", "stale", "policy_filtered", "not_applicable", "partial", "unavailable"
+        "known",
+        "known",
+        "unknown",
+        "stale",
+        "policy_filtered",
+        "not_applicable",
+        "partial",
+        "unavailable",
     ]
     assert projected["progress"] is None
     assert projected["owner_service_id"] == "skcoord"
@@ -217,14 +226,20 @@ def test_truth_states_remain_distinct_and_nothing_is_invented_from_text() -> Non
         (lambda value: value.update(tenant_id="other-tenant"), Context(), _query()),
         (lambda value: value["authorization"].update(role="architect"), Context(), _query()),
         (lambda value: value["authorization"].update(scope="team"), Context(), _query()),
-        (lambda value: value["authorization"].update(target="/api/v1/overview"), Context(), _query()),
+        (
+            lambda value: value["authorization"].update(target="/api/v1/overview"),
+            Context(),
+            _query(),
+        ),
         (lambda value: value["items"][0].update(tenant_id="other-tenant"), Context(), _query()),
         (lambda value: None, Context(target="/api/v1/overview"), _query()),
         (lambda value: None, Context(capability="other.read"), _query()),
         (lambda value: None, Context(allow=False), _query()),
     ],
 )
-def test_tenant_role_scope_owner_and_authorization_mismatch_fail_closed(mutate, context, query) -> None:
+def test_tenant_role_scope_owner_and_authorization_mismatch_fail_closed(
+    mutate, context, query
+) -> None:
     snapshot = _snapshot()
     mutate(snapshot)
     provider = ScheduleProjectionProvider(Source(snapshot), tenant_id=TENANT, clock=lambda: NOW)
@@ -234,9 +249,13 @@ def test_tenant_role_scope_owner_and_authorization_mismatch_fail_closed(mutate, 
 
 def test_currentness_before_and_during_read_fail_closed() -> None:
     for states in (("deny",), ("allow", "deny"), ("allow", "allow", "deny")):
-        provider = ScheduleProjectionProvider(Source(_snapshot()), tenant_id=TENANT, clock=lambda: NOW)
+        provider = ScheduleProjectionProvider(
+            Source(_snapshot()), tenant_id=TENANT, clock=lambda: NOW
+        )
         with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
-            provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier(*states))
+            provider.read(
+                Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier(*states)
+            )
 
 
 def test_stale_and_unavailable_sources_fail_closed_without_record_detail() -> None:
@@ -264,7 +283,9 @@ def test_policy_filtered_record_or_hidden_dependency_id_is_never_released() -> N
             }
         else:
             snapshot["dependencies"][0]["target_item_id"] = "protected-record-id"
-        provider = ScheduleProjectionProvider(Source(snapshot), tenant_id=TENANT, clock=lambda: NOW)
+        provider = ScheduleProjectionProvider(
+            Source(snapshot), tenant_id=TENANT, clock=lambda: NOW
+        )
         with pytest.raises(PermissionError) as error:
             provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
         assert "protected-record-id" not in str(error.value)
@@ -309,11 +330,13 @@ def test_long_dependency_chains_are_iterative_and_cycles_remain_explicit() -> No
 
     result, _ = _read(snapshot)
     assert len(result["items"]) == 1_200
-    assert result["cycle_analysis"] == {"state": "acyclic", "cycle_item_ids": [], "evidence_refs": []}
+    assert result["cycle_analysis"] == {
+        "state": "acyclic",
+        "cycle_item_ids": [],
+        "evidence_refs": [],
+    }
 
-    snapshot["dependencies"].append(
-        _dependency("dependency-cycle", "work-01199", "work-00000")
-    )
+    snapshot["dependencies"].append(_dependency("dependency-cycle", "work-01199", "work-00000"))
     result, _ = _read(snapshot)
     assert result["cycle_analysis"]["state"] == "cycles_detected"
     assert len(result["cycle_analysis"]["cycle_item_ids"]) == 1_200

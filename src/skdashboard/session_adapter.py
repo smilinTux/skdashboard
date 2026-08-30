@@ -337,10 +337,17 @@ class EncryptedSessionAdapter:
             )
             record = self._validate_token_response(token, now)
             if self.control_plane_bridge is not None:
-                record["control_plane_session"] = self.control_plane_bridge.enroll(
+                control_plane_handle = self.control_plane_bridge.enroll(
                     record["subject"],
                     self.config.redirect_uri.rsplit("/auth/callback", 1)[0],
                 )
+                if (
+                    not isinstance(control_plane_handle, str)
+                    or not control_plane_handle.isascii()
+                    or not 32 <= len(control_plane_handle) <= 128
+                ):
+                    raise ValueError("invalid control-plane session handle")
+                record["control_plane_session"] = control_plane_handle
         except OIDCExchangeError as exc:
             return self._authentication_failure(
                 exc.category, status_code=exc.status_code, detail=exc.detail
@@ -567,6 +574,8 @@ class EncryptedSessionAdapter:
             )
         with self._connect() as connection:
             connection.execute("DELETE FROM sessions WHERE handle_hash = ?", (_digest(handle),))
+        if self.control_plane_bridge is not None:
+            self.control_plane_bridge.discard(record.get("control_plane_session"))
         response = Response(status_code=204)
         response.delete_cookie(
             COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict"

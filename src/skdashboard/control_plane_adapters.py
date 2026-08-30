@@ -141,14 +141,41 @@ SPECS = (
             "stale_collectors",
         ),
     ),
-    AdapterSpec("skperf.aggregate", "SKPerf", "approved_benchmarks", ("regressions", "capacity_pressure")),
+    AdapterSpec(
+        "skperf.aggregate", "SKPerf", "approved_benchmarks", ("regressions", "capacity_pressure")
+    ),
     AdapterSpec("skjoule.wallet", "SKJoule", "wallets", ("total_supply", "active_agents")),
-    AdapterSpec("capauth.policy", "CapAuth", "policy_health", ("available", "denials"), classification="confidential"),
-    AdapterSpec("atlas.conditions", "Atlas", "operator_conditions", ("open_conditions", "ready_actions"), classification="confidential"),
+    AdapterSpec(
+        "capauth.policy",
+        "CapAuth",
+        "policy_health",
+        ("available", "denials"),
+        classification="confidential",
+    ),
+    AdapterSpec(
+        "atlas.conditions",
+        "Atlas",
+        "operator_conditions",
+        ("open_conditions", "ready_actions"),
+        classification="confidential",
+    ),
     AdapterSpec("skos.discovery", "SKOS", "module_discovery", ("discovered", "unavailable")),
-    AdapterSpec("sklegal.global", "SKLegal", "policy_filtered_global_aggregate", ("matters", "deadline_pressure"), classification="confidential"),
-    AdapterSpec("hammertime.pipeline", "HammerTime", "approved_aggregate_pipeline", ("approved_releases", "pipeline_failures"), classification="confidential"),
+    AdapterSpec(
+        "sklegal.global",
+        "SKLegal",
+        "policy_filtered_global_aggregate",
+        ("matters", "deadline_pressure"),
+        classification="confidential",
+    ),
+    AdapterSpec(
+        "hammertime.pipeline",
+        "HammerTime",
+        "approved_aggregate_pipeline",
+        ("approved_releases", "pipeline_failures"),
+        classification="confidential",
+    ),
 )
+
 
 @dataclass(frozen=True)
 class Reader:
@@ -341,7 +368,11 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
 
     expected = coverage["expected"]
     reporting = coverage["reporting"]
-    if expected is not None and reporting is not None and (expected < 0 or reporting < 0 or reporting > expected):
+    if (
+        expected is not None
+        and reporting is not None
+        and (expected < 0 or reporting < 0 or reporting > expected)
+    ):
         return _error(
             spec, projected, "SOURCE_MALFORMED", "The aggregate reader returned invalid coverage"
         )
@@ -383,12 +414,14 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
         "truth_state": truth_state,
         "coverage": coverage,
         "aggregate": (
-            {key: aggregate[key] for key in spec.fields}
-            if truth_state != "unknown"
-            else None
+            {key: aggregate[key] for key in spec.fields} if truth_state != "unknown" else None
         ),
         "errors": [
-            {"code": "SOURCE_PARTIAL", "message": "The aggregate reader reported partial evidence", "retryable": True}
+            {
+                "code": "SOURCE_PARTIAL",
+                "message": "The aggregate reader reported partial evidence",
+                "retryable": True,
+            }
             for _ in errors[:1]
         ],
     }
@@ -455,26 +488,36 @@ def _local_readers(
     if (
         not board_data.get("error")
         and isinstance(summary, dict)
-        and all(isinstance(summary.get(key), int) for key in ("total", "open", "in_progress", "done"))
+        and all(
+            isinstance(summary.get(key), int) for key in ("total", "open", "in_progress", "done")
+        )
         and isinstance(tasks, list)
         and isinstance(agents, list)
         and all(isinstance(task, dict) and isinstance(task.get("status"), str) for task in tasks)
-        and all(isinstance(agent, dict) and isinstance(agent.get("state"), str) for agent in agents)
+        and all(
+            isinstance(agent, dict) and isinstance(agent.get("state"), str) for agent in agents
+        )
     ):
         readers["skcapstone.portfolio"] = aggregate_reader(
             {key: summary.get(key, 0) for key in ("total", "open", "in_progress", "done")},
             observed_at=default_observed_at,
         )
-        readers["skcoord.flow"] = aggregate_reader({
-            "open": summary.get("open", 0),
-            "in_progress": summary.get("in_progress", 0),
-            "done": summary.get("done", 0),
-            "blocked": sum(task.get("status") == "blocked" for task in tasks),
-        }, observed_at=default_observed_at)
-        readers["skcoord.agent_presence"] = aggregate_reader({
-            "total_agents": len(agents),
-            "active_agents": sum(agent.get("state") == "active" for agent in agents),
-        }, observed_at=default_observed_at)
+        readers["skcoord.flow"] = aggregate_reader(
+            {
+                "open": summary.get("open", 0),
+                "in_progress": summary.get("in_progress", 0),
+                "done": summary.get("done", 0),
+                "blocked": sum(task.get("status") == "blocked" for task in tasks),
+            },
+            observed_at=default_observed_at,
+        )
+        readers["skcoord.agent_presence"] = aggregate_reader(
+            {
+                "total_agents": len(agents),
+                "active_agents": sum(agent.get("state") == "active" for agent in agents),
+            },
+            observed_at=default_observed_at,
+        )
 
     from . import dashboard_cmdb, dashboard_fleet, dashboard_itil, dashboard_skcounter
 
@@ -485,17 +528,18 @@ def _local_readers(
         kpis = raw.get("kpis")
         activity = raw.get("activity")
         fields = ("open_incidents", "sev1", "sev2", "awaiting_cab")
-        if not isinstance(kpis, dict) or not all(key in kpis for key in fields) or not isinstance(activity, list):
+        if (
+            not isinstance(kpis, dict)
+            or not all(key in kpis for key in fields)
+            or not isinstance(activity, list)
+        ):
             raise ValueError
         observed_at = max(
             (item.get("ts") for item in activity if item.get("ts")),
             default=None,
         )
         return aggregate_reader(
-            {
-                key: kpis.get(key)
-                for key in fields
-            },
+            {key: kpis.get(key) for key in fields},
             observed_at=observed_at,
             watermark_data=observed_at,
             has_observations=bool(activity),
@@ -585,13 +629,13 @@ def _local_readers(
         )
         stale_collectors = coverage.get("stale_collectors", 0)
         delayed_collectors = coverage.get("delayed_collectors", 0)
-        collector_states = {
-            item.get("status") for item in collectors if item.get("status")
-        }
+        collector_states = {item.get("status") for item in collectors if item.get("status")}
         return aggregate_reader(
             {
                 "tokens_total": summary.get("total", 0),
-                "cost_usd": summary.get("cost_usd") if summary.get("cost_state") == "available" else None,
+                "cost_usd": summary.get("cost_usd")
+                if summary.get("cost_state") == "available"
+                else None,
                 "cost_state": summary.get("cost_state", "unavailable"),
                 "observation_count": raw.get("observation_count", 0),
                 "fresh_collectors": coverage["fresh_collectors"],
@@ -687,7 +731,9 @@ def _local_readers(
             return aggregate_reader(
                 {
                     "regressions": regressions,
-                    "capacity_pressure": float(capacity_pressure) if isinstance(capacity_pressure, (int, float)) else 0.0,
+                    "capacity_pressure": float(capacity_pressure)
+                    if isinstance(capacity_pressure, (int, float))
+                    else 0.0,
                 },
                 expected=expected,
                 reporting=reporting,
@@ -754,7 +800,6 @@ def _local_readers(
     def atlas_conditions() -> dict:
         """Read Atlas operator conditions from the operator seat observation store."""
         try:
-
             operator_observations_path = home / "fleet" / "atlas" / "brief" / "brief.json"
             fleet_observations_path = home / "fleet" / "observations" / "conditions.json"
 
@@ -819,7 +864,9 @@ def _local_readers(
                     "ready_actions": ready_actions,
                 },
                 expected=len(conditions),
-                reporting=len([c for c in conditions if isinstance(c, dict) and c.get("status") != "Unknown"]),
+                reporting=len(
+                    [c for c in conditions if isinstance(c, dict) and c.get("status") != "Unknown"]
+                ),
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
                 observed_at=observations_data.get("observed_at", source_observed_at),
@@ -835,7 +882,6 @@ def _local_readers(
     def skos_discovery() -> dict:
         """Read SKOS module discovery from skcode arena or manifest registry."""
         try:
-
             skcode_arena_path = home / "skcode" / "arena"
             skcapstone_repo_path = home / "repo"
 
@@ -889,19 +935,21 @@ def _local_readers(
         except Exception:
             raise RuntimeError
 
-    readers.update({
-        "skcapstone.itil": itil,
-        "cmdb.configuration": cmdb,
-        "skcapstone.fleet": fleet,
-        "skcounter.harness": lambda: usage("harness_reported"),
-        "skgateway.observed": lambda: usage("gateway_observed"),
-        "skjoule.wallet": joule,
-        "skcapstone.service_release": service_release,
-        "skperf.aggregate": skperf_aggregate,
-        "capauth.policy": capauth_policy,
-        "atlas.conditions": atlas_conditions,
-        "skos.discovery": skos_discovery,
-    })
+    readers.update(
+        {
+            "skcapstone.itil": itil,
+            "cmdb.configuration": cmdb,
+            "skcapstone.fleet": fleet,
+            "skcounter.harness": lambda: usage("harness_reported"),
+            "skgateway.observed": lambda: usage("gateway_observed"),
+            "skjoule.wallet": joule,
+            "skcapstone.service_release": service_release,
+            "skperf.aggregate": skperf_aggregate,
+            "capauth.policy": capauth_policy,
+            "atlas.conditions": atlas_conditions,
+            "skos.discovery": skos_discovery,
+        }
+    )
     return readers
 
 

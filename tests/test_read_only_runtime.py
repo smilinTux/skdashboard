@@ -147,7 +147,6 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
                 invocation_factory="invocation-factory",
                 project_provider="durable-provider",
                 schedule_provider="schedule-provider",
-                session_capability_issuer=None,
                 session_authorizer="in-process-authorizer",
                 legacy_board_url="https://legacy.example/board",
             )
@@ -199,8 +198,6 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
             f"{LAN_ORIGIN}/auth/callback",
             "--oidc-client-secret-file",
             str(tmp_path / "client.secret"),
-            "--issuer-socket",
-            str(tmp_path / "issuer.sock"),
             "--legacy-board-url",
             "https://legacy.example/board",
             "--authorized-resource-id",

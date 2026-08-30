@@ -264,13 +264,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--oidc-issuer")
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
-    parser.add_argument("--issuer-socket", type=Path)
     parser.add_argument("--legacy-board-url")
     parser.add_argument("--authorized-resource-id")
     parser.add_argument("--owner-policy-file", type=Path)
     parser.add_argument("--owner-policy-revision")
     parser.add_argument("--tenant-id")
-    parser.add_argument("--issuer-uid", type=int)
     parser.add_argument("--owner-policy-uid", type=int)
     parser.add_argument("--operator-session-db", type=Path)
     parser.add_argument("--operator-policy-revisions-file", type=Path)
@@ -294,7 +292,6 @@ def main(argv: list[str] | None = None) -> None:
     if any(session_values) and not all(session_values):
         parser.error("all session and OIDC options are required together")
     live_values = (
-        args.issuer_socket,
         args.legacy_board_url,
         args.authorized_resource_id,
         args.owner_policy_file,
@@ -375,14 +372,11 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as exc:
             parser.error(f"in-process authorization is unavailable: {type(exc).__name__}")
         config_options = {
-            "issuer_socket": args.issuer_socket,
             "legacy_board_url": args.legacy_board_url,
             "resource_id": args.authorized_resource_id,
             "owner_policy_revision": args.owner_policy_revision,
             "tenant_id": args.tenant_id,
         }
-        if args.issuer_uid is not None:
-            config_options["issuer_uid"] = args.issuer_uid
         composition = compose_file_backed_live_control_plane(
             config=LiveControlPlaneConfig(**config_options),
             capability_authorizer=capability_authorizer,
@@ -399,7 +393,6 @@ def main(argv: list[str] | None = None) -> None:
             invocation_factory=composition.invocation_factory,
             project_provider=composition.project_provider,
             schedule_provider=composition.schedule_provider,
-            session_capability_issuer=composition.session_capability_issuer,
             session_authorizer=composition.session_authorizer,
             legacy_board_url=composition.legacy_board_url,
             schedule_forecast_provider=None,
