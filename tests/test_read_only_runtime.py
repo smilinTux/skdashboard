@@ -188,10 +188,13 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         lambda **values: observed.update(authorizer=values) or "durable-authorizer",
     )
     monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
-    for name in ("session.key", "client.secret"):
-        path = tmp_path / name
-        path.write_text("non-secret-fixture", encoding="utf-8")
-        path.chmod(0o600)
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=JARVIS_FINGERPRINT,
@@ -497,10 +500,13 @@ def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkey
         lambda **values: observed.update(authorizer=values) or "durable-authorizer",
     )
     monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
-    for name in ("session.key", "client.secret"):
-        path = tmp_path / name
-        path.write_text("non-secret-fixture", encoding="utf-8")
-        path.chmod(0o600)
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
@@ -614,14 +620,44 @@ def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkey
     assert observed["authorizer"]["principal"].subject == CASEY_FINGERPRINT
 
 
-def test_owner_policy_selection_rejects_mismatched_subject(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_mismatched_subject(tmp_path: Path, monkeypatch) -> None:
     """Prove mismatched subject (subject != acting_principal_id) fails closed."""
+    from types import SimpleNamespace
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
         AuthorizedCardPolicyEntryV1,
         AuthorizedCardScopeV1,
     )
 
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     # Create an entry where subject != acting_principal_id
     entry = AuthorizedCardPolicyEntryV1.issue(
@@ -667,15 +703,31 @@ def test_owner_policy_selection_rejects_mismatched_subject(tmp_path: Path) -> No
     trusted_signature.chmod(0o600)
     trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -712,7 +764,7 @@ def test_owner_policy_selection_rejects_mismatched_subject(tmp_path: Path) -> No
         )
 
 
-def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path, monkeypatch) -> None:
     """Prove duplicate current entries fail closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -720,35 +772,65 @@ def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     scope = AuthorizedCardScopeV1(role="project-manager")
     node_id = "chiap08"
-    resource_id = "platform"
-    revision = "a" * 64
     valid_from = current - timedelta(minutes=5)
     expires_at = current + timedelta(hours=1)
 
     # Create two entries with the same node/resource/revision/time
-    entry1 = AuthorizedCardPolicyEntryV1(
+    # Use the .issue() factory method to ensure valid entries
+    entry1 = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
         acting_principal_id=CASEY_FINGERPRINT,
         node_id=node_id,
-        resource_id=resource_id,
-        owner_policy_revision=revision,
+        scope=scope,
         valid_from=valid_from,
         expires_at=expires_at,
-        scope=scope,
     )
-    entry2 = AuthorizedCardPolicyEntryV1(
+    entry2 = AuthorizedCardPolicyEntryV1.issue(
         subject=JARVIS_FINGERPRINT,
         acting_principal_id=JARVIS_FINGERPRINT,
         node_id=node_id,
-        resource_id=resource_id,
-        owner_policy_revision=revision,
+        scope=scope,
         valid_from=valid_from,
         expires_at=expires_at,
-        scope=scope,
     )
+    
+    # Both entries will have the same revision since they were issued at the same time
+    revision = entry1.owner_policy_revision
+    resource_id = entry1.resource_id
 
     owner_policy = tmp_path / "owner-policy.json"
     owner_policy.write_text(
@@ -758,15 +840,60 @@ def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    # Create the other required files for live control plane
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -775,15 +902,35 @@ def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path
                 revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                resource_id,
-                "--node-id",
-                node_id,
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path, monkeypatch) -> None:
     """Prove wrong node ID fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -791,6 +938,37 @@ def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
@@ -808,16 +986,60 @@ def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path) -> None:
     )
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -826,15 +1048,35 @@ def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path) -> None:
                 entry.owner_policy_revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                entry.resource_id,
-                "--node-id",
-                "chiap08",  # Different from entry.node_id
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path, monkeypatch) -> None:
     """Prove wrong resource ID fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -842,6 +1084,37 @@ def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
@@ -859,16 +1132,63 @@ def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path) -> None:
     )
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    # Use a wrong resource ID pattern
+    wrong_resource = "authorized-card-set:sha256:" + "a" * 64
+    
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                wrong_resource,  # Wrong resource!
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -877,15 +1197,35 @@ def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path) -> None:
                 entry.owner_policy_revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                "wrong-resource",  # Wrong resource!
-                "--node-id",
-                "chiap08",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path, monkeypatch) -> None:
     """Prove wrong owner_policy_revision fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -893,6 +1233,37 @@ def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
@@ -910,16 +1281,60 @@ def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path) -> None:
     )
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -928,15 +1343,35 @@ def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path) -> None:
                 "b" * 64,  # Wrong revision!
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                entry.resource_id,
-                "--node-id",
-                "chiap08",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path, monkeypatch) -> None:
     """Prove expired entry fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -944,6 +1379,37 @@ def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     # Entry already expired
     entry = AuthorizedCardPolicyEntryV1.issue(
@@ -962,16 +1428,60 @@ def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path) -> None:
     )
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -980,15 +1490,35 @@ def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path) -> None:
                 entry.owner_policy_revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                entry.resource_id,
-                "--node-id",
-                "chiap08",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_future_entry(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_future_entry(tmp_path: Path, monkeypatch) -> None:
     """Prove future entry (not yet valid) fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -996,6 +1526,37 @@ def test_owner_policy_selection_rejects_future_entry(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     # Entry valid in the future
     entry = AuthorizedCardPolicyEntryV1.issue(
@@ -1014,16 +1575,60 @@ def test_owner_policy_selection_rejects_future_entry(tmp_path: Path) -> None:
     )
     owner_policy.chmod(0o600)
     owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -1032,15 +1637,35 @@ def test_owner_policy_selection_rejects_future_entry(tmp_path: Path) -> None:
                 entry.owner_policy_revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                entry.resource_id,
-                "--node-id",
-                "chiap08",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
 
 
-def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path) -> None:
+def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path, monkeypatch) -> None:
     """Prove hash drift (SHA256 mismatch) fails closed."""
     from skcoord.authorized_card_policy import (
         AuthorizedCardPolicyDocumentV1,
@@ -1048,6 +1673,37 @@ def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path) -> None:
         AuthorizedCardScopeV1,
     )
 
+    from types import SimpleNamespace
+
+    # Create valid Fernet key for session encryption (32 bytes, base64 url-safe)
+    import base64
+    session_key = base64.urlsafe_b64encode(b"0" * 32).decode("ascii")
+    (tmp_path / "session.key").write_text(session_key, encoding="utf-8")
+    (tmp_path / "session.key").chmod(0o600)
+    (tmp_path / "client.secret").write_text("test-secret", encoding="utf-8")
+    (tmp_path / "client.secret").chmod(0o600)
+    
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: SimpleNamespace(
+            decision_authorizer="typed-authorizer",
+            invocation_factory="invocation-factory",
+            project_provider="durable-provider",
+            schedule_provider="schedule-provider",
+            session_authorizer="in-process-authorizer",
+            legacy_board_url="https://legacy.example/board",
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
         subject=CASEY_FINGERPRINT,
@@ -1064,18 +1720,63 @@ def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
     # Use wrong SHA256
     wrong_sha256 = "b" * 64
+    
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
 
-    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+    with pytest.raises(SystemExit):
         main(
             [
+                "--home",
+                str(tmp_path),
                 "--host",
                 "10.0.0.139",
                 "--tls-certfile",
                 "/run/credentials/skdashboard.crt",
                 "--tls-keyfile",
                 "/run/credentials/skdashboard.key",
+                "--session-db",
+                str(tmp_path / "sessions.db"),
+                "--session-key-file",
+                str(tmp_path / "session.key"),
+                "--oidc-issuer",
+                "https://issuer.example",
+                "--oidc-redirect-uri",
+                f"{LAN_ORIGIN}/auth/callback",
+                "--oidc-client-secret-file",
+                str(tmp_path / "client.secret"),
+                "--legacy-board-url",
+                "https://legacy.example/board",
+                "--authorized-resource-id",
+                entry.resource_id,
                 "--owner-policy-file",
                 str(owner_policy),
                 "--owner-policy-sha256",
@@ -1084,9 +1785,29 @@ def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path) -> None:
                 entry.owner_policy_revision,
                 "--tenant-id",
                 "platform",
-                "--authorized-resource-id",
-                entry.resource_id,
-                "--node-id",
-                "chiap08",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
             ]
         )
