@@ -16,6 +16,8 @@ from itertools import islice
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .panel_registry import derive_adapter_specs
+
 ADAPTER_VERSION = "1.0.0"
 SCHEMA_VERSION = "1.1.0"
 MAX_SOURCE_BYTES = 1_048_576
@@ -73,108 +75,7 @@ class AdapterSpec:
     classification: str = "internal"
 
 
-SPECS = (
-    AdapterSpec(
-        "skcapstone.portfolio",
-        "SKCapstone",
-        "portfolio_project_work",
-        ("total", "open", "in_progress", "done"),
-    ),
-    AdapterSpec(
-        "skcoord.flow", "skcoord", "task_flow", ("open", "in_progress", "done", "blocked")
-    ),
-    AdapterSpec(
-        "skcoord.agent_presence",
-        "skcoord",
-        "agent_presence",
-        ("total_agents", "active_agents"),
-    ),
-    AdapterSpec(
-        "skcapstone.itil",
-        "SKCapstone ITIL",
-        "itil_records",
-        ("open_incidents", "sev1", "sev2", "awaiting_cab"),
-    ),
-    AdapterSpec(
-        "skcapstone.service_release",
-        "SKCapstone",
-        "service_release_observations",
-        ("services", "releases"),
-    ),
-    AdapterSpec(
-        "cmdb.configuration",
-        "CMDB",
-        "configuration_items",
-        ("total", "operational", "degraded", "other_status", "fresh", "stale", "unknown"),
-    ),
-    AdapterSpec(
-        "skcapstone.fleet",
-        "SKCapstone Fleet",
-        "fleet_runtime",
-        ("graded", "skipped", "error", "warn", "info", "ok"),
-    ),
-    AdapterSpec(
-        "skcounter.harness",
-        "SKCounter",
-        "harness_reported",
-        (
-            "tokens_total",
-            "cost_usd",
-            "cost_state",
-            "observation_count",
-            "fresh_collectors",
-            "delayed_collectors",
-            "stale_collectors",
-        ),
-    ),
-    AdapterSpec(
-        "skgateway.observed",
-        "SKGateway",
-        "gateway_observed",
-        (
-            "tokens_total",
-            "cost_usd",
-            "cost_state",
-            "observation_count",
-            "fresh_collectors",
-            "delayed_collectors",
-            "stale_collectors",
-        ),
-    ),
-    AdapterSpec(
-        "skperf.aggregate", "SKPerf", "approved_benchmarks", ("regressions", "capacity_pressure")
-    ),
-    AdapterSpec("skjoule.wallet", "SKJoule", "wallets", ("total_supply", "active_agents")),
-    AdapterSpec(
-        "capauth.policy",
-        "CapAuth",
-        "policy_health",
-        ("available", "denials"),
-        classification="confidential",
-    ),
-    AdapterSpec(
-        "atlas.conditions",
-        "Atlas",
-        "operator_conditions",
-        ("open_conditions", "ready_actions"),
-        classification="confidential",
-    ),
-    AdapterSpec("skos.discovery", "SKOS", "module_discovery", ("discovered", "unavailable")),
-    AdapterSpec(
-        "sklegal.global",
-        "SKLegal",
-        "policy_filtered_global_aggregate",
-        ("matters", "deadline_pressure"),
-        classification="confidential",
-    ),
-    AdapterSpec(
-        "hammertime.pipeline",
-        "HammerTime",
-        "approved_aggregate_pipeline",
-        ("approved_releases", "pipeline_failures"),
-        classification="confidential",
-    ),
-)
+SPECS = derive_adapter_specs()
 
 
 @dataclass(frozen=True)

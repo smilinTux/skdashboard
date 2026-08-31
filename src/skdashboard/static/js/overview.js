@@ -47,20 +47,21 @@ const QUALITY_ICON = {
   unreachable: "×", unknown: "?", not_applicable: "○",
 };
 
-const ESTATE_SILOS = [
-  { id: "portfolio", label: "Portfolio and projects", adapters: ["skcapstone.portfolio"], metric: "portfolio.blocked_objectives@1.0.0" },
-  { id: "flow", label: "Agile flow", adapters: ["skcoord.flow", "skcoord.agent_presence"], metric: "flow.review_coverage@1.0.0" },
-  { id: "itil", label: "ITIL and SRE", adapters: ["skcapstone.itil"], metric: "itil.change_classification_coverage@1.0.0" },
-  { id: "delivery", label: "Engineering delivery", adapters: ["skcapstone.service_release"], metric: "engineering.delivery_signals_current@1.0.0" },
-  { id: "architecture", label: "Architecture and CMDB", adapters: ["cmdb.configuration"], metric: "architecture.drift_signals@1.0.0" },
-  { id: "fleet", label: "Fleet runtime", adapters: ["skcapstone.fleet"], metric: "fleet.reporting_nodes@1.0.0" },
-  { id: "ai", label: "AI and models", adapters: ["skcounter.harness", "skgateway.observed"], metric: "ai.accepted_outcome_rate@1.0.0" },
-  { id: "economy", label: "Economy", adapters: ["skperf.aggregate", "skjoule.wallet"], metric: "economy.cost_per_accepted_outcome@1.0.0", metricSource: "skcounter.harness" },
-  { id: "governance", label: "Governance and data quality", adapters: ["capauth.policy"], metric: "governance.definition_coverage@1.0.0" },
-  { id: "legal", label: "Legal program", adapters: ["sklegal.global"], metric: "legal.global_program_status@1.0.0" },
-  { id: "corpus", label: "Corpus pipeline", adapters: ["hammertime.pipeline"], metric: "corpus.approved_release_health@1.0.0" },
-  { id: "operator", label: "Operator and shell", adapters: ["atlas.conditions", "skos.discovery"], metric: "operator.ready_condition_forecast@1.0.0" },
-];
+let ESTATE_SILOS = [];
+
+async function loadPanels() {
+  try {
+    const d = await getJSON("/api/v1/panels");
+    if (!d.panels || d.panels.length !== 12) throw new Error("unexpected panel count");
+    ESTATE_SILOS = d.panels.map((p) => ({
+      id: p.silo, label: p.label, adapters: p.adapters,
+      metric: p.metric, metricSource: p.metric_source || p.adapters[0],
+      signal: p.signal, unavailableSignal: p.unavailable_signal,
+    }));
+  } catch (_error) {
+    ESTATE_SILOS = [];
+  }
+}
 
 const STATE_ORDER = { unavailable: 0, unreachable: 1, unknown: 2, partial: 3, stale: 4, not_applicable: 5, current: 6 };
 let estateEvidence = new Map();
@@ -151,24 +152,10 @@ function aggregateValue(item, key) {
   return value == null ? "Unknown" : String(value);
 }
 
-function signalFor(id, items) {
-  const first = items[0];
-  const second = items[1];
-  const signals = {
-    portfolio: () => `${aggregateValue(first, "open")} open, ${aggregateValue(first, "in_progress")} in progress, ${aggregateValue(first, "done")} done`,
-    flow: () => `${aggregateValue(first, "blocked")} blocked, ${aggregateValue(first, "in_progress")} in progress, ${aggregateValue(second, "active_agents")} active agents`,
-    itil: () => `${aggregateValue(first, "open_incidents")} open incidents, SEV1 ${aggregateValue(first, "sev1")}, SEV2 ${aggregateValue(first, "sev2")}, ${aggregateValue(first, "awaiting_cab")} awaiting CAB`,
-    delivery: () => `${aggregateValue(first, "services")} services, ${aggregateValue(first, "releases")} release observations`,
-    architecture: () => `${aggregateValue(first, "total")} CIs, ${aggregateValue(first, "degraded")} degraded, ${aggregateValue(first, "stale")} stale`,
-    fleet: () => `${aggregateValue(first, "graded")} graded, ${aggregateValue(first, "error")} errors, ${aggregateValue(first, "warn")} warnings`,
-    ai: () => `Harness ${aggregateValue(first, "observation_count")} observations; gateway ${aggregateValue(second, "observation_count")} observations`,
-    economy: () => `${aggregateValue(first, "regressions")} performance regressions; ${aggregateValue(second, "total_supply")} Joule supply`,
-    governance: () => `${aggregateValue(first, "denials")} policy denials; policy evidence ${aggregateValue(first, "available")}`,
-    legal: () => first.aggregate ? `${aggregateValue(first, "matters")} matter-free aggregate records; deadline pressure ${aggregateValue(first, "deadline_pressure")}` : "Policy-filtered aggregate unavailable",
-    corpus: () => `${aggregateValue(first, "approved_releases")} approved releases; ${aggregateValue(first, "pipeline_failures")} pipeline failures`,
-    operator: () => `${aggregateValue(first, "open_conditions")} open conditions, ${aggregateValue(first, "ready_actions")} ready-action observations; ${aggregateValue(second, "discovered")} SKOS modules`,
-  };
-  return signals[id]();
+function signalFor(silo, items) {
+  if (silo.unavailableSignal && !items[0]?.aggregate) return silo.unavailableSignal;
+  return silo.signal.replace(/\{(\d+)\.([a-z0-9_]+)\}/g, (_match, source, field) =>
+    aggregateValue(items[Number(source)], field));
 }
 
 function coverageFor(items) {
@@ -205,7 +192,7 @@ function renderEstate(items) {
     return `<tr data-silo="${esc(silo.id)}" data-source-count="${sources.length}">
       <td><strong>${esc(silo.label)}</strong><small>Owner: ${esc(owners)}</small></td>
       <td><span class="truth-badge ${esc(state)}"><b aria-hidden="true">${QUALITY_ICON[state]}</b>${esc(state.replace("_", " "))}</span><small>${esc(visibility)}</small></td>
-      <td><strong>${esc(signalFor(silo.id, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
+      <td><strong>${esc(signalFor(silo, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
       <td><span class="mono">${esc(silo.metric)}</span><small>definition only; result not projected</small><small>scope estate; window latest; ${esc(contextLabel())}; registry source ${esc(metricSource)}${metricSourceHere ? "" : "; source observation appears in another silo"}</small><small>${esc(coverageFor(sources))}</small></td>
       <td><strong>Unknown</strong><small>No comparable baseline is projected</small></td>
       <td><button class="quality-preview-button estate-evidence-button" type="button" data-silo="${esc(silo.id)}" aria-label="Evidence for ${esc(silo.label)}">Evidence</button></td>
@@ -607,18 +594,23 @@ function connectSSE() {
   es.addEventListener("error", () => { dot.classList.remove("on"); text.textContent = "reconnecting"; });
 }
 
-const initialContextReady = initializeContext();
-document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
-  const dialog = document.getElementById("ai-boundary");
-  dialog._trigger = event.currentTarget;
-  dialog.showModal();
-});
-for (const dialog of document.querySelectorAll("dialog")) {
-  dialog.addEventListener("close", () => {
-    if (dialog._trigger) dialog._trigger.focus();
+async function start() {
+  await loadPanels();
+  const initialContextReady = initializeContext();
+  document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
+    const dialog = document.getElementById("ai-boundary");
+    dialog._trigger = event.currentTarget;
+    dialog.showModal();
   });
+  for (const dialog of document.querySelectorAll("dialog")) {
+    dialog.addEventListener("close", () => {
+      if (dialog._trigger) dialog._trigger.focus();
+    });
+  }
+  initPanel(() => load());
+  if (initialContextReady) load();
+  connectSSE();
+  setInterval(load, 30000);
 }
-initPanel(() => load());   // card detail panel (edit/notes/AI); reload on change
-if (initialContextReady) load();
-connectSSE();
-setInterval(load, 30000);
+
+start();

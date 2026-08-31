@@ -1426,9 +1426,20 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    async def panels(request):
+        """Read-only /api/v1/panels: the exact twelve panels in stable ordering."""
+        from .panel_registry import panels_json
+
+        serialized = panels_json().encode()
+        etag = f'"{hashlib.sha256(serialized).hexdigest()}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(serialized, media_type="application/json", headers={"ETag": etag})
+
     return [
         Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
+        Route("/api/v1/panels", panels),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
         Route(
