@@ -1,8 +1,9 @@
 name: docs-check
 
-# DOCS_FRESHNESS_STANDARD gate. Tiers 1 and 2 to start (presence + changelog), so
-# the gate is green from day one. SOP.md already carries a docs-evidence block, so
-# moving to tiers "1,2,3" is a follow-up once this has run clean.
+# DOCS_FRESHNESS_STANDARD gate with changelog fragment support.
+# Uses sk-standards reusable workflow for tiers 1 and 3, but handles tier 2
+# (changelog) locally to accept changelog.d/ fragment files as satisfying the
+# requirement. This prevents CHANGELOG.md collisions from blocking concurrent PRs.
 on: [push, pull_request]
 
 permissions:
@@ -10,6 +11,106 @@ permissions:
 
 jobs:
   docs:
-    uses: smilinTux/sk-standards/.github/workflows/docs-check.yml@main
-    with:
-      tiers: "1,2,3"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the validator from sk-standards
+        uses: actions/checkout@v4
+        with:
+          repository: smilinTux/sk-standards
+          ref: main
+          path: .sk-standards
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Collect changed files (pull requests only)
+        id: changed
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ github.base_ref }}" --depth=50 || true
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/changed.txt || true
+          echo "count=$(wc -l < /tmp/changed.txt)" >> "$GITHUB_OUTPUT"
+          cat /tmp/changed.txt
+
+      - name: Honour the changelog escape hatch
+        id: hatch
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          used=no
+          case "$TITLE" in *"[skip-changelog]"*) used=yes ;; esac
+          case ",$LABELS," in *",docs-exempt,"*) used=yes ;; esac
+          echo "used=$used" >> "$GITHUB_OUTPUT"
+          if [ "$used" = "yes" ]; then
+            echo "::warning title=changelog check waived::PR '$TITLE' waived the CHANGELOG requirement (labels: $LABELS)"
+          fi
+
+      - name: Run tier 1 (presence) and tier 3 (evidence) checks
+        run: |
+          set -euo pipefail
+          python .sk-standards/scripts/docs_check.py --repo . --tier 1 --tier 3
+
+      - name: Run tier 2 (changelog) check with fragment support
+        if: github.event_name == 'pull_request' && steps.hatch.outputs.used != 'yes'
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/changed.txt ]; then
+            echo "No changed files list, skipping changelog check"
+            exit 0
+          fi
+
+          CODE_GLOBS=("src/" "pyproject.toml")
+          touches_code=false
+          while IFS= read -r f; do
+            for glob in "${CODE_GLOBS[@]}"; do
+              if [[ "$f" == "$glob"* ]]; then
+                touches_code=true
+                break 2
+              fi
+            done
+          done < /tmp/changed.txt
+
+          if [ "$touches_code" = false ]; then
+            echo "ok: no code touched, changelog check n/a"
+            exit 0
+          fi
+
+          # Check for either CHANGELOG.md edit or a changelog.d/ fragment
+          has_changelog=false
+          has_fragment=false
+          while IFS= read -r f; do
+            if [ "$f" = "CHANGELOG.md" ]; then
+              has_changelog=true
+            fi
+            if [[ "$f" == changelog.d/* ]]; then
+              has_fragment=true
+            fi
+          done < /tmp/changed.txt
+
+          if [ "$has_changelog" = true ]; then
+            echo "ok: code changed and CHANGELOG.md updated"
+            exit 0
+          fi
+
+          if [ "$has_fragment" = true ]; then
+            echo "ok: code changed and changelog.d/ fragment added"
+            exit 0
+          fi
+
+          echo "::error::code under src/ or pyproject.toml changed but neither CHANGELOG.md nor a changelog.d/ fragment was added."
+          echo "Add a fragment to changelog.d/ (e.g., card123.added.md) or use the docs-exempt label / [skip-changelog] for a genuinely trivial change."
+          exit 1
+
+      - name: Prove the gate can fail (negative control)
+        run: python .sk-standards/scripts/docs_check.py --self-test

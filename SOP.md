@@ -516,4 +516,10 @@ checks:
     run: grep -q 'tag_regex = "\^v' pyproject.toml
   - name: dependency direction holds (consent.py is the ONLY skcapstone.card_store importer)
     run: test "$(grep -rlE --include='*.py' 'skcapstone\.(coordination|card_store)' src/skdashboard/ | sort | tr '\n' ' ')" = "src/skdashboard/consent.py "
+  - name: changelog fragments directory exists for parallel PRs
+    run: test -d changelog.d && test -f changelog.d/.gitkeep
+  - name: towncrier is configured in pyproject.toml
+    run: grep -q '\[tool.towncrier\]' pyproject.toml && grep -q 'directory = "changelog.d"' pyproject.toml
+  - name: CHANGELOG.md has towncrier start marker
+    run: grep -q '<!-- towncrier release notes start -->' CHANGELOG.md
 -->

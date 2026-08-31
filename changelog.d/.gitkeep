@@ -1,0 +1,23 @@
+# Changelog fragments directory
+
+This directory contains towncrier news fragments. Each PR should add its own
+fragment file named for the card or PR (e.g., `c75f1c98.added.md` or `pr126.fixed.md`).
+
+Fragment types:
+- added.md    - New features
+- changed.md  - Changes to existing functionality
+- deprecated.md - Soon-to-be removed features
+- removed.md  - Removed features
+- fixed.md    - Bug fixes
+- security.md - Security fixes
+- docs.md     - Documentation changes
+
+When a release is made, run `towncrier build --version <version>` to compile
+all fragments into CHANGELOG.md and remove them from this directory.
+
+Example fragment (added.md):
+```
+Added provider-neutral read-only dashboard assistant through SKGateway with
+typed request/response validation and fail-closed error handling.
+[PR #130](https://github.com/smilinTux/skdashboard/pull/130)
+```
