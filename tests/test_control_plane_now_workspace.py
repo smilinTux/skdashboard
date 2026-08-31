@@ -1,5 +1,3 @@
-import json
-import re
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -7,6 +5,7 @@ from starlette.testclient import TestClient
 from skdashboard.control_plane_adapters import SPECS
 from skdashboard.control_plane_metric_registry import REGISTRY
 from skdashboard.dashboard import create_app
+from skdashboard.panel_registry import BUILTIN_PANELS
 
 ROOT = Path(__file__).parents[1]
 
@@ -25,12 +24,9 @@ def test_now_workspace_declares_exact_breadth_and_fail_closed_ai_boundary() -> N
     js = (ROOT / "src/skdashboard/static/js/overview.js").read_text(encoding="utf-8")
     css = (ROOT / "src/skdashboard/static/css/overview.css").read_text(encoding="utf-8")
 
-    assert js.count(' id: "') == 12
-    assert {spec.adapter_id for spec in SPECS} <= {
-        quoted.split('"')[1]
-        for quoted in js.splitlines()
-        if "adapters: [" in quoted
-        for quoted in quoted.split("[")[1].split("]")[0].split(", ")
+    assert len(BUILTIN_PANELS) == 12
+    assert {spec.adapter_id for spec in SPECS} == {
+        adapter for panel in BUILTIN_PANELS for adapter in panel.adapters
     }
     for marker in (
         "No decision projection available",
@@ -71,18 +67,12 @@ def test_now_workspace_declares_exact_breadth_and_fail_closed_ai_boundary() -> N
 
 
 def test_now_metric_context_sources_match_the_registry() -> None:
-    js = (ROOT / "src/skdashboard/static/js/overview.js").read_text(encoding="utf-8")
-    configs = [line for line in js.splitlines() if " metric: " in line]
-    assert len(configs) == 12
-    for config in configs:
-        metric = re.search(r'metric: "([^"]+)@([^"]+)"', config)
-        adapters = re.search(r"adapters: (\[[^]]+\])", config)
-        explicit_source = re.search(r'metricSource: "([^"]+)"', config)
-        assert metric and adapters
-        definition = REGISTRY[(metric.group(1), metric.group(2))]
-        declared_adapters = json.loads(adapters.group(1))
-        shown_source = explicit_source.group(1) if explicit_source else declared_adapters[0]
+    assert len(BUILTIN_PANELS) == 12
+    for panel in BUILTIN_PANELS:
+        metric_id, version = panel.metric.split("@", 1)
+        definition = REGISTRY[(metric_id, version)]
+        shown_source = panel.metric_source or panel.adapters[0]
         assert shown_source == definition.adapter_id
 
-    economy = next(line for line in configs if 'id: "economy"' in line)
-    assert 'metricSource: "skcounter.harness"' in economy
+    economy = next(panel for panel in BUILTIN_PANELS if panel.silo == "economy")
+    assert economy.metric_source == "skcounter.harness"

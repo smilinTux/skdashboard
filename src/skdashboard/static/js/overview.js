@@ -47,37 +47,19 @@ const QUALITY_ICON = {
   unreachable: "×", unknown: "?", not_applicable: "○",
 };
 
-let ESTATE_SILOS = [
-  { id: "portfolio", label: "Portfolio and projects", adapters: ["skcapstone.portfolio"], metric: "portfolio.blocked_objectives@1.0.0" },
-  { id: "flow", label: "Agile flow", adapters: ["skcoord.flow", "skcoord.agent_presence"], metric: "flow.review_coverage@1.0.0" },
-  { id: "itil", label: "ITIL and SRE", adapters: ["skcapstone.itil"], metric: "itil.change_classification_coverage@1.0.0" },
-  { id: "delivery", label: "Engineering delivery", adapters: ["skcapstone.service_release"], metric: "engineering.delivery_signals_current@1.0.0" },
-  { id: "architecture", label: "Architecture and CMDB", adapters: ["cmdb.configuration"], metric: "architecture.drift_signals@1.0.0" },
-  { id: "fleet", label: "Fleet runtime", adapters: ["skcapstone.fleet"], metric: "fleet.reporting_nodes@1.0.0" },
-  { id: "ai", label: "AI and models", adapters: ["skcounter.harness", "skgateway.observed"], metric: "ai.accepted_outcome_rate@1.0.0" },
-  { id: "economy", label: "Economy", adapters: ["skperf.aggregate", "skjoule.wallet"], metric: "economy.cost_per_accepted_outcome@1.0.0", metricSource: "skcounter.harness" },
-  { id: "governance", label: "Governance and data quality", adapters: ["capauth.policy"], metric: "governance.definition_coverage@1.0.0" },
-  { id: "legal", label: "Legal program", adapters: ["sklegal.global"], metric: "legal.global_program_status@1.0.0" },
-  { id: "corpus", label: "Corpus pipeline", adapters: ["hammertime.pipeline"], metric: "corpus.approved_release_health@1.0.0" },
-  { id: "operator", label: "Operator and shell", adapters: ["atlas.conditions", "skos.discovery"], metric: "operator.ready_condition_forecast@1.0.0" },
-];
+let ESTATE_SILOS = [];
 
-// Single derivable source: /api/v1/panels. When it loads successfully, it
-// replaces the local ESTATE_SILOS literal; on failure the literal remains
-// the fallback (zero behavior change). No route or nav changes.
-let panelsLoaded = false;
 async function loadPanels() {
   try {
     const d = await getJSON("/api/v1/panels");
     if (!d.panels || d.panels.length !== 12) throw new Error("unexpected panel count");
     ESTATE_SILOS = d.panels.map((p) => ({
       id: p.silo, label: p.label, adapters: p.adapters,
-      metricRef: p.metric, metricSource: p.metric_source || p.adapters[0],
+      metric: p.metric, metricSource: p.metric_source || p.adapters[0],
+      signal: p.signal, unavailableSignal: p.unavailable_signal,
     }));
-    panelsLoaded = true;
   } catch (_error) {
-    // Keep the local literal on failure; the endpoint is read-only metadata.
-    panelsLoaded = false;
+    ESTATE_SILOS = [];
   }
 }
 
@@ -170,27 +152,10 @@ function aggregateValue(item, key) {
   return value == null ? "Unknown" : String(value);
 }
 
-function signalFor(id, items) {
-  // Signal format template: one generic joiner over the silo's declared
-  // source fields, with no per-silo branch. Each source contributes its
-  // aggregate values separated by "; "; a missing value renders as "Unknown",
-  // preserving the existing formatting behavior (e.g. the honest unavailable
-  // sklegal.global tile renders "Unknown" / "Policy-filtered aggregate
-  // unavailable").
-  const parts = [];
-  for (const item of items) {
-    if (!item || !item.aggregate) {
-      parts.push(item && item.adapter_id ? `${item.adapter_id}: not observed` : "not observed");
-      continue;
-    }
-    const fields = Object.keys(item.aggregate);
-    const values = fields.map((key) => {
-      const value = item.aggregate[key];
-      return `${key} ${value == null ? "Unknown" : value}`;
-    });
-    parts.push(`${item.adapter_id}: ${values.join(", ")}`);
-  }
-  return parts.length ? parts.join("; ") : "no sources";
+function signalFor(silo, items) {
+  if (silo.unavailableSignal && !items[0]?.aggregate) return silo.unavailableSignal;
+  return silo.signal.replace(/\{(\d+)\.([a-z0-9_]+)\}/g, (_match, source, field) =>
+    aggregateValue(items[Number(source)], field));
 }
 
 function coverageFor(items) {
@@ -227,7 +192,7 @@ function renderEstate(items) {
     return `<tr data-silo="${esc(silo.id)}" data-source-count="${sources.length}">
       <td><strong>${esc(silo.label)}</strong><small>Owner: ${esc(owners)}</small></td>
       <td><span class="truth-badge ${esc(state)}"><b aria-hidden="true">${QUALITY_ICON[state]}</b>${esc(state.replace("_", " "))}</span><small>${esc(visibility)}</small></td>
-      <td><strong>${esc(signalFor(silo.id, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
+      <td><strong>${esc(signalFor(silo, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
       <td><span class="mono">${esc(silo.metric)}</span><small>definition only; result not projected</small><small>scope estate; window latest; ${esc(contextLabel())}; registry source ${esc(metricSource)}${metricSourceHere ? "" : "; source observation appears in another silo"}</small><small>${esc(coverageFor(sources))}</small></td>
       <td><strong>Unknown</strong><small>No comparable baseline is projected</small></td>
       <td><button class="quality-preview-button estate-evidence-button" type="button" data-silo="${esc(silo.id)}" aria-label="Evidence for ${esc(silo.label)}">Evidence</button></td>
@@ -629,19 +594,23 @@ function connectSSE() {
   es.addEventListener("error", () => { dot.classList.remove("on"); text.textContent = "reconnecting"; });
 }
 
-const initialContextReady = initializeContext();
-loadPanels();
-document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
-  const dialog = document.getElementById("ai-boundary");
-  dialog._trigger = event.currentTarget;
-  dialog.showModal();
-});
-for (const dialog of document.querySelectorAll("dialog")) {
-  dialog.addEventListener("close", () => {
-    if (dialog._trigger) dialog._trigger.focus();
+async function start() {
+  await loadPanels();
+  const initialContextReady = initializeContext();
+  document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
+    const dialog = document.getElementById("ai-boundary");
+    dialog._trigger = event.currentTarget;
+    dialog.showModal();
   });
+  for (const dialog of document.querySelectorAll("dialog")) {
+    dialog.addEventListener("close", () => {
+      if (dialog._trigger) dialog._trigger.focus();
+    });
+  }
+  initPanel(() => load());
+  if (initialContextReady) load();
+  connectSSE();
+  setInterval(load, 30000);
 }
-initPanel(() => load());   // card detail panel (edit/notes/AI); reload on change
-if (initialContextReady) load();
-connectSSE();
-setInterval(load, 30000);
+
+start();

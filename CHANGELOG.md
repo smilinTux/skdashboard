@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Derive the twelve dashboard panels, adapter specs, metric definitions, metric
+  families, Python silos, and unchanged overview signal copy from one registry,
+  exposed through stable read-only panel metadata.
+
 - Reconcile and repair PR 97 authenticated live control-plane composition (card 888b0c76)
   with current main, wiring read-only runtime entrypoint to session resolver, typed
   authorizer, invocation factory, durable SKCoord owner-policy provider, and Now,

@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Mapping
 
+from .panel_registry import derive_approved_families, derive_metric_definitions
+
 SCHEMA_VERSION = "1.1.0"
 REGISTRY_VERSION = "1.0.0"
 NO_VALUE_STATES = frozenset({"unavailable", "unreachable", "unknown", "not_applicable"})
@@ -20,20 +22,7 @@ MEASUREMENT_KINDS = frozenset({"measured", "derived", "estimated", "forecast"})
 POLARITIES = frozenset({"higher_is_better", "lower_is_better", "target_range", "context_only"})
 CLASSIFICATIONS = frozenset({"public", "internal", "confidential", "restricted"})
 METHODS = frozenset({"count", "ratio", "ratio_percent"})
-APPROVED_FAMILIES = (
-    "portfolio",
-    "flow",
-    "itil_sre",
-    "delivery",
-    "architecture",
-    "fleet",
-    "ai_models",
-    "economy",
-    "governance",
-    "legal",
-    "corpus_pipeline",
-    "operator_shell",
-)
+APPROVED_FAMILIES = derive_approved_families()
 
 
 class MetricContractError(ValueError):
@@ -90,21 +79,7 @@ class MetricDefinition:
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-DEFINITIONS = (
-    MetricDefinition("portfolio.blocked_objectives", "1.0.0", "portfolio", "Blocked objectives", "objectives", "lower_is_better", "measured", "count", "numerator", "SKCapstone", "skcapstone.portfolio"),
-    MetricDefinition("flow.review_coverage", "1.0.0", "flow", "Review coverage", "percent", "higher_is_better", "derived", "ratio_percent", "100 * numerator / denominator", "skcoord", "skcoord.flow"),
-    MetricDefinition("itil.change_classification_coverage", "1.0.0", "itil_sre", "Change classification coverage", "percent", "higher_is_better", "derived", "ratio_percent", "100 * numerator / denominator", "SKCapstone ITIL", "skcapstone.itil"),
-    MetricDefinition("engineering.delivery_signals_current", "1.0.0", "delivery", "Current delivery signals", "signals", "higher_is_better", "measured", "count", "numerator", "SKCapstone", "skcapstone.service_release"),
-    MetricDefinition("architecture.drift_signals", "1.0.0", "architecture", "Material drift signals", "signals", "lower_is_better", "derived", "count", "numerator", "CMDB", "cmdb.configuration"),
-    MetricDefinition("fleet.reporting_nodes", "1.0.0", "fleet", "Reporting fleet nodes", "nodes", "higher_is_better", "measured", "count", "numerator", "SKCapstone Fleet", "skcapstone.fleet"),
-    MetricDefinition("ai.accepted_outcome_rate", "1.0.0", "ai_models", "Accepted AI outcome rate", "percent", "higher_is_better", "derived", "ratio_percent", "100 * numerator / denominator", "SKCounter", "skcounter.harness", scope_dimensions=("portfolio_id", "measurement_lane")),
-    MetricDefinition("ai.gateway_observation_count", "1.0.0", "ai_models", "Gateway observation count", "observations", "context_only", "measured", "count", "numerator", "SKGateway", "skgateway.observed", scope_dimensions=("portfolio_id", "measurement_lane")),
-    MetricDefinition("economy.cost_per_accepted_outcome", "1.0.0", "economy", "Cost per accepted outcome", "usd", "lower_is_better", "estimated", "ratio", "numerator / denominator", "SKCounter", "skcounter.harness", scope_dimensions=("portfolio_id", "measurement_lane")),
-    MetricDefinition("governance.definition_coverage", "1.0.0", "governance", "Metric definition coverage", "percent", "higher_is_better", "derived", "ratio_percent", "100 * numerator / denominator", "CapAuth", "capauth.policy"),
-    MetricDefinition("legal.global_program_status", "1.0.0", "legal", "Policy-filtered legal program status", "status", "context_only", "measured", "count", "numerator", "SKLegal", "sklegal.global", "confidential"),
-    MetricDefinition("corpus.approved_release_health", "1.0.0", "corpus_pipeline", "Approved corpus release health", "releases", "higher_is_better", "measured", "count", "numerator", "HammerTime", "hammertime.pipeline", "confidential"),
-    MetricDefinition("operator.ready_condition_forecast", "1.0.0", "operator_shell", "Ready condition forecast", "conditions", "context_only", "forecast", "count", "numerator", "Atlas", "atlas.conditions", "confidential"),
-)
+DEFINITIONS = derive_metric_definitions()
 
 
 def _registry(
@@ -118,11 +93,15 @@ def _registry(
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{2,127}", definition.metric_id):
             raise MetricContractError(f"invalid metric id: {definition.metric_id}")
         if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", definition.definition_version):
-            raise MetricContractError(f"invalid definition version: {definition.definition_version}")
+            raise MetricContractError(
+                f"invalid definition version: {definition.definition_version}"
+            )
         if definition.family not in APPROVED_FAMILIES:
             raise MetricContractError(f"unapproved metric family: {definition.family}")
         if definition.measurement_kind not in MEASUREMENT_KINDS:
-            raise MetricContractError(f"unsupported measurement kind: {definition.measurement_kind}")
+            raise MetricContractError(
+                f"unsupported measurement kind: {definition.measurement_kind}"
+            )
         if definition.polarity not in POLARITIES:
             raise MetricContractError(f"unsupported polarity: {definition.polarity}")
         if definition.classification not in CLASSIFICATIONS:
@@ -149,9 +128,7 @@ def registry_manifest() -> dict:
         "metric_result_schema_version": SCHEMA_VERSION,
         "definition_hashes": definitions,
     }
-    encoded = json.dumps(
-        payload, allow_nan=False, sort_keys=True, separators=(",", ":")
-    ).encode()
+    encoded = json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
     return {**payload, "registry_hash": f"sha256:{hashlib.sha256(encoded).hexdigest()}"}
 
 
@@ -188,15 +165,15 @@ def _require_provenance(source: object, *, evidence_required: bool) -> dict:
         not isinstance(source["watermarks"], list)
         or len(source["watermarks"]) > 64
         or not all(
-        isinstance(item, dict)
-        and set(item) == {"source", "value"}
-        and isinstance(item["source"], str)
-        and bool(item["source"])
-        and len(item["source"]) <= 128
-        and isinstance(item["value"], str)
-        and bool(item["value"])
-        and len(item["value"]) <= 256
-        for item in source["watermarks"]
+            isinstance(item, dict)
+            and set(item) == {"source", "value"}
+            and isinstance(item["source"], str)
+            and bool(item["source"])
+            and len(item["source"]) <= 128
+            and isinstance(item["value"], str)
+            and bool(item["value"])
+            and len(item["value"]) <= 256
+            for item in source["watermarks"]
         )
     ):
         raise MetricContractError("source watermarks are malformed")
@@ -212,7 +189,9 @@ def _require_provenance(source: object, *, evidence_required: bool) -> dict:
     return dict(source)
 
 
-def _calculate_value(definition: MetricDefinition, numerator: object, denominator: object) -> int | float:
+def _calculate_value(
+    definition: MetricDefinition, numerator: object, denominator: object
+) -> int | float:
     if (
         not isinstance(numerator, (int, float))
         or isinstance(numerator, bool)
@@ -325,7 +304,12 @@ def calculate_metric(metric_id: str, observation: Mapping[str, object]) -> dict:
     if any(key in scope for key in ("person_id", "user_id", "agent_id")):
         raise MetricContractError("individual scopes are not permitted")
     for key, value in scope.items():
-        _string(value, f"scope {key}", maximum=64 if key == "measurement_lane" else 128, allow_empty=True)
+        _string(
+            value,
+            f"scope {key}",
+            maximum=64 if key == "measurement_lane" else 128,
+            allow_empty=True,
+        )
     window = observation.get("window")
     if not isinstance(window, dict):
         raise MetricContractError("measurement window is required")
@@ -364,11 +348,13 @@ def calculate_metric(metric_id: str, observation: Mapping[str, object]) -> dict:
         ("exclusions", exclusions, False),
         ("notes", notes, True),
     ):
-        if not isinstance(values, list) or len(values) > 64 or not all(
-            isinstance(value, str)
-            and (allow_empty or bool(value))
-            and len(value) <= 256
-            for value in values
+        if (
+            not isinstance(values, list)
+            or len(values) > 64
+            or not all(
+                isinstance(value, str) and (allow_empty or bool(value)) and len(value) <= 256
+                for value in values
+            )
         ):
             raise MetricContractError(f"data quality {field} are malformed")
     errors = list(errors)
@@ -431,7 +417,9 @@ def calculate_metric(metric_id: str, observation: Mapping[str, object]) -> dict:
             lower = confidence.get("lower")
             upper = confidence.get("upper")
             if lower is None or upper is None or lower > upper:
-                raise MetricContractError("forecast confidence requires ordered lower and upper bounds")
+                raise MetricContractError(
+                    "forecast confidence requires ordered lower and upper bounds"
+                )
     policy_decision_ref = observation.get("policy_decision_ref")
     if policy_decision_ref is not None:
         _string(policy_decision_ref, "classification policy_decision_ref", maximum=256)

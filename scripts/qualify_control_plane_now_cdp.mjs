@@ -149,7 +149,7 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     await send("Network.enable");
     await send("Accessibility.enable");
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/now?role=architect&scope=estate&window=latest&baseline=none&service=all` });
     try {
       await waitFor(async () => evaluate("document.querySelectorAll('#estate-rows tr[data-silo]').length === 12").catch(() => false), "Estate pulse did not render");
@@ -163,6 +163,7 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
       rows: document.querySelectorAll('#estate-rows tr[data-silo]').length,
       sources: [...document.querySelectorAll('#estate-rows tr[data-silo]')].reduce((total, row) => total + Number(row.dataset.sourceCount), 0),
       evidenceButtons: document.querySelectorAll('.estate-evidence-button').length,
+      signals: [...document.querySelectorAll('#estate-rows td:nth-child(3) strong')].map((node) => node.textContent),
       metricVersions: [...document.querySelectorAll('#estate-rows td:nth-child(4)')].every((node) => node.textContent.includes('@1.0.0') && node.textContent.includes('scope estate') && node.textContent.includes('window latest')),
       baselineUnknown: [...document.querySelectorAll('#estate-rows td:nth-child(5)')].every((node) => node.textContent.includes('Unknown') && node.textContent.includes('No comparable baseline')),
       ai: document.querySelector('.ai-abstention').textContent,
@@ -175,6 +176,20 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     assert.equal(desktop.rows, 12);
     assert.equal(desktop.sources, 16);
     assert.equal(desktop.evidenceButtons, 12);
+    assert.deepEqual(desktop.signals, [
+      "3 open, 2 in progress, 4 done",
+      "2 blocked, 2 in progress, 3 active agents",
+      "0 open incidents, SEV1 0, SEV2 0, 0 awaiting CAB",
+      "5 services, 3 release observations",
+      "12 CIs, 2 degraded, 2 stale",
+      "Unknown graded, Unknown errors, Unknown warnings",
+      "Harness 8 observations; gateway 9 observations",
+      "1 performance regressions; 420 Joule supply",
+      "2 policy denials; policy evidence true",
+      "Policy-filtered aggregate unavailable",
+      "Unknown approved releases; Unknown pipeline failures",
+      "3 open conditions, 2 ready-action observations; Unknown SKOS modules",
+    ]);
     assert.equal(desktop.metricVersions, true);
     assert.equal(desktop.baselineUnknown, true);
     assert.match(desktop.ai, /AI abstained/);
@@ -315,14 +330,14 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     assert.equal(await evaluate("document.querySelectorAll('.chip.ok').length"), 0);
     assert.equal(await evaluate("document.body.textContent.includes('synthetic-flow-r1')"), false);
     assert.match(await evaluate("document.getElementById('saved-view-status').textContent"), /Unauthorized or revoked/);
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: savedUrl });
     await waitFor(async () => evaluate("document.querySelector('#estate-rows tr[data-silo]')?.dataset.silo === 'flow'").catch(() => false), "Saved view did not recover after 401 test");
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer denied-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer denied-cdp", Origin: "https://10.0.0.139:7778" } });
     await evaluate("window.dispatchEvent(new PopStateEvent('popstate'))");
     await waitFor(async () => evaluate("document.getElementById('estate-count').textContent === 'Unavailable'").catch(() => false), "403 revocation did not fail closed");
     assert.match(await evaluate("document.getElementById('saved-view-status').textContent"), /Unauthorized or revoked/);
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: safeShareUrl });
     await waitFor(async () => evaluate("document.querySelector('#estate-rows tr[data-silo]')?.dataset.silo === 'flow'").catch(() => false), "Safe share link did not restore context");
     assert.equal(await evaluate("new URLSearchParams(location.search).has('saved_view')"), false);

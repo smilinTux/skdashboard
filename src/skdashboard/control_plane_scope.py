@@ -6,23 +6,10 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from .panel_registry import derive_python_silos
+
 ROLES = frozenset({"operator", "project-manager", "architect"})
-SILOS = frozenset(
-    {
-        "portfolio",
-        "flow",
-        "itil",
-        "delivery",
-        "architecture",
-        "fleet",
-        "ai",
-        "economy",
-        "governance",
-        "legal",
-        "corpus",
-        "operator",
-    }
-)
+SILOS = frozenset(derive_python_silos())
 TRUTH_STATES = frozenset(
     {
         "current",
