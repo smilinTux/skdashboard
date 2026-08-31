@@ -24,9 +24,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
+
+from .control_plane_scope import ALLOWED_KEYS as _CONTROL_PLANE_QUERY_KEYS
 
 logger = logging.getLogger("skcapstone.dashboard")
 
@@ -39,6 +43,85 @@ DEFAULT_DASHBOARD_HOST = "127.0.0.1"
 #: health picture does not change second-to-second, so a short TTL is safe.
 _DOCTOR_CACHE_TTL = 30.0
 _doctor_cache: dict = {"ts": 0.0, "home": None, "report": None}
+
+_CANONICAL_CONTROL_PLANE_ORIGIN_ENV = "SKDASHBOARD_CANONICAL_CONTROL_PLANE_ORIGIN"
+_MAX_CONTROL_PLANE_PATH_BYTES = 2048
+_MAX_CONTROL_PLANE_QUERY_BYTES = 2048
+_MAX_CONTROL_PLANE_QUERY_FIELDS = 16
+_MAX_CONTROL_PLANE_QUERY_VALUE_LENGTH = 128
+_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+def _validate_canonical_control_plane_origin(origin: str | None) -> str | None:
+    """Return a fixed HTTPS origin or fail closed for invalid configuration."""
+    if origin is None:
+        return None
+    if not origin or origin != origin.strip() or any(ord(char) < 32 for char in origin):
+        raise ValueError(f"{_CANONICAL_CONTROL_PLANE_ORIGIN_ENV} must be an exact HTTPS origin")
+    if "\\" in origin or "%" in origin:
+        raise ValueError(f"{_CANONICAL_CONTROL_PLANE_ORIGIN_ENV} must be an exact HTTPS origin")
+
+    parsed = urlsplit(origin)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"{_CANONICAL_CONTROL_PLANE_ORIGIN_ENV} must be an exact HTTPS origin"
+        ) from exc
+    hostname = parsed.hostname or ""
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.netloc
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or any(ord(char) > 127 or char.isspace() for char in hostname)
+        or not re.fullmatch(r"[A-Za-z0-9.:-]+", hostname)
+    ):
+        raise ValueError(f"{_CANONICAL_CONTROL_PLANE_ORIGIN_ENV} must be an exact HTTPS origin")
+
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    return f"https://{host}{f':{port}' if port is not None else ''}"
+
+
+def _validated_control_plane_query(raw_query: bytes) -> str:
+    """Preserve a bounded allowlisted query or reject it without redirecting."""
+    if not raw_query:
+        return ""
+    if len(raw_query) > _MAX_CONTROL_PLANE_QUERY_BYTES:
+        raise ValueError("control-plane query is too long")
+    try:
+        query = raw_query.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("control-plane query must be ASCII") from exc
+    if _PERCENT_ESCAPE.search(query):
+        raise ValueError("control-plane query contains an invalid escape")
+    try:
+        pairs = parse_qsl(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=_MAX_CONTROL_PLANE_QUERY_FIELDS,
+        )
+    except ValueError as exc:
+        raise ValueError("control-plane query is invalid") from exc
+
+    seen: set[str] = set()
+    for key, value in pairs:
+        if (
+            key not in _CONTROL_PLANE_QUERY_KEYS
+            or key in seen
+            or not value
+            or len(value) > _MAX_CONTROL_PLANE_QUERY_VALUE_LENGTH
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError("control-plane query is not safe to redirect")
+        seen.add(key)
+    return query
+
 
 # ---------------------------------------------------------------------------
 # Capability names for the write routes that are NOT queue-a-run and NOT a
@@ -767,6 +850,7 @@ def _json(data: dict):
 def create_app(
     home: Path,
     *,
+    canonical_control_plane_origin: str | None = None,
     control_plane_authorizer=None,
     control_plane_decision_authorizer=None,
     control_plane_invocation_factory=None,
@@ -803,6 +887,10 @@ def create_app(
     from . import dashboard_operator as dop
     from . import queue_authz
     from .surface_registry import resolve_card_id
+
+    canonical_control_plane_origin = _validate_canonical_control_plane_origin(
+        canonical_control_plane_origin
+    )
 
     def _cmdb():
         from . import dashboard_cmdb as dc
@@ -1871,6 +1959,32 @@ def create_app(
 
         return _json(dfleet.get_drift(home))
 
+    async def canonical_control_plane_redirect(request):
+        raw_path = request.scope.get("raw_path", b"")
+        if (
+            not raw_path
+            or len(raw_path) > _MAX_CONTROL_PLANE_PATH_BYTES
+            or (
+                raw_path != b"/control-plane"
+                and not raw_path.startswith(b"/control-plane/")
+            )
+            or any(byte < 32 or byte == 127 or byte == 92 for byte in raw_path)
+        ):
+            return JSONResponse({"detail": "invalid control-plane path"}, status_code=400)
+        try:
+            path = raw_path.decode("ascii")
+            query = _validated_control_plane_query(request.scope.get("query_string", b""))
+        except (UnicodeDecodeError, ValueError):
+            return JSONResponse({"detail": "invalid control-plane redirect"}, status_code=400)
+        destination = f"{canonical_control_plane_origin}{path}"
+        if query:
+            destination = f"{destination}?{query}"
+        return RedirectResponse(
+            destination,
+            status_code=307,
+            headers={"Cache-Control": "no-store"},
+        )
+
     routes = [
         Route("/", index),
         Route("/control-plane/now", index),
@@ -1969,6 +2083,15 @@ def create_app(
         Route("/fleet", _page("fleet.html")),
         Route("/api/fleet/drift", api_fleet_drift),
     ]
+    if canonical_control_plane_origin is not None:
+        routes[1:1] = [
+            Route("/control-plane", canonical_control_plane_redirect, methods=["GET"]),
+            Route(
+                "/control-plane/{path:path}",
+                canonical_control_plane_redirect,
+                methods=["GET"],
+            ),
+        ]
     from .control_plane_api import routes as control_plane_routes
 
     routes.extend(
@@ -2067,6 +2190,9 @@ def start_dashboard(
     """
     bind_host = host or os.environ.get("SKDASHBOARD_HOST", "").strip()
     bind_host = bind_host or DEFAULT_DASHBOARD_HOST
-    app = create_app(home)
+    app = create_app(
+        home,
+        canonical_control_plane_origin=os.environ.get(_CANONICAL_CONTROL_PLANE_ORIGIN_ENV),
+    )
     logger.info("Dashboard running at http://%s:%d", bind_host, port)
     return _UvicornServer(app, bind_host, port)
