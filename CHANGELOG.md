@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add an optional fail-closed canonical HTTPS origin for legacy browser
+  control-plane routes while preserving local bearer enforcement for protected APIs.
+
 - Reconcile and repair PR 97 authenticated live control-plane composition (card 888b0c76)
   with current main, wiring read-only runtime entrypoint to session resolver, typed
   authorizer, invocation factory, durable SKCoord owner-policy provider, and Now,
