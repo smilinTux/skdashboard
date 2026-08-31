@@ -29,7 +29,7 @@ from .dashboard import _get_agent_status, _get_board_state
 from .runtime_boundary import ALLOWED_BIND_HOSTS
 
 HSTS_POLICY = "max-age=31536000"
-ALLOWED_REQUEST_HOSTS = ALLOWED_BIND_HOSTS | frozenset(
+ALLOWED_REQUEST_HOSTS = frozenset(
     urlsplit(origin).hostname for origin in ALLOWED_BROWSER_ORIGINS
 )
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"

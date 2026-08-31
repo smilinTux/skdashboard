@@ -106,6 +106,11 @@ def test_exact_https_origins_redirect_hsts_and_public_host_denial(
     )
     assert redirect.status_code == 308
     assert redirect.headers["location"] == "https://10.0.0.139:7778/api/v1/health?probe=1"
+    raw_tailnet = TestClient(app, base_url="http://100.81.238.58:7778").get(
+        "/auth/login", follow_redirects=False
+    )
+    assert raw_tailnet.status_code == 400
+    assert "location" not in raw_tailnet.headers
     assert TestClient(app, base_url="https://public.example").get("/").status_code == 400
 
 
