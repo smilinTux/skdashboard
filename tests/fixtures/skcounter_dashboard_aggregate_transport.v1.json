@@ -1,0 +1,68 @@
+{
+  "schema_version": "skcounter.dashboard-aggregate-transport.v1",
+  "authority": {
+    "service_id": "skcounter-collector@chiap04",
+    "host_fqdn": "chiap04.tail204f0c.ts.net",
+    "endpoint": "https://chiap04.tail204f0c.ts.net:9398/v1/dashboard/aggregates/latest",
+    "index_schema_version": "skcounter.latest-observation-index.v1"
+  },
+  "target": {
+    "service_id": "skdashboard-read-only@chiap08",
+    "host_fqdn": "chiap08.tail204f0c.ts.net",
+    "audience": "skcounter",
+    "capability": "skcounter.dashboard.aggregates.read"
+  },
+  "generated_at": "2026-08-31T14:00:00Z",
+  "fresh_until": "2026-08-31T14:45:00Z",
+  "payload_sha256": "3c26daeee95026e691347f28565bac2849315a025a73c8e5079d2c6e33660b73",
+  "payload_bytes": 1121,
+  "rows": 1,
+  "records": [
+    {
+      "schema_version": "skcounter.dashboard-aggregate.v1",
+      "measurement_lane": "gateway_observed",
+      "node_id": "chiap08",
+      "principal_id": "skgateway",
+      "observed_at": "2026-08-31T14:00:00Z",
+      "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payload_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_observation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "aggregate": {
+        "view": "models",
+        "bucket_start": "2026-08-31T14:00:00Z",
+        "client": "codex",
+        "provider": "skgateway",
+        "model": "gpt-5.6-sol",
+        "tokens": {
+          "input": 100,
+          "output": 50,
+          "cache_read": 200,
+          "cache_write": 0,
+          "reasoning": 25,
+          "total": 375
+        },
+        "message_count": 2,
+        "cost": {
+          "amount": 0.015,
+          "currency": "USD",
+          "estimated": true,
+          "pricing_revision": "fixture-pricing-v1"
+        },
+        "performance": {
+          "duration_ms": 1500,
+          "timed_tokens": 375,
+          "sample_count": 2,
+          "token_coverage": 1.0,
+          "ms_per_1k_tokens": 4000.0
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "index_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "record_sha256s": [
+      "e2f0572164bb6d9afa82162424b3dabdec465657414806ae80bea7460eb7d36e"
+    ],
+    "collector_version": "0.2.0"
+  }
+}
