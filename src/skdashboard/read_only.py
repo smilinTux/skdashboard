@@ -538,10 +538,7 @@ def main(argv: list[str] | None = None) -> None:
             if len(selected_entries) != 1:
                 raise ValueError
             selected_entry = selected_entries[0]
-            if (
-                selected_entry.subject != "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
-                or selected_entry.acting_principal_id != selected_entry.subject
-            ):
+            if selected_entry.acting_principal_id != selected_entry.subject:
                 raise ValueError
             revisions_payload = _read_exact_value_free_config(
                 args.operator_policy_revisions_file,

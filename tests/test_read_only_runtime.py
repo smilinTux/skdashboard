@@ -21,6 +21,10 @@ from skdashboard.read_only import (
 LAN_ORIGIN = "https://10.0.0.139:7778"
 TAILNET_ORIGIN = "https://100.81.238.58:7778"
 
+# Test fingerprints for different operators
+CASEY_FINGERPRINT = "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9"
+JARVIS_FINGERPRINT = "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
+
 
 def _client(tmp_path: Path) -> TestClient:
     return TestClient(
@@ -190,8 +194,8 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         path.chmod(0o600)
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
-        subject="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
-        acting_principal_id="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
+        subject=JARVIS_FINGERPRINT,
+        acting_principal_id=JARVIS_FINGERPRINT,
         node_id="chiap08",
         scope=AuthorizedCardScopeV1(role="project-manager"),
         valid_from=current - timedelta(minutes=5),
@@ -457,3 +461,632 @@ def test_protected_routes_keep_auth_and_origin_denials(tmp_path: Path) -> None:
         ).status_code
         == 403
     )
+
+
+def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkeypatch) -> None:
+    """Prove Casey fingerprint AD80 composes when uniquely and exactly selected."""
+    from types import SimpleNamespace
+
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    observed = {}
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: (
+            observed.update(composition=values)
+            or SimpleNamespace(
+                decision_authorizer="typed-authorizer",
+                invocation_factory="invocation-factory",
+                project_provider="durable-provider",
+                schedule_provider="schedule-provider",
+                session_authorizer="in-process-authorizer",
+                legacy_board_url="https://legacy.example/board",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: observed.update(authorizer=values) or "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
+    for name in ("session.key", "client.secret"):
+        path = tmp_path / name
+        path.write_text("non-secret-fixture", encoding="utf-8")
+        path.chmod(0o600)
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"bounded test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
+    revisions.write_text(
+        revisions.read_text(encoding="utf-8").replace("1" * 64, trusted_sha256),
+        encoding="utf-8",
+    )
+
+    # This should succeed with Casey's fingerprint (not hardcoded Jarvis)
+    main(
+        [
+            "--home",
+            str(tmp_path),
+            "--host",
+            "10.0.0.139",
+            "--tls-certfile",
+            "/run/credentials/skdashboard.crt",
+            "--tls-keyfile",
+            "/run/credentials/skdashboard.key",
+            "--session-db",
+            str(tmp_path / "sessions.db"),
+            "--session-key-file",
+            str(tmp_path / "session.key"),
+            "--oidc-issuer",
+            "https://issuer.example",
+            "--oidc-redirect-uri",
+            f"{LAN_ORIGIN}/auth/callback",
+            "--oidc-client-secret-file",
+            str(tmp_path / "client.secret"),
+            "--legacy-board-url",
+            "https://legacy.example/board",
+            "--authorized-resource-id",
+            entry.resource_id,
+            "--owner-policy-file",
+            str(owner_policy),
+            "--owner-policy-sha256",
+            owner_policy_sha256,
+            "--owner-policy-revision",
+            entry.owner_policy_revision,
+            "--tenant-id",
+            "platform",
+            "--operator-session-db",
+            str(tmp_path / "operator-sessions.db"),
+            "--operator-policy-revisions-file",
+            str(revisions),
+            "--operator-policy-revisions-sha256",
+            hashlib.sha256(revisions.read_bytes()).hexdigest(),
+            "--signer-fingerprint",
+            "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+            "--signer-gnupg-home",
+            str(gnupg),
+            "--signer-passphrase-file",
+            str(signer_passphrase),
+            "--trusted-issuer-policy-file",
+            str(trusted),
+            "--trusted-issuer-policy-sha256",
+            trusted_sha256,
+            "--trusted-issuer-signature-file",
+            str(trusted_signature),
+            "--trusted-issuer-signature-sha256",
+            trusted_signature_sha256,
+            "--capability-state-db",
+            str(tmp_path / "capability-state.db"),
+            "--capability-authorizer-factory",
+            "skdashboard.runtime_authorizer:build",
+        ]
+    )
+
+    # Verify the principal is built from the selected entry (Casey)
+    assert observed["authorizer"]["principal"].principal_id == CASEY_FINGERPRINT
+    assert observed["authorizer"]["principal"].subject == CASEY_FINGERPRINT
+
+
+def test_owner_policy_selection_rejects_mismatched_subject(tmp_path: Path) -> None:
+    """Prove mismatched subject (subject != acting_principal_id) fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    # Create an entry where subject != acting_principal_id
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=JARVIS_FINGERPRINT,  # Mismatched!
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": "1" * 64,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--operator-session-db",
+                str(tmp_path / "operator-sessions.db"),
+                "--operator-policy-revisions-file",
+                str(revisions),
+                "--operator-policy-revisions-sha256",
+                hashlib.sha256(revisions.read_bytes()).hexdigest(),
+                "--signer-fingerprint",
+                "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+                "--signer-gnupg-home",
+                str(gnupg),
+                "--signer-passphrase-file",
+                str(signer_passphrase),
+                "--trusted-issuer-policy-file",
+                str(trusted),
+                "--trusted-issuer-policy-sha256",
+                trusted_sha256,
+                "--trusted-issuer-signature-file",
+                str(trusted_signature),
+                "--trusted-issuer-signature-sha256",
+                trusted_signature_sha256,
+                "--capability-state-db",
+                str(tmp_path / "capability-state.db"),
+                "--capability-authorizer-factory",
+                "skdashboard.runtime_authorizer:build",
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_duplicate_current_entries(tmp_path: Path) -> None:
+    """Prove duplicate current entries fail closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    scope = AuthorizedCardScopeV1(role="project-manager")
+    node_id = "chiap08"
+    resource_id = "platform"
+    revision = "a" * 64
+    valid_from = current - timedelta(minutes=5)
+    expires_at = current + timedelta(hours=1)
+
+    # Create two entries with the same node/resource/revision/time
+    entry1 = AuthorizedCardPolicyEntryV1(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id=node_id,
+        resource_id=resource_id,
+        owner_policy_revision=revision,
+        valid_from=valid_from,
+        expires_at=expires_at,
+        scope=scope,
+    )
+    entry2 = AuthorizedCardPolicyEntryV1(
+        subject=JARVIS_FINGERPRINT,
+        acting_principal_id=JARVIS_FINGERPRINT,
+        node_id=node_id,
+        resource_id=resource_id,
+        owner_policy_revision=revision,
+        valid_from=valid_from,
+        expires_at=expires_at,
+        scope=scope,
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry1, entry2)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                resource_id,
+                "--node-id",
+                node_id,
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_wrong_node(tmp_path: Path) -> None:
+    """Prove wrong node ID fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="wrong-node",  # Wrong node!
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                entry.resource_id,
+                "--node-id",
+                "chiap08",  # Different from entry.node_id
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_wrong_resource(tmp_path: Path) -> None:
+    """Prove wrong resource ID fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                "wrong-resource",  # Wrong resource!
+                "--node-id",
+                "chiap08",
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_wrong_revision(tmp_path: Path) -> None:
+    """Prove wrong owner_policy_revision fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                "b" * 64,  # Wrong revision!
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                entry.resource_id,
+                "--node-id",
+                "chiap08",
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_expired_entry(tmp_path: Path) -> None:
+    """Prove expired entry fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    # Entry already expired
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(hours=2),
+        expires_at=current - timedelta(hours=1),  # Expired!
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                entry.resource_id,
+                "--node-id",
+                "chiap08",
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_future_entry(tmp_path: Path) -> None:
+    """Prove future entry (not yet valid) fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    # Entry valid in the future
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current + timedelta(hours=1),  # Not yet valid!
+        expires_at=current + timedelta(hours=2),
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    owner_policy_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                owner_policy_sha256,
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                entry.resource_id,
+                "--node-id",
+                "chiap08",
+            ]
+        )
+
+
+def test_owner_policy_selection_rejects_hash_drift(tmp_path: Path) -> None:
+    """Prove hash drift (SHA256 mismatch) fails closed."""
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyDocumentV1,
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=CASEY_FINGERPRINT,
+        acting_principal_id=CASEY_FINGERPRINT,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current - timedelta(minutes=5),
+        expires_at=current + timedelta(hours=1),
+    )
+
+    owner_policy = tmp_path / "owner-policy.json"
+    owner_policy.write_text(
+        AuthorizedCardPolicyDocumentV1(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    owner_policy.chmod(0o600)
+    # Use wrong SHA256
+    wrong_sha256 = "b" * 64
+
+    with pytest.raises(SystemExit, match="runtime policy composition is unavailable"):
+        main(
+            [
+                "--host",
+                "10.0.0.139",
+                "--tls-certfile",
+                "/run/credentials/skdashboard.crt",
+                "--tls-keyfile",
+                "/run/credentials/skdashboard.key",
+                "--owner-policy-file",
+                str(owner_policy),
+                "--owner-policy-sha256",
+                wrong_sha256,  # Wrong SHA256!
+                "--owner-policy-revision",
+                entry.owner_policy_revision,
+                "--tenant-id",
+                "platform",
+                "--authorized-resource-id",
+                entry.resource_id,
+                "--node-id",
+                "chiap08",
+            ]
+        )
