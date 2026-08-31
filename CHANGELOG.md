@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Repair Fleet Chat timestamp sorting, freshness classification, and recipient validation (PR 131, card d8f3a1c6). Parse timestamps to Unix timestamps before sorting to correctly handle mixed ISO fractional widths. Add truthful freshness classification with truth_state, age_seconds, ttl_seconds, and observed_at fields. Validate recipients against allowed patterns with 128-char limit and redact secret-shaped patterns (password=, key=, token=, api_key=, pwd=, secret=) to [REDACTED] before use as channels or in messages. All changes preserve existing authentication, Tenant binding, filename-derived sender/host, newest-400 memory bound, invalid counts, path hiding, responsive UI, and strict no-write boundary.
 - Give every sidebar nav link a real icon mask (card-less repair, PR 124). Nine tabs
   rendered as solid black squares: eight anchors carried no `data-nav` attribute at
   all, and Fleet Drift had the attribute but no matching CSS rule. Adds the nine
