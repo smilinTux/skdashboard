@@ -16,11 +16,13 @@ MAX_FILES = 4096
 MAX_LINE_BYTES = 256 * 1024
 MAX_SUBJECT_CHARS = 512
 MAX_BODY_CHARS = 4000
+FRESHNESS_TTL_SECONDS = 60
 REDACTED = "[REDACTED]"
 
 _NAME = re.compile(
     r"^(?P<agent>[A-Za-z0-9._-]{1,160})@(?P<host>chi(?:ap|wk)\d{2})\.jsonl$"
 )
+_RECIPIENT = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}$")
 _PRIORITY = {
     "critical": "urgent",
     "high": "urgent",
@@ -54,7 +56,7 @@ def _mail_dir(home: Path) -> Path:
     return Path(home) / "coordination" / "skmail.d"
 
 
-def _utc_timestamp(value: object) -> str | None:
+def _utc_instant(value: object) -> datetime | None:
     if not isinstance(value, str) or not value or len(value) > 64:
         return None
     try:
@@ -63,7 +65,12 @@ def _utc_timestamp(value: object) -> str | None:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(timezone.utc)
+
+
+def _utc_timestamp(value: object) -> str | None:
+    parsed = _utc_instant(value)
+    return parsed.isoformat().replace("+00:00", "Z") if parsed else None
 
 
 def _redact_text(value: str) -> tuple[str, bool]:
@@ -143,6 +150,16 @@ def _norm(record: object, agent: str, host: str) -> tuple[dict | None, str | Non
     recipients = [value.strip().lower() for value in recipients if value.strip()]
     if len(recipients) > 32 or any(len(value) > 160 for value in recipients):
         return None, "INVALID_RECIPIENTS"
+    recipient_redacted = False
+    safe_recipients = []
+    for recipient in recipients:
+        safe, changed = _redact_text(recipient)
+        if changed:
+            safe = REDACTED
+            recipient_redacted = True
+        if safe != REDACTED and _RECIPIENT.fullmatch(safe) is None:
+            return None, "INVALID_RECIPIENTS"
+        safe_recipients.append(safe)
 
     ts = _utc_timestamp(record.get("ts") or record.get("sent_at"))
     if ts is None:
@@ -164,10 +181,10 @@ def _norm(record: object, agent: str, host: str) -> tuple[dict | None, str | Non
         "from": agent,
         "agent": agent,
         "sender_verified": True,
-        "to": recipients,
+        "to": safe_recipients,
         "subject": subject,
         "body": body,
-        "redacted": subject_redacted or body_redacted,
+        "redacted": recipient_redacted or subject_redacted or body_redacted,
         "priority": priority,
         "host": host,
     }
@@ -189,7 +206,7 @@ def _read_projection(home: Path, limit: int = MAX_MESSAGES) -> tuple[list[dict],
         raise ValueError(f"limit must be between 1 and {MAX_MESSAGES}")
     mail_dir = _mail_dir(home)
     errors: Counter = Counter()
-    heap: list[tuple[str, int, dict]] = []
+    heap: list[tuple[datetime, int, dict]] = []
     valid = 0
     sequence = 0
     if not mail_dir.is_dir():
@@ -242,7 +259,9 @@ def _read_projection(home: Path, limit: int = MAX_MESSAGES) -> tuple[list[dict],
                                 continue
                             valid += 1
                             sequence += 1
-                            candidate = (item["ts"], sequence, item)
+                            instant = _utc_instant(item["ts"])
+                            assert instant is not None
+                            candidate = (instant, sequence, item)
                             if len(heap) < limit:
                                 heapq.heappush(heap, candidate)
                             elif candidate[:2] > heap[0][:2]:
@@ -251,7 +270,7 @@ def _read_projection(home: Path, limit: int = MAX_MESSAGES) -> tuple[list[dict],
                     errors["UNREADABLE_WRITER_FILE"] += 1
     except OSError:
         errors["SOURCE_UNAVAILABLE"] += 1
-    return [item for _ts, _sequence, item in sorted(heap)], errors, valid
+    return [item for _instant, _sequence, item in sorted(heap)], errors, valid
 
 
 def read_messages(home: Path, limit: int = MAX_MESSAGES) -> list[dict]:
@@ -269,23 +288,47 @@ def channels(messages: list[dict]) -> list[dict]:
                 name, {"name": name, "count": 0, "last": "", "urgent": 0}
             )
             channel["count"] += 1
-            channel["last"] = max(channel["last"], message["ts"])
+            if not channel["last"] or _utc_instant(message["ts"]) > _utc_instant(
+                channel["last"]
+            ):
+                channel["last"] = message["ts"]
             if message["priority"] == "urgent":
                 channel["urgent"] += 1
-    return sorted(seen.values(), key=lambda channel: channel["last"], reverse=True)
+    return sorted(
+        seen.values(), key=lambda channel: _utc_instant(channel["last"]), reverse=True
+    )
 
 
-def fleet_chat(home: Path) -> dict:
+def fleet_chat(home: Path, *, now: datetime | None = None) -> dict:
     messages, error_counts, valid = _read_projection(Path(home))
     speakers: dict[str, int] = {}
     for message in messages:
         speakers[message["from"]] = speakers.get(message["from"], 0) + 1
-    projected_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    projected_at = instant.isoformat().replace("+00:00", "Z")
     errors = [
         {"code": code, "count": count}
         for code, count in sorted(error_counts.items())
         if count
     ]
+    observed_at = messages[-1]["ts"] if messages else None
+    age_seconds = None
+    future_seconds = 0
+    truth_state = "unknown"
+    if observed_at is not None:
+        observed = _utc_instant(observed_at)
+        assert observed is not None
+        age = (instant - observed).total_seconds()
+        age_seconds = max(0, int(age))
+        future_seconds = max(0, int(-age))
+        if age < 0:
+            truth_state = "unavailable"
+        elif age_seconds > FRESHNESS_TTL_SECONDS:
+            truth_state = "stale"
+        elif errors:
+            truth_state = "partial"
+        else:
+            truth_state = "current"
     return {
         "messages": messages,
         "channels": channels(messages),
@@ -302,9 +345,12 @@ def fleet_chat(home: Path) -> dict:
         "invalid_records": sum(error["count"] for error in errors),
         "errors": errors,
         "freshness": {
-            "truth_state": "partial" if errors else ("current" if messages else "unknown"),
-            "observed_at": messages[-1]["ts"] if messages else None,
+            "truth_state": truth_state,
+            "observed_at": observed_at,
             "projected_at": projected_at,
+            "age_seconds": age_seconds,
+            "ttl_seconds": FRESHNESS_TTL_SECONDS,
+            "future_seconds": future_seconds,
             "limit": MAX_MESSAGES,
             "truncated": valid > len(messages),
         },

@@ -7,7 +7,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from skdashboard.dashboard import create_app
-from skdashboard.fleet_chat import MAX_MESSAGES, fleet_chat
+from skdashboard.fleet_chat import FRESHNESS_TTL_SECONDS, MAX_MESSAGES, REDACTED, fleet_chat
 from skdashboard.read_only import create_read_only_app
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
@@ -86,6 +86,48 @@ def test_projection_is_newest_400_and_verifies_writer_identity(tmp_path: Path) -
     assert projection["read_only"] is True
 
 
+def test_projection_orders_mixed_iso_widths_by_instant(tmp_path: Path) -> None:
+    zero = _record(0, sender="lumina", host="chiap08")
+    zero["re"] = "zero"
+    zero["ts"] = "2026-08-31T00:00:00Z"
+    zero["to"] = ["zero-channel"]
+    later = _record(1, sender="lumina", host="chiap08")
+    later["re"] = "later"
+    later["ts"] = "2026-08-31T00:00:00.100000Z"
+    later["to"] = ["later-channel"]
+    _write_records(tmp_path, "lumina@chiap08.jsonl", [later, zero])
+
+    projection = fleet_chat(
+        tmp_path, now=datetime(2026, 8, 31, 0, 0, 1, tzinfo=timezone.utc)
+    )
+
+    assert [message["subject"] for message in projection["messages"]] == ["zero", "later"]
+    assert projection["freshness"]["observed_at"] == later["ts"]
+    assert [channel["name"] for channel in projection["channels"]] == [
+        "later-channel",
+        "zero-channel",
+    ]
+
+
+def test_freshness_reports_stale_and_future_observations(tmp_path: Path) -> None:
+    record = _record(0, sender="lumina", host="chiap08")
+    _write_records(tmp_path, "lumina@chiap08.jsonl", [record])
+    observed = datetime.fromisoformat(record["ts"])
+
+    stale = fleet_chat(
+        tmp_path, now=observed + timedelta(seconds=FRESHNESS_TTL_SECONDS + 1)
+    )["freshness"]
+    assert stale["truth_state"] == "stale"
+    assert stale["age_seconds"] == FRESHNESS_TTL_SECONDS + 1
+    assert stale["ttl_seconds"] == FRESHNESS_TTL_SECONDS
+    assert stale["future_seconds"] == 0
+
+    future = fleet_chat(tmp_path, now=observed - timedelta(seconds=10))["freshness"]
+    assert future["truth_state"] == "unavailable"
+    assert future["age_seconds"] == 0
+    assert future["future_seconds"] == 10
+
+
 def test_invalid_records_are_counted_without_raw_payload_and_secrets_are_redacted(
     tmp_path: Path,
 ) -> None:
@@ -126,7 +168,7 @@ def test_invalid_records_are_counted_without_raw_payload_and_secrets_are_redacte
 
     assert projection["total"] == 1
     assert projection["partial"] is True
-    assert projection["freshness"]["truth_state"] == "partial"
+    assert projection["freshness"]["truth_state"] == "stale"
     assert {error["code"] for error in projection["errors"]} == {
         "INVALID_JSON",
         "INVALID_RECIPIENTS",
@@ -149,6 +191,25 @@ def test_invalid_records_are_counted_without_raw_payload_and_secrets_are_redacte
         "RAW_INVALID_SECRET",
     ):
         assert secret not in serialized
+
+
+def test_recipient_identities_are_validated_and_secret_shapes_are_redacted(
+    tmp_path: Path,
+) -> None:
+    safe = _record(1, sender="lumina", host="chiap08")
+    safe["to"] = ["Lumina", "password=" + "visible-value"]
+    invalid = _record(2, sender="lumina", host="chiap08")
+    invalid["to"] = ["not/a/recipient"]
+    _write_records(tmp_path, "lumina@chiap08.jsonl", [safe, invalid])
+
+    projection = fleet_chat(tmp_path)
+    serialized = json.dumps(projection)
+
+    assert projection["messages"][0]["to"] == ["lumina", REDACTED]
+    assert projection["messages"][0]["redacted"] is True
+    assert {channel["name"] for channel in projection["channels"]} == {"lumina", REDACTED}
+    assert "visible-value" not in serialized
+    assert {error["code"] for error in projection["errors"]} == {"INVALID_RECIPIENTS"}
 
 
 def test_api_is_read_only_authorized_and_same_origin(tmp_path: Path) -> None:
@@ -202,6 +263,8 @@ def test_transcript_declares_responsive_and_partial_state_contract() -> None:
     assert 'name="viewport"' in html
     assert 'id="fc-status"' in html
     assert "Partial authorized projection." in javascript
+    assert "Authorized projection stale." in javascript
+    assert "Authorized projection unavailable." in javascript
     assert "invalid records excluded" in javascript
     assert "messages.slice(-400)" in javascript
     assert "@media (max-width:900px)" in css

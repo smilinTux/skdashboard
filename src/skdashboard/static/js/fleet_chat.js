@@ -112,7 +112,15 @@
         state.messages = Array.isArray(d.messages) ? d.messages.slice(-400) : [];
         var freshness = d.freshness || {};
         var observed = freshness.observed_at ? " Latest " + clock(freshness.observed_at) + "." : "";
-        var prefix = d.partial ? "Partial authorized projection." : "Authorized projection current.";
+        var truth = String(freshness.truth_state || "unknown");
+        var labels = {
+          current: "Authorized projection current.",
+          partial: "Partial authorized projection.",
+          stale: "Authorized projection stale.",
+          unavailable: "Authorized projection unavailable.",
+          unknown: "Authorized projection unknown."
+        };
+        var prefix = labels[truth] || labels.unknown;
         var invalid = Number(d.invalid_records) || 0;
         document.getElementById("fc-status").textContent = prefix + observed +
           " Showing " + state.messages.length + " newest of " + (Number(d.source_total) || 0) +
