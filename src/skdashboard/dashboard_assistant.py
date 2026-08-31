@@ -115,25 +115,93 @@ def stream_answer(home: Path, prompt: str, actor: str = "operator", capability_o
     """Generator yielding SSE frames: streamed answer, then an action result.
 
     Yields already-formatted ``event:/data:`` SSE strings.
+    Uses the typed assistant client with provider-neutral routing.
     """
-    from skcapstone import skgateway_client as gw
+    from .assistant_client import (
+        AssistantClientError,
+        OutageError,
+        ValidationError,
+        get_client,
+    )
 
     context = build_context(home)
     messages = [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": f"LIVE SNAPSHOT:\n{context}\n\nOPERATOR: {prompt}"},
     ]
+
     collected = []
     got_any = False
-    for tok in gw.chat_stream(messages, max_tokens=1400, temperature=0.3, timeout=90):
-        got_any = True
-        collected.append(tok)
-        yield _sse("token", {"text": tok})
-    full = "".join(collected)
+    audit_logged = False
+
+    try:
+        client = get_client()
+        for tok in client.chat_stream(messages, actor=actor):
+            got_any = True
+            collected.append(tok)
+            yield _sse("token", {"text": tok})
+    except OutageError as exc:
+        # Gateway outage - fail closed with attributable audit
+        logger.error(
+            "assistant outage: gateway unreachable",
+            extra={
+                "actor": actor,
+                "reason": exc.reason,
+                "audit_context": exc.audit_context,
+            },
+        )
+        audit_logged = True
+        yield _sse(
+            "token",
+            {"text": "(assistant is unavailable: gateway outage - logged for audit)"},
+        )
+    except ValidationError as exc:
+        # Response validation failed - fail closed
+        logger.error(
+            "assistant validation error: response schema mismatch",
+            extra={
+                "actor": actor,
+                "reason": exc.reason,
+                "audit_context": exc.audit_context,
+            },
+        )
+        audit_logged = True
+        yield _sse(
+            "token",
+            {"text": "(assistant is unavailable: response validation failed - logged for audit)"},
+        )
+    except AssistantClientError as exc:
+        # Any other client error - fail closed
+        logger.error(
+            "assistant client error: %s" % exc.reason,
+            extra={
+                "actor": actor,
+                "reason": exc.reason,
+                "audit_context": exc.audit_context,
+            },
+        )
+        audit_logged = True
+        yield _sse(
+            "token",
+            {"text": "(assistant is unavailable: %s - logged for audit)" % exc.reason},
+        )
+    except Exception as exc:
+        # Unexpected error - fail closed with audit
+        logger.exception(
+            "assistant unexpected error",
+            extra={"actor": actor, "error": str(exc)},
+        )
+        audit_logged = True
+        yield _sse("token", {"text": "(assistant is unavailable: unexpected error)"})
+
     if not got_any:
-        yield _sse("token", {"text": "(assistant is unavailable right now)"})
+        yield _sse(
+            "token",
+            {"text": "(assistant is unavailable right now)"},
+        )
+
     # Parse a trailing ACTION line, if any.
-    action = _parse_action(full)
+    action = _parse_action("".join(collected))
     if action:
         result = _run_action(home, action, actor, capability_ok)
         yield _sse("action", result)
