@@ -521,5 +521,5 @@ checks:
   - name: towncrier is configured in pyproject.toml
     run: grep -q '\[tool.towncrier\]' pyproject.toml && grep -q 'directory = "changelog.d"' pyproject.toml
   - name: CHANGELOG.md has towncrier start marker
-    run: grep -q '<!-- towncrier release notes start -->' CHANGELOG.md
+    run: grep -qF '<!-- towncrier release notes start -->' CHANGELOG.md
 -->
