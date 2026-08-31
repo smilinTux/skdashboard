@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add a read-only Fleet Chat view with canonical timestamp ordering, explicit
+  freshness, and bounded recipient redaction over append-only skmail records.
+
 - Give every sidebar nav link a real icon mask (card-less repair, PR 124). Nine tabs
   rendered as solid black squares: eight anchors carried no `data-nav` attribute at
   all, and Fleet Drift had the attribute but no matching CSS rule. Adds the nine
