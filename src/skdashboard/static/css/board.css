@@ -43,9 +43,15 @@ body{padding-left:var(--rail-w);}
 .glyph{width:30px;height:30px;border-radius:8px;background:linear-gradient(150deg,var(--accent),var(--ai));display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px;box-shadow:var(--shadowc);flex:none;}
 h1{font-size:16px;margin:0;font-weight:680;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .tabs{display:flex;flex-direction:column;gap:3px;margin-left:0;}
-.tab{--nav-ic-fallback:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='3.5'/%3E%3C/svg%3E");display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;font-size:13px;font-weight:560;color:var(--ink2);cursor:pointer;border:1px solid transparent;user-select:none;text-decoration:none;white-space:nowrap;overflow:hidden;}
+.tab{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;font-size:13px;font-weight:560;color:var(--ink2);cursor:pointer;border:1px solid transparent;user-select:none;text-decoration:none;white-space:nowrap;overflow:hidden;}
 .tab::before{content:"";flex:none;width:18px;height:18px;background:currentColor;opacity:.82;
-  -webkit-mask:var(--nav-ic,var(--nav-ic-fallback)) center/contain no-repeat;mask:var(--nav-ic,var(--nav-ic-fallback)) center/contain no-repeat;}
+  -webkit-mask:var(--nav-ic,none) center/contain no-repeat;mask:var(--nav-ic,none) center/contain no-repeat;}
+/* Safety net: a nav link with no data-nav has no --nav-ic, so its mask
+   resolves to none and the 18x18 box would paint solid. Paint nothing
+   instead. Deliberately NOT a fallback icon: a data: URI counts as a
+   network request and trips the same-origin assertion in
+   scripts/qualify_control_plane_ai_cdp.mjs. */
+.tab:not([data-nav])::before{background:none;}
 .tab:hover{background:var(--panel2);color:var(--ink);}
 .tab.active{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:transparent;color:var(--ink);box-shadow:none;font-weight:640;}
 .tab.active::before{opacity:1;}
