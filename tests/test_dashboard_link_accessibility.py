@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
@@ -61,8 +62,9 @@ class _SidebarLinks(HTMLParser):
         super().__init__()
         self.in_tabs = False
         self.current_href: str | None = None
+        self.current_nav: str | None = None
         self.current_label: list[str] = []
-        self.links: list[tuple[str, str]] = []
+        self.links: list[tuple[str, str, str | None]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
@@ -70,6 +72,7 @@ class _SidebarLinks(HTMLParser):
             self.in_tabs = True
         elif self.in_tabs and tag == "a":
             self.current_href = attributes.get("href")
+            self.current_nav = attributes.get("data-nav")
             self.current_label = []
 
     def handle_data(self, data: str) -> None:
@@ -78,8 +81,11 @@ class _SidebarLinks(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if self.in_tabs and tag == "a" and self.current_href is not None:
-            self.links.append((" ".join("".join(self.current_label).split()), self.current_href))
+            self.links.append(
+                (" ".join("".join(self.current_label).split()), self.current_href, self.current_nav)
+            )
             self.current_href = None
+            self.current_nav = None
             self.current_label = []
         elif self.in_tabs and tag == "div":
             self.in_tabs = False
@@ -110,8 +116,40 @@ def test_every_live_surface_has_the_complete_canonical_sidebar() -> None:
     for name in LIVE_SURFACES:
         parser = _SidebarLinks()
         parser.feed((STATIC / name).read_text(encoding="utf-8"))
-        actual = tuple((label, urlsplit(href).path) for label, href in parser.links)
+        actual = tuple((label, urlsplit(href).path) for label, href, _nav in parser.links)
         assert actual == expected, name
+
+
+def test_every_sidebar_tab_has_a_supported_named_icon_binding() -> None:
+    css = (STATIC / "css" / "board.css").read_text(encoding="utf-8")
+    supported = set(re.findall(r'\.tab\[data-nav="([^"]+)"\]', css))
+    expected = {
+        "Now": "home",
+        "Portfolio": "portfolio",
+        "Schedule": "schedule",
+        "Matters": "matters",
+        "Tasks": "tasks",
+        "Work Queue": "work-queue",
+        "Reliability": "reliability",
+        "Architecture": "architecture",
+        "AI outcomes": "ai",
+        "Governance": "governance",
+        "Reports": "reports",
+        "ITIL Cockpit": "cockpit",
+        "Assets (CMDB)": "cmdb",
+        "Kanban Board": "board",
+        "Assistant": "assistant",
+        "Trust": "trust",
+        "Models": "models",
+        "Economy": "economy",
+        "Fleet Drift": "fleet",
+    }
+    for name in LIVE_SURFACES:
+        parser = _SidebarLinks()
+        parser.feed((STATIC / name).read_text(encoding="utf-8"))
+        for label, _href, nav in parser.links:
+            assert nav == expected[label], f"{name}: {label}"
+            assert nav in supported, f"{name}: unsupported data-nav={nav!r}"
 
 
 def test_board_filters_have_explicit_accessible_labels() -> None:
