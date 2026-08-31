@@ -855,6 +855,8 @@ def create_app(
     board_page = _page("board.html")
     cockpit_page = _page("cockpit.html")
 
+    from .fleet_chat import fleet_chat as _fleet_chat
+
     def _get_route(fn):
         async def handler(_request):
             return _json(fn(home))
@@ -1886,6 +1888,11 @@ def create_app(
         Route("/tasks", _redirect("/board")),
         Route("/work-queue", _redirect("/board")),
         Route("/control-plane/reliability", _page("reliability.html")),
+        # Fleet chat: a read-only channel view over the skmail store. skmail is
+        # already on every host through Syncthing, so this needs no service and
+        # no new transport.
+        Route("/fleet-chat", _page("fleet_chat.html")),
+        Route("/api/v1/fleet-chat", _get_route(_fleet_chat)),
         Route("/control-plane/architecture", _page("architecture.html")),
         Route("/control-plane/ai", _page("ai.html")),
         Route("/control-plane/governance", _page("governance.html")),

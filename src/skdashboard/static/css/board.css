@@ -63,6 +63,7 @@ h1{font-size:16px;margin:0;font-weight:680;letter-spacing:-.01em;white-space:now
 .tab[data-nav="schedule"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Cpath d='M6 2v4m12-4v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2z'/%3E%3C/svg%3E");}
 .tab[data-nav="board"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='4' height='16' rx='1'/%3E%3Crect x='10' y='4' width='4' height='10' rx='1'/%3E%3Crect x='16' y='4' width='4' height='13' rx='1'/%3E%3C/svg%3E");}
 .tab[data-nav="assistant"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");}
+.tab[data-nav="fleet-chat"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.3-.6L3 21l1.9-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z'/%3E%3Cpath d='M8.5 10.5h7M8.5 14h4'/%3E%3C/svg%3E");}
 .tab[data-nav="trust"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3C/svg%3E");}
 .tab[data-nav="matters"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h16v13H4z'/%3E%3Cpath d='M9 7V4h6v3'/%3E%3C/svg%3E");}
 .tab[data-nav="tasks"]{--nav-ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 11l2 2 4-4'/%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3C/svg%3E");}
@@ -218,3 +219,62 @@ h1{font-size:16px;margin:0;font-weight:680;letter-spacing:-.01em;white-space:now
 a:focus-visible,.tab:focus-visible,.kc:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 @media(max-width:560px){.wrap{padding:12px 10px 40px}.filters{align-items:stretch}.filters input,.filters select{min-width:0;max-width:100%}}
 @media(prefers-reduced-motion:reduce){.kc,.dot,.panel,.overlay,.toast{transition:none;animation:none;}}
+
+/* ---- fleet chat -------------------------------------------------------
+   A log you read top to bottom, so density matters more than decoration.
+   Lane and priority are carried by a MARKER as well as colour, never colour
+   alone, so the view survives a colourblind reader and a monochrome screen. */
+.fc-wrap{display:grid;grid-template-columns:212px 1fr;gap:14px;align-items:start;}
+.fc-rail{position:sticky;top:8px;display:flex;flex-direction:column;gap:6px;}
+.fc-rail-h{font-size:10px;letter-spacing:.09em;color:var(--ink2);opacity:.75;
+  text-transform:uppercase;margin:10px 0 2px;}
+.fc-channels,.fc-speakers{list-style:none;margin:0;padding:0;display:flex;
+  flex-direction:column;gap:2px;}
+.fc-chan,.fc-sp{width:100%;text-align:left;background:none;border:1px solid transparent;
+  border-radius:7px;padding:5px 8px;font-size:12px;color:var(--ink2);cursor:pointer;
+  font-family:inherit;display:flex;align-items:center;gap:6px;}
+.fc-chan:hover,.fc-sp:hover{background:var(--panel2);color:var(--ink);}
+.fc-chan.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--ink);
+  font-weight:640;}
+.fc-n{margin-left:auto;font-size:10px;opacity:.6;font-variant-numeric:tabular-nums;}
+.fc-u{font-size:10px;color:#fff;background:var(--bad,#b4322a);border-radius:99px;
+  padding:0 5px;font-variant-numeric:tabular-nums;}
+.fc-main{min-width:0;}
+.fc-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.fc-filter{flex:1;min-width:0;padding:6px 10px;border-radius:8px;font-size:12px;
+  border:1px solid var(--hair2);background:var(--panel);color:var(--ink);font-family:inherit;}
+.fc-toggle{font-size:11px;color:var(--ink2);display:flex;align-items:center;gap:5px;
+  white-space:nowrap;}
+.fc-count{font-size:11px;color:var(--ink2);opacity:.7;font-variant-numeric:tabular-nums;
+  white-space:nowrap;}
+.fc-log{list-style:none;margin:0;padding:8px;max-height:70vh;overflow-y:auto;
+  background:var(--panel);border:1px solid var(--hair2);border-radius:10px;
+  font-size:12px;line-height:1.5;}
+.fc-row{display:grid;grid-template-columns:auto auto auto auto auto 1fr;gap:8px;
+  align-items:baseline;padding:5px 6px;border-radius:6px;border-left:3px solid transparent;}
+.fc-row+.fc-row{margin-top:1px;}
+.fc-row:hover{background:var(--panel2);}
+.fc-ts{color:var(--ink2);opacity:.65;font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;}
+.fc-lane{font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;padding:1px 5px;
+  border-radius:99px;border:1px solid var(--hair2);color:var(--ink2);}
+.fc-lane-qwen{border-color:color-mix(in srgb,var(--accent) 55%,transparent);}
+.fc-lane-glm{border-color:color-mix(in srgb,var(--ai,#7a5af5) 55%,transparent);}
+.fc-lane-agent{border-color:color-mix(in srgb,var(--ok,#2e7d54) 55%,transparent);}
+.fc-from{font-weight:640;color:var(--ink);}
+.fc-to{color:var(--ink2);opacity:.7;}
+.fc-card{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+  color:var(--ink2);opacity:.8;}
+.fc-sub{color:var(--ink);min-width:0;overflow-wrap:anywhere;}
+.fc-body{grid-column:1/-1;color:var(--ink2);white-space:pre-wrap;overflow-wrap:anywhere;
+  margin:3px 0 1px;padding-left:10px;border-left:1px solid var(--hair2);font-size:11.5px;
+  max-height:9em;overflow:hidden;}
+/* urgent carries a left rule AND weight, not colour alone */
+.fc-row.fc-urgent{border-left-color:var(--bad,#b4322a);background:
+  color-mix(in srgb,var(--bad,#b4322a) 7%,transparent);}
+.fc-row.fc-urgent .fc-sub{font-weight:640;}
+.fc-row.fc-fyi{opacity:.72;}
+.fc-empty{color:var(--ink2);font-size:12px;padding:10px 2px;}
+@media (max-width:900px){.fc-wrap{grid-template-columns:1fr;}
+  .fc-rail{position:static;}
+  .fc-row{grid-template-columns:auto 1fr;}}
