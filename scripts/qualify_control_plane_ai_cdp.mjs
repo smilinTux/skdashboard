@@ -211,7 +211,20 @@ try {
   assert.ok(await evaluate("document.documentElement.scrollWidth <= innerWidth"));
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
   assert.equal(requests.filter((request) => request.method !== "GET").length, 0);
-  assert.equal(requests.filter((request) => !request.url.startsWith(`http://127.0.0.1:${port}/`)).length, 0);
+  // Inline data: URIs are not network calls. Chrome still emits
+  // Network.requestWillBeSent for them, so a CSS mask-image data URI counted as
+  // an "external" request here. This assertion exists to catch calls to THIRD
+  // PARTY HOSTS, which a data: URI is not, so exclude the scheme rather than
+  // forbid inline assets. Until now ai.html happened to carry no data-nav
+  // attributes at all, so it loaded no icon masks and the gap never showed.
+  assert.equal(
+    requests.filter(
+      (request) =>
+        !request.url.startsWith(`http://127.0.0.1:${port}/`) &&
+        !request.url.startsWith("data:"),
+    ).length,
+    0,
+  );
   result = { result: "PASS", base: "7299700a", budgetRows: 11, registry: true, keyboard: true, focusReturn: true, axNames: true, lightContrast, darkContrast, reducedMotion: true, responsive: [390, 320], delayedPurge: true, unauthorizedPurge: true, forbiddenPurge: true, staleResponseBlocked: true, requests: requests.length, writes: 0, external: 0, exceptions: 0 };
   socket.close();
 } catch (error) {

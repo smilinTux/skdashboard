@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Give every sidebar nav link a real icon mask (card-less repair, PR 124). Nine tabs
+  rendered as solid black squares: eight anchors carried no `data-nav` attribute at
+  all, and Fleet Drift had the attribute but no matching CSS rule. Adds the nine
+  missing `.tab[data-nav=...]` rules across all 16 nav pages, and paints nothing
+  rather than a block when a link has no icon, so the bug class cannot recur.
+- Narrow the same-origin assertion in `scripts/qualify_control_plane_ai_cdp.mjs` to
+  exclude the `data:` scheme. Chrome emits `Network.requestWillBeSent` for inline
+  data URIs, so a CSS `mask-image` counted as an external request. The assertion is
+  meant to catch third-party hosts. It never fired before because `ai.html` carried
+  no `data-nav` attributes and therefore loaded no icon masks at all.
+
 - Reconcile and repair PR 97 authenticated live control-plane composition (card 888b0c76)
   with current main, wiring read-only runtime entrypoint to session resolver, typed
   authorizer, invocation factory, durable SKCoord owner-policy provider, and Now,
