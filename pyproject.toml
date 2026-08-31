@@ -48,6 +48,11 @@ skdashboard = ["static/**/*", "contracts/**/*.json", "*.html"]
 
 [tool.ruff]
 line-length = 99
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+ignore = ["E501"]
 
 [tool.setuptools_scm]
 # The git tag IS the version. A push to the default branch cuts the next
