@@ -13,7 +13,7 @@ from skdashboard.live_control_plane import (
 from skdashboard.runtime_boundary import load_runtime_boundary
 
 LAN_ORIGIN = "https://10.0.0.101:7780"
-TAILNET_ORIGIN = "https://100.84.237.127:7780"
+TAILNET_ORIGIN = "https://chiap04.tail204f0c.ts.net:7780"
 
 
 def _environment(**values):
@@ -33,6 +33,7 @@ def test_chiap04_process_boundary_is_exact_and_fail_closed() -> None:
         _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS="http://10.0.0.101:7780"),
         _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS=f"{LAN_ORIGIN}/path"),
         _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS="https://10.0.0.55:7780"),
+        _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS="https://short-name:7780"),
     ):
         with pytest.raises(ValueError):
             load_runtime_boundary(environ)

@@ -22,6 +22,8 @@ from skdashboard.session_adapter import (
 )
 
 ORIGIN = "https://10.0.0.139:7778"
+TAILNET_ORIGIN = "https://chiap08.tail204f0c.ts.net:7778"
+TAILNET_ISSUER = "https://chiap08.tail204f0c.ts.net:8420"
 
 
 class Tokens:
@@ -96,6 +98,28 @@ def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     assert "access-" not in cookie and "refresh-" not in cookie
     data = (tmp_path / "state" / "sessions.db").read_bytes()
     assert b"access-1" not in data and b"refresh-1" not in data and b"test-secret" not in data
+
+
+def test_tailnet_login_keeps_fqdn_issuer_and_callback(tmp_path):
+    session = adapter(tmp_path)
+    session.config = SessionConfig(
+        issuer=TAILNET_ISSUER,
+        redirect_uri=f"{TAILNET_ORIGIN}/auth/callback",
+        client_secret="test-secret",
+    )
+    client = TestClient(
+        create_read_only_app(tmp_path, session_adapter=session),
+        base_url=TAILNET_ORIGIN,
+    )
+
+    response = client.get("/auth/login", follow_redirects=False)
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+
+    assert response.status_code == 302
+    assert f"{parsed.scheme}://{parsed.netloc}" == TAILNET_ISSUER
+    assert query["redirect_uri"] == [f"{TAILNET_ORIGIN}/auth/callback"]
+    assert "100.81.238.58" not in response.headers["location"]
 
 
 def test_state_is_one_use_and_restart_recovers_session(tmp_path):

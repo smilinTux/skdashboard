@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from skdashboard.read_only import (
     ALLOWED_BIND_HOSTS,
+    ALLOWED_REQUEST_HOSTS,
     HSTS_POLICY,
     CallbackAccessLogFilter,
     create_read_only_app,
@@ -19,7 +20,7 @@ from skdashboard.read_only import (
 )
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
-TAILNET_ORIGIN = "https://100.81.238.58:7778"
+TAILNET_ORIGIN = "https://chiap08.tail204f0c.ts.net:7778"
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -36,6 +37,7 @@ def test_route_inventory_is_read_only(tmp_path: Path) -> None:
     }
     assert not any("POST" in methods for _, methods in routes)
     assert {"127.0.0.1", "10.0.0.139", "100.81.238.58"} == ALLOWED_BIND_HOSTS
+    assert "chiap08.tail204f0c.ts.net" in ALLOWED_REQUEST_HOSTS
 
 
 def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) -> None:
