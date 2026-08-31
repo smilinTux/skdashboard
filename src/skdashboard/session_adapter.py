@@ -13,7 +13,7 @@ import ssl
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
 import jwt
@@ -29,6 +29,22 @@ LOGIN_TTL = 5 * 60
 MAX_LOGIN_GLOBAL = 128
 MAX_LOGIN_SOURCE = 16
 REFRESH_RESERVATION_TTL = 30
+MAX_RETURN_TO_BYTES = 1024
+RETURN_TO_PATHS = frozenset(
+    {
+        "/control-plane/ai",
+        "/control-plane/architecture",
+        "/control-plane/governance",
+        "/control-plane/now",
+        "/control-plane/portfolio",
+        "/control-plane/reliability",
+        "/control-plane/reports",
+        "/control-plane/schedule",
+    }
+)
+RETURN_TO_QUERY_KEYS = frozenset(
+    {"baseline", "role", "saved_view", "scope", "selected_silo", "service", "truth", "window"}
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +105,44 @@ def _digest(value: str) -> str:
 
 def _opaque() -> str:
     return secrets.token_urlsafe(32)
+
+
+def _safe_return_to(value: str | None) -> str:
+    if not isinstance(value, str) or not value:
+        return "/"
+    try:
+        if (
+            len(value.encode("utf-8")) > MAX_RETURN_TO_BYTES
+            or "\\" in value
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            return "/"
+        parsed = urlsplit(value)
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=len(RETURN_TO_QUERY_KEYS),
+        )
+    except (UnicodeError, ValueError):
+        return "/"
+    keys = [key for key, _value in query]
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or parsed.path not in RETURN_TO_PATHS
+        or len(keys) != len(set(keys))
+        or any(key not in RETURN_TO_QUERY_KEYS for key in keys)
+        or any(
+            len(item.encode("utf-8")) > 256
+            or any(ord(character) < 32 or ord(character) == 127 for character in item)
+            for pair in query
+            for item in pair
+        )
+    ):
+        return "/"
+    return parsed.path + (f"?{urlencode(query)}" if query else "")
 
 
 @dataclass(frozen=True)
@@ -275,7 +329,11 @@ class EncryptedSessionAdapter:
             .decode()
             .rstrip("=")
         )
-        payload = {"nonce": nonce, "verifier": verifier}
+        payload = {
+            "nonce": nonce,
+            "return_to": _safe_return_to(request.query_params.get("return_to")),
+            "verifier": verifier,
+        }
         now = int(self.clock())
         source = request.client.host if request.client else "unknown"
         with self._connect() as connection:
@@ -364,7 +422,7 @@ class EncryptedSessionAdapter:
                 "INSERT INTO sessions VALUES (?, ?, ?)",
                 (_digest(handle), self._seal(record), record["expires_at"]),
             )
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse(_safe_return_to(transaction.get("return_to")), status_code=303)
         response.set_cookie(
             COOKIE_NAME,
             handle,

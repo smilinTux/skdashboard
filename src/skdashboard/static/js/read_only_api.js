@@ -11,8 +11,36 @@ export async function getJSON(url) {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   });
+  if (response.status === 401) void renderSignInAction();
   if (!response.ok) throw new Error(`${url} -> ${response.status}`);
   return response.json();
+}
+
+let sessionCheck;
+
+export async function renderSignInAction() {
+  if (
+    typeof document === "undefined" ||
+    typeof location === "undefined" ||
+    !location.pathname.startsWith("/control-plane/") ||
+    document.getElementById("session-sign-in")
+  ) return;
+  sessionCheck ||= fetch("/auth/session", {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  }).then((response) => response.status === 401).catch(() => false);
+  if (!(await sessionCheck) || document.getElementById("session-sign-in")) return;
+  const navigation = document.querySelector(".topbar, .sidebar");
+  if (!navigation) return;
+  const link = document.createElement("a");
+  link.id = "session-sign-in";
+  link.className = "build-badge mono";
+  link.href = `/auth/login?${new URLSearchParams({
+    return_to: `${location.pathname}${location.search}`,
+  })}`;
+  link.textContent = "Sign in";
+  link.setAttribute("aria-label", "Sign in to view protected control-plane data");
+  attachBuildBadge(navigation, link);
 }
 
 export function avatarColor(name) {

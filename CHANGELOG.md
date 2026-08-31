@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Guide unauthenticated control-plane browsers through the existing encrypted session
+  login and return only to strictly allowlisted relative workspace paths.
+
 - Reconcile and repair PR 97 authenticated live control-plane composition (card 888b0c76)
   with current main, wiring read-only runtime entrypoint to session resolver, typed
   authorizer, invocation factory, durable SKCoord owner-policy provider, and Now,
