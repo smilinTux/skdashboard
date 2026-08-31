@@ -79,6 +79,10 @@ class OIDCExchangeError(RuntimeError):
         self.detail = detail
 
 
+class SessionReauthenticationRequired(RuntimeError):
+    """Signal that process-local authorization proof no longer exists."""
+
+
 def _safe_oauth_detail(response: httpx.Response) -> str:
     try:
         payload = response.json()
@@ -527,7 +531,7 @@ class EncryptedSessionAdapter:
         handle, record = loaded
         now = int(self.clock())
         if record["access_expires_at"] > now + 15:
-            return self._resolution(request, record)
+            return self._resolution(handle, request, record)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
@@ -580,10 +584,12 @@ class EncryptedSessionAdapter:
                 (self._seal(record), _digest(handle), reserved_encrypted),
             ).rowcount
         return (
-            self._resolution(request, record) if changed == 1 else SessionResolution("unavailable")
+            self._resolution(handle, request, record)
+            if changed == 1
+            else SessionResolution("unavailable")
         )
 
-    def _resolution(self, request: Request, record: dict) -> SessionResolution:
+    def _resolution(self, handle: str, request: Request, record: dict) -> SessionResolution:
         subject = record.get("subject")
         control_plane_request = None
         if self.control_plane_bridge is not None:
@@ -591,6 +597,12 @@ class EncryptedSessionAdapter:
                 control_plane_request = self.control_plane_bridge.request(
                     record["control_plane_session"], request
                 )
+            except SessionReauthenticationRequired:
+                with self._connect() as connection:
+                    connection.execute(
+                        "DELETE FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+                    )
+                return SessionResolution("reauth_required")
             except Exception:
                 return SessionResolution("unavailable")
         return SessionResolution(
@@ -647,5 +659,6 @@ __all__ = [
     "OIDCClient",
     "OIDCExchangeError",
     "SessionConfig",
+    "SessionReauthenticationRequired",
     "SessionResolution",
 ]

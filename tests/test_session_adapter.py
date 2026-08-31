@@ -317,6 +317,66 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
     assert response.json()["error"] == "authentication_unavailable"
 
 
+def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
+    from types import SimpleNamespace
+
+    from test_control_plane_decision_context import Signer
+
+    from skdashboard.live_control_plane import InProcessOperatorBridge, LiveControlPlaneConfig
+
+    class OperatorSessions:
+        def create(self, **_values):
+            return SimpleNamespace(take=lambda: ("operator-cookie", "operator-csrf"))
+
+    def bridge():
+        return InProcessOperatorBridge(
+            config=LiveControlPlaneConfig(
+                legacy_board_url="https://legacy.example/board",
+                resource_id="authorized-card-set:sha256:" + "a" * 64,
+                owner_policy_revision="b" * 64,
+                tenant_id="platform",
+            ),
+            sessions=OperatorSessions(),
+            revisions=object(),
+            signer=Signer(),
+        )
+
+    first_bridge = bridge()
+    first = adapter(tmp_path, tokens=SubjectTokens())
+    first.control_plane_bridge = first_bridge
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=first), base_url=ORIGIN)
+    login(client)
+    assert len(first_bridge._proofs) == 1
+
+    restarted_bridge = bridge()
+    restarted = EncryptedSessionAdapter(
+        first.database,
+        tmp_path / "session.key",
+        first.config,
+        oidc_client=SubjectTokens(),
+        control_plane_bridge=restarted_bridge,
+        clock=lambda: 1_001,
+    )
+    app = create_read_only_app(
+        tmp_path,
+        session_adapter=restarted,
+        session_authorizer=restarted_bridge,
+    )
+    after_restart = TestClient(app, base_url=ORIGIN)
+    after_restart.cookies.update(client.cookies)
+
+    response = after_restart.get("/api/v1/overview", headers={"Origin": ORIGIN})
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "browser reauthentication is required"
+    assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert COOKIE_NAME not in after_restart.cookies
+    assert after_restart.get("/auth/session").status_code == 401
+    with restarted._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
 def test_legacy_refresh_reservation_without_timestamp_is_recovered(tmp_path):
     now = [1_000]
     tokens = Tokens()

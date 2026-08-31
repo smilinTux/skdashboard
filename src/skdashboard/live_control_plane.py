@@ -234,6 +234,8 @@ class InProcessOperatorBridge:
         return handle
 
     def request(self, handle: str, request) -> InProcessIssuerRequest:
+        from .session_adapter import SessionReauthenticationRequired
+
         if not isinstance(handle, str) or not handle.isascii():
             raise PermissionError("operator session material is unavailable")
         proofs = self._proofs.get(handle)
@@ -245,7 +247,11 @@ class InProcessOperatorBridge:
             ),
             None,
         )
-        if proofs is None or capability is None or capability not in proofs:
+        if proofs is None:
+            raise SessionReauthenticationRequired(
+                "process-local operator proof is no longer available"
+            )
+        if capability is None or capability not in proofs:
             raise PermissionError("operator session material is unavailable")
         cookie, csrf, device = proofs[capability]
         nonce = request.headers.get("x-request-id", "")[:256]

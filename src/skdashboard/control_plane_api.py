@@ -452,6 +452,25 @@ def _protected_handler(
             try:
                 resolved = await session_resolver(request)
                 state = getattr(resolved, "state", None)
+                if state == "reauth_required":
+                    from .session_adapter import COOKIE_NAME
+
+                    counters["denied"] += 1
+                    response = _error(
+                        request,
+                        401,
+                        "UNAUTHORIZED",
+                        "browser reauthentication is required",
+                    )
+                    response.delete_cookie(
+                        COOKIE_NAME,
+                        path="/",
+                        secure=True,
+                        httponly=True,
+                        samesite="strict",
+                    )
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
                 if state in {"corrupt", "unavailable"}:
                     counters["denied"] += 1
                     response = _error(
