@@ -29,6 +29,7 @@ from .dashboard import _get_agent_status, _get_board_state
 from .runtime_boundary import ALLOWED_BIND_HOSTS
 
 HSTS_POLICY = "max-age=31536000"
+ALLOWED_REQUEST_HOSTS = frozenset(urlsplit(origin).hostname for origin in ALLOWED_BROWSER_ORIGINS)
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
 READ_ONLY_STATIC_ASSETS = frozenset(
@@ -92,7 +93,7 @@ class SecureTransportMiddleware:
         headers = {key.lower(): value for key, value in scope["headers"]}
         authority = headers.get(b"host", b"").decode("ascii", "ignore")
         host = authority.rsplit(":", 1)[0].lower()
-        if host not in ALLOWED_BIND_HOSTS:
+        if host not in ALLOWED_REQUEST_HOSTS:
             await _plain_response(send, 400, b"named host required")
             return
         if scope["scheme"] != "https":
@@ -647,6 +648,7 @@ def main(argv: list[str] | None = None) -> None:
 __all__ = [
     "ALLOWED_BIND_HOSTS",
     "ALLOWED_BROWSER_ORIGINS",
+    "ALLOWED_REQUEST_HOSTS",
     "CallbackAccessLogFilter",
     "HSTS_POLICY",
     "SecureTransportMiddleware",

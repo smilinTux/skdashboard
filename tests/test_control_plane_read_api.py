@@ -12,7 +12,7 @@ from skdashboard.control_plane_api import _capauth_authorize
 from skdashboard.dashboard import create_app
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
-TAILNET_ORIGIN = "https://100.81.238.58:7778"
+TAILNET_ORIGIN = "https://chiap08.tail204f0c.ts.net:7778"
 READ_HEADERS = {"Authorization": "Bearer valid-read", "Origin": LAN_ORIGIN}
 EVENT_HEADERS = {"Authorization": "Bearer valid-events", "Origin": TAILNET_ORIGIN}
 OIDC_FINGERPRINT = "a" * 40

@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from skdashboard.read_only import (
     ALLOWED_BIND_HOSTS,
+    ALLOWED_REQUEST_HOSTS,
     HSTS_POLICY,
     CallbackAccessLogFilter,
     create_read_only_app,
@@ -20,6 +21,7 @@ from skdashboard.read_only import (
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
 TAILNET_ORIGIN = "https://100.81.238.58:7778"
+TAILNET_FQDN_ORIGIN = "https://chiap08.tail204f0c.ts.net:7778"
 
 # Test fingerprints for different operators
 CASEY_FINGERPRINT = "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9"
@@ -98,10 +100,13 @@ def test_exact_https_origins_redirect_hsts_and_public_host_denial(
     tmp_path: Path,
 ) -> None:
     app = create_read_only_app(tmp_path, authorizer=lambda *_: True)
-    for origin in (LAN_ORIGIN, TAILNET_ORIGIN):
+    assert ALLOWED_REQUEST_HOSTS == {"10.0.0.139", "chiap08.tail204f0c.ts.net"}
+    for origin in (LAN_ORIGIN, TAILNET_FQDN_ORIGIN):
         response = TestClient(app, base_url=origin).get("/api/v1/health")
         assert response.status_code == 200
         assert response.headers["strict-transport-security"] == HSTS_POLICY
+
+    assert TestClient(app, base_url=TAILNET_ORIGIN).get("/").status_code == 400
 
     redirect = TestClient(app, base_url="http://10.0.0.139:7778").get(
         "/api/v1/health?probe=1", follow_redirects=False

@@ -14,6 +14,7 @@ from skdashboard.runtime_boundary import load_runtime_boundary
 
 LAN_ORIGIN = "https://10.0.0.101:7780"
 TAILNET_ORIGIN = "https://100.84.237.127:7780"
+TAILNET_FQDN_ORIGIN = "https://chiap04.tail204f0c.ts.net:7780"
 
 
 def _environment(**values):
@@ -36,6 +37,19 @@ def test_chiap04_process_boundary_is_exact_and_fail_closed() -> None:
     ):
         with pytest.raises(ValueError):
             load_runtime_boundary(environ)
+
+
+def test_browser_origin_may_use_an_exact_fqdn_without_widening_bind_hosts() -> None:
+    origins, hosts = load_runtime_boundary(
+        _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS=f"{LAN_ORIGIN},{TAILNET_FQDN_ORIGIN}")
+    )
+    assert origins == {LAN_ORIGIN, TAILNET_FQDN_ORIGIN}
+    assert hosts == {"127.0.0.1", "10.0.0.101", "100.84.237.127"}
+
+    with pytest.raises(ValueError):
+        load_runtime_boundary(
+            _environment(SKDASHBOARD_ALLOWED_BROWSER_ORIGINS="https://localhost:7780")
+        )
 
 
 def test_chiap04_node_is_bound_into_authorization_invocation(monkeypatch) -> None:

@@ -7,7 +7,7 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 DEFAULT_BROWSER_ORIGINS = frozenset(
-    {"https://10.0.0.139:7778", "https://100.81.238.58:7778"}
+    {"https://10.0.0.139:7778", "https://chiap08.tail204f0c.ts.net:7778"}
 )
 DEFAULT_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
 
@@ -49,12 +49,18 @@ def load_runtime_boundary(environ=None) -> tuple[frozenset[str], frozenset[str]]
             or parsed.query
             or parsed.fragment
             or parsed.path
-            or parsed.hostname not in hosts
+            or parsed.hostname is None
             or parsed.port is None
         ):
             raise ValueError("browser origins must be exact named HTTPS bind origins")
-        if ip_address(parsed.hostname).version != 4:
-            raise ValueError("browser origins must use named IPv4 addresses")
+        try:
+            address = ip_address(parsed.hostname)
+        except ValueError:
+            if "." not in parsed.hostname:
+                raise ValueError("browser origins must use an exact FQDN or named bind address")
+        else:
+            if address.version != 4 or parsed.hostname not in hosts:
+                raise ValueError("IP browser origins must use named bind addresses")
     return origins, hosts
 
 
