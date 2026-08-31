@@ -232,8 +232,10 @@ try {
   throw error;
 } finally {
   await Promise.all([stop(server), stop(chrome)]);
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(profile, { recursive: true, force: true });
+  const cleanup = (target) =>
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+  cleanup(home);
+  cleanup(profile);
 }
 assert.equal(fs.existsSync(home) || fs.existsSync(profile), false, "Qualification scratch survived cleanup");
 console.log(JSON.stringify({ ...result, scratchCleaned: true }));
