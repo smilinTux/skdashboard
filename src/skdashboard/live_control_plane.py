@@ -50,18 +50,21 @@ EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
 BOARD_TARGET = "/api/v1/board/summary"
+FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
 EVENTS_TARGET = "/api/v1/events"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
         (CAPABILITY, BOARD_TARGET),
+        (CAPABILITY, FLEET_CHAT_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
     }
 )
 AUTHENTICATED_TARGETS = frozenset(target for _capability, target in AUTHENTICATED_BINDINGS)
 RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
 EVENTS_RESOURCE_TYPE = "tenant"
+TENANT_TARGETS = frozenset({EVENTS_TARGET, FLEET_CHAT_TARGET})
 MAX_OPERATOR_PROOFS = 1024
 
 
@@ -185,10 +188,10 @@ class InProcessOperatorBridge:
                     operation="read",
                     target=target,
                     resource_type=(
-                        EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+                        EVENTS_RESOURCE_TYPE if target in TENANT_TARGETS else RESOURCE_TYPE
                     ),
                     resource_id=(
-                        config.tenant_id if capability == EVENTS_CAPABILITY else config.resource_id
+                        config.tenant_id if target in TENANT_TARGETS else config.resource_id
                     ),
                     owner_policy_revision=config.owner_policy_revision,
                     ttl_seconds=config.capability_ttl_seconds,
@@ -670,11 +673,9 @@ def compose_live_control_plane(
             capability=capability,
             target=target,
             resource_type=(
-                EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+                EVENTS_RESOURCE_TYPE if target in TENANT_TARGETS else RESOURCE_TYPE
             ),
-            resource_id=config.tenant_id
-            if capability == EVENTS_CAPABILITY
-            else config.resource_id,
+            resource_id=config.tenant_id if target in TENANT_TARGETS else config.resource_id,
             correlation_id=request.headers.get("x-request-id", "")[:128] or uuid4().hex,
             boundary=RequestBoundary(client_kind=ClientKind.BROWSER, origin=origin),
         )
@@ -712,6 +713,7 @@ __all__ = [
     "CAPABILITY",
     "EVENTS_CAPABILITY",
     "EVENTS_TARGET",
+    "FLEET_CHAT_TARGET",
     "AuthorizedCardScheduleSource",
     "LiveControlPlaneComposition",
     "LiveControlPlaneConfig",

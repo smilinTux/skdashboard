@@ -32,7 +32,8 @@
       if (state.urgentOnly && m.priority !== "urgent") return false;
       if (state.channel && (m.to || []).indexOf(state.channel) === -1) return false;
       if (!q) return true;
-      return (m.from + " " + m.subject + " " + m.body + " " + (m.card || ""))
+      return ((m.from || "") + " " + (m.subject || "") + " " + (m.body || "") +
+        " " + (m.card || ""))
         .toLowerCase().indexOf(q) !== -1;
     });
   }
@@ -92,10 +93,12 @@
       return '<li class="fc-row fc-' + esc(m.priority) + '">' +
         '<span class="fc-ts">' + esc(clock(m.ts)) + "</span>" +
         '<span class="fc-lane fc-lane-' + esc(laneOf(m)) + '">' + esc(laneOf(m)) + "</span>" +
-        '<span class="fc-from">' + esc(m.from) + "</span>" +
+        '<span class="fc-from">' + esc(m.from) +
+          '<span class="fc-host">@' + esc(m.host) + "</span></span>" +
         '<span class="fc-to">' + esc(to) + "</span>" +
         (m.card ? '<span class="fc-card">' + esc(m.card) + "</span>" : "") +
-        '<span class="fc-sub">' + esc(m.subject) + "</span>" +
+        '<span class="fc-sub">' + esc(m.subject) +
+          (m.redacted ? ' <span class="fc-redacted">redacted</span>' : "") + "</span>" +
         (m.body ? '<div class="fc-body">' + esc(m.body.slice(0, 600)) + "</div>" : "") +
         "</li>";
     }).join("");
@@ -106,10 +109,19 @@
     fetch("/api/v1/fleet-chat", { headers: { accept: "application/json" } })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
-        state.messages = d.messages || [];
+        state.messages = Array.isArray(d.messages) ? d.messages.slice(-400) : [];
+        var freshness = d.freshness || {};
+        var observed = freshness.observed_at ? " Latest " + clock(freshness.observed_at) + "." : "";
+        var prefix = d.partial ? "Partial authorized projection." : "Authorized projection current.";
+        var invalid = Number(d.invalid_records) || 0;
+        document.getElementById("fc-status").textContent = prefix + observed +
+          " Showing " + state.messages.length + " newest of " + (Number(d.source_total) || 0) +
+          (invalid ? ". " + invalid + " invalid records excluded." : ".");
         renderRail(); renderLog();
       })
       .catch(function (e) {
+        document.getElementById("fc-status").textContent =
+          "Authorized fleet chat is unavailable. " + e.message + ".";
         document.getElementById("fc-log").innerHTML =
           '<li class="fc-row fc-urgent"><span class="fc-sub">Fleet chat unavailable: ' +
           esc(e.message) + "</span></li>";

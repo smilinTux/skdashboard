@@ -46,6 +46,7 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "js/ai.js",
         "js/architecture.js",
         "js/control_plane_scope.js",
+        "js/fleet_chat.js",
         "js/governance.js",
         "js/overview.js",
         "js/projects.js",
@@ -367,6 +368,7 @@ def create_read_only_app(
         Route("/control-plane/ai", page("ai.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
+        Route("/fleet-chat", page("fleet_chat.html")),
         Route("/.well-known/skworld-module.json", manifest),
     ]
     routes.extend(

@@ -43,8 +43,9 @@
       <div class="eyebrow">FLEET CHAT</div>
       <h2>Channels</h2>
       <p class="sub">Every message in the skmail store, as it happened. Read only.</p>
+      <p id="fc-status" class="fc-status" role="status" aria-live="polite">Loading authorized projection.</p>
       <div id="fc-wrap" class="fc-wrap">
-        <aside class="fc-rail">
+        <aside class="fc-rail" aria-label="Fleet chat filters">
           <div class="fc-rail-h">CHANNELS</div>
           <ul id="fc-channels" class="fc-channels"></ul>
           <div class="fc-rail-h">SPEAKERS</div>
@@ -52,18 +53,18 @@
         </aside>
         <section class="fc-main">
           <div class="fc-toolbar">
+            <label class="sr-only" for="fc-filter">Filter fleet chat</label>
             <input id="fc-filter" class="fc-filter" type="search"
                    placeholder="filter by text, sender or card id" autocomplete="off">
             <label class="fc-toggle"><input type="checkbox" id="fc-urgent"> urgent only</label>
             <span id="fc-count" class="fc-count"></span>
           </div>
-          <ol id="fc-log" class="fc-log" aria-live="polite"></ol>
+          <ol id="fc-log" class="fc-log" aria-label="Fleet chat transcript"></ol>
           <p id="fc-empty" class="fc-empty" hidden>No messages match.</p>
         </section>
       </div>
 </main>
   </div>
-  <script type="module" src="/static/js/reliability.js"></script>
     <script src="/static/js/fleet_chat.js"></script>
   </body>
 </html>

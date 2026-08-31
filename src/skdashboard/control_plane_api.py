@@ -729,6 +729,11 @@ def routes(
         except ValueError as exc:
             return _error(request, 400, "INVALID_QUERY", str(exc))
 
+    async def fleet_chat(_request):
+        from .fleet_chat import fleet_chat as read_fleet_chat
+
+        return JSONResponse(read_fleet_chat(home))
+
     async def economy(request):
         from . import dashboard_skcounter
 
@@ -1448,6 +1453,7 @@ def routes(
         ),
         Route("/api/v1/board/summary", protected(board, "skdashboard.read")),
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
+        Route("/api/v1/fleet-chat", protected(fleet_chat, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
         Route(
             "/api/v1/events",
