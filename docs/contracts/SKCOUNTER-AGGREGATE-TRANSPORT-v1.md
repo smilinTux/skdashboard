@@ -36,7 +36,9 @@ browser session, prompt, response, raw observation, or source path.
 `payload_sha256` is SHA-256 over canonical UTF-8 JSON containing exactly
 `records` and `provenance`, with object keys sorted, compact separators, and
 no trailing newline. `payload_bytes` is the byte count of those same bytes.
-`rows` equals the number of records.
+`rows` equals the number of records. Each record represents one unique source
+index identity keyed by measurement lane, node, principal, view, and bucket.
+Its `aggregates` array preserves every bounded aggregate row for that identity.
 
 ## Acceptance and replay
 
@@ -44,6 +46,11 @@ The consumer validates TLS identity, CapAuth authorization, HTTP status,
 content type, content length, response schema, exact fields, body bounds,
 row count, payload byte count, payload hash, index hash, record hashes, and
 UTC timestamps before publishing a generation.
+
+Repeated source index identities fail closed. Every aggregate row grouped in
+a record must repeat that record's exact view and bucket. This preserves model
+and provider breakdown rows without allowing the index identity itself to be
+duplicated.
 
 A response fails closed when it is partial, oversized, malformed,
 unauthorized, stale, or outside the timeout budget. It also fails closed when

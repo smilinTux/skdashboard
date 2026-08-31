@@ -14,8 +14,8 @@
   },
   "generated_at": "2026-08-31T14:00:00Z",
   "fresh_until": "2026-08-31T14:45:00Z",
-  "payload_sha256": "3c26daeee95026e691347f28565bac2849315a025a73c8e5079d2c6e33660b73",
-  "payload_bytes": 1121,
+  "payload_sha256": "8195177a4d4c0ed857b7fcf0c0f7488f8fea820dc01f5bc98c0aaccdab3af82d",
+  "payload_bytes": 1178,
   "rows": 1,
   "records": [
     {
@@ -27,41 +27,45 @@
       "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "payload_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "source_observation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "aggregate": {
-        "view": "models",
-        "bucket_start": "2026-08-31T14:00:00Z",
-        "client": "codex",
-        "provider": "skgateway",
-        "model": "gpt-5.6-sol",
-        "tokens": {
-          "input": 100,
-          "output": 50,
-          "cache_read": 200,
-          "cache_write": 0,
-          "reasoning": 25,
-          "total": 375
-        },
-        "message_count": 2,
-        "cost": {
-          "amount": 0.015,
-          "currency": "USD",
-          "estimated": true,
-          "pricing_revision": "fixture-pricing-v1"
-        },
-        "performance": {
-          "duration_ms": 1500,
-          "timed_tokens": 375,
-          "sample_count": 2,
-          "token_coverage": 1.0,
-          "ms_per_1k_tokens": 4000.0
+      "view": "models",
+      "bucket_start": "2026-08-31T14:00:00Z",
+      "aggregates": [
+        {
+          "view": "models",
+          "bucket_start": "2026-08-31T14:00:00Z",
+          "client": "codex",
+          "provider": "skgateway",
+          "model": "gpt-5.6-sol",
+          "tokens": {
+            "input": 100,
+            "output": 50,
+            "cache_read": 200,
+            "cache_write": 0,
+            "reasoning": 25,
+            "total": 375
+          },
+          "message_count": 2,
+          "cost": {
+            "amount": 0.015,
+            "currency": "USD",
+            "estimated": true,
+            "pricing_revision": "fixture-pricing-v1"
+          },
+          "performance": {
+            "duration_ms": 1500,
+            "timed_tokens": 375,
+            "sample_count": 2,
+            "token_coverage": 1.0,
+            "ms_per_1k_tokens": 4000.0
+          }
         }
-      }
+      ]
     }
   ],
   "provenance": {
     "index_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "record_sha256s": [
-      "e2f0572164bb6d9afa82162424b3dabdec465657414806ae80bea7460eb7d36e"
+      "9baf43015fbe539d0cb1baf3b5c8ad0651eccf1ef8f63fb3e924f676da1e4866"
     ],
     "collector_version": "0.2.0"
   }

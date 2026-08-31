@@ -68,6 +68,24 @@ def _validate_semantics(
     ]
     if document["provenance"]["record_sha256s"] != record_hashes:
         raise ValueError("record provenance mismatch")
+    identities = set()
+    for record in document["records"]:
+        identity = (
+            record["measurement_lane"],
+            record["node_id"],
+            record["principal_id"],
+            record["view"],
+            record["bucket_start"],
+        )
+        if identity in identities:
+            raise ValueError("duplicate aggregate index identity")
+        identities.add(identity)
+        if any(
+            aggregate["view"] != record["view"]
+            or aggregate["bucket_start"] != record["bucket_start"]
+            for aggregate in record["aggregates"]
+        ):
+            raise ValueError("aggregate group identity mismatch")
     generated = datetime.fromisoformat(document["generated_at"].replace("Z", "+00:00"))
     fresh_until = datetime.fromisoformat(document["fresh_until"].replace("Z", "+00:00"))
     newest = max(
@@ -121,7 +139,7 @@ def test_schema_fixture_and_packaged_copy_are_exact() -> None:
         lambda value: value.update({"rows": 10001}),
         lambda value: value["authority"].update({"host_fqdn": "chiap01.tail204f0c.ts.net"}),
         lambda value: value["target"].update({"capability": "skcounter.report.submit"}),
-        lambda value: value["records"][0]["aggregate"].update({"prompt": "forbidden"}),
+        lambda value: value["records"][0]["aggregates"][0].update({"prompt": "forbidden"}),
     ],
 )
 def test_schema_rejects_unbounded_unauthorized_or_raw_input(mutate) -> None:
@@ -182,6 +200,43 @@ def test_replay_is_idempotent_only_for_the_exact_generation() -> None:
             now=datetime(2026, 8, 31, 14, 30, tzinfo=timezone.utc),
             previous=previous,
         )
+
+
+def _recompute_transport_hashes(document: dict) -> None:
+    document["rows"] = len(document["records"])
+    document["provenance"]["record_sha256s"] = [
+        hashlib.sha256(
+            json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        for record in document["records"]
+    ]
+    payload = _canonical_payload(document)
+    document["payload_bytes"] = len(payload)
+    document["payload_sha256"] = hashlib.sha256(payload).hexdigest()
+
+
+def test_duplicate_index_identity_fails_after_all_hashes_are_recomputed() -> None:
+    duplicate = copy.deepcopy(_load(FIXTURE))
+    second = copy.deepcopy(duplicate["records"][0])
+    second["aggregates"][0]["model"] = "qwen3.8"
+    duplicate["records"].append(second)
+    _recompute_transport_hashes(duplicate)
+
+    with pytest.raises(ValueError, match="duplicate aggregate index identity"):
+        _validate_semantics(duplicate, now=datetime(2026, 8, 31, 14, 30, tzinfo=timezone.utc))
+
+
+def test_one_index_identity_preserves_multiple_aggregate_rows() -> None:
+    grouped = copy.deepcopy(_load(FIXTURE))
+    second = copy.deepcopy(grouped["records"][0]["aggregates"][0])
+    second["model"] = "qwen3.8"
+    grouped["records"][0]["aggregates"].append(second)
+    _recompute_transport_hashes(grouped)
+
+    assert (
+        _validate_semantics(grouped, now=datetime(2026, 8, 31, 14, 30, tzinfo=timezone.utc))
+        == "accepted"
+    )
 
 
 def test_contract_pins_transport_outage_and_rollback() -> None:
