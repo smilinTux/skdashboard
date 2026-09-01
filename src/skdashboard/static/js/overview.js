@@ -47,7 +47,7 @@ const QUALITY_ICON = {
   unreachable: "×", unknown: "?", not_applicable: "○",
 };
 
-const ESTATE_SILOS = [
+let ESTATE_SILOS = [
   { id: "portfolio", label: "Portfolio and projects", adapters: ["skcapstone.portfolio"], metric: "portfolio.blocked_objectives@1.0.0" },
   { id: "flow", label: "Agile flow", adapters: ["skcoord.flow", "skcoord.agent_presence"], metric: "flow.review_coverage@1.0.0" },
   { id: "itil", label: "ITIL and SRE", adapters: ["skcapstone.itil"], metric: "itil.change_classification_coverage@1.0.0" },
@@ -61,6 +61,25 @@ const ESTATE_SILOS = [
   { id: "corpus", label: "Corpus pipeline", adapters: ["hammertime.pipeline"], metric: "corpus.approved_release_health@1.0.0" },
   { id: "operator", label: "Operator and shell", adapters: ["atlas.conditions", "skos.discovery"], metric: "operator.ready_condition_forecast@1.0.0" },
 ];
+
+// Single derivable source: /api/v1/panels. When it loads successfully, it
+// replaces the local ESTATE_SILOS literal; on failure the literal remains
+// the fallback (zero behavior change). No route or nav changes.
+let panelsLoaded = false;
+async function loadPanels() {
+  try {
+    const d = await getJSON("/api/v1/panels");
+    if (!d.panels || d.panels.length !== 12) throw new Error("unexpected panel count");
+    ESTATE_SILOS = d.panels.map((p) => ({
+      id: p.silo, label: p.label, adapters: p.adapters,
+      metricRef: p.metric, metricSource: p.metric_source || p.adapters[0],
+    }));
+    panelsLoaded = true;
+  } catch (_error) {
+    // Keep the local literal on failure; the endpoint is read-only metadata.
+    panelsLoaded = false;
+  }
+}
 
 const STATE_ORDER = { unavailable: 0, unreachable: 1, unknown: 2, partial: 3, stale: 4, not_applicable: 5, current: 6 };
 let estateEvidence = new Map();
@@ -152,23 +171,26 @@ function aggregateValue(item, key) {
 }
 
 function signalFor(id, items) {
-  const first = items[0];
-  const second = items[1];
-  const signals = {
-    portfolio: () => `${aggregateValue(first, "open")} open, ${aggregateValue(first, "in_progress")} in progress, ${aggregateValue(first, "done")} done`,
-    flow: () => `${aggregateValue(first, "blocked")} blocked, ${aggregateValue(first, "in_progress")} in progress, ${aggregateValue(second, "active_agents")} active agents`,
-    itil: () => `${aggregateValue(first, "open_incidents")} open incidents, SEV1 ${aggregateValue(first, "sev1")}, SEV2 ${aggregateValue(first, "sev2")}, ${aggregateValue(first, "awaiting_cab")} awaiting CAB`,
-    delivery: () => `${aggregateValue(first, "services")} services, ${aggregateValue(first, "releases")} release observations`,
-    architecture: () => `${aggregateValue(first, "total")} CIs, ${aggregateValue(first, "degraded")} degraded, ${aggregateValue(first, "stale")} stale`,
-    fleet: () => `${aggregateValue(first, "graded")} graded, ${aggregateValue(first, "error")} errors, ${aggregateValue(first, "warn")} warnings`,
-    ai: () => `Harness ${aggregateValue(first, "observation_count")} observations; gateway ${aggregateValue(second, "observation_count")} observations`,
-    economy: () => `${aggregateValue(first, "regressions")} performance regressions; ${aggregateValue(second, "total_supply")} Joule supply`,
-    governance: () => `${aggregateValue(first, "denials")} policy denials; policy evidence ${aggregateValue(first, "available")}`,
-    legal: () => first.aggregate ? `${aggregateValue(first, "matters")} matter-free aggregate records; deadline pressure ${aggregateValue(first, "deadline_pressure")}` : "Policy-filtered aggregate unavailable",
-    corpus: () => `${aggregateValue(first, "approved_releases")} approved releases; ${aggregateValue(first, "pipeline_failures")} pipeline failures`,
-    operator: () => `${aggregateValue(first, "open_conditions")} open conditions, ${aggregateValue(first, "ready_actions")} ready-action observations; ${aggregateValue(second, "discovered")} SKOS modules`,
-  };
-  return signals[id]();
+  // Signal format template: one generic joiner over the silo's declared
+  // source fields, with no per-silo branch. Each source contributes its
+  // aggregate values separated by "; "; a missing value renders as "Unknown",
+  // preserving the existing formatting behavior (e.g. the honest unavailable
+  // sklegal.global tile renders "Unknown" / "Policy-filtered aggregate
+  // unavailable").
+  const parts = [];
+  for (const item of items) {
+    if (!item || !item.aggregate) {
+      parts.push(item && item.adapter_id ? `${item.adapter_id}: not observed` : "not observed");
+      continue;
+    }
+    const fields = Object.keys(item.aggregate);
+    const values = fields.map((key) => {
+      const value = item.aggregate[key];
+      return `${key} ${value == null ? "Unknown" : value}`;
+    });
+    parts.push(`${item.adapter_id}: ${values.join(", ")}`);
+  }
+  return parts.length ? parts.join("; ") : "no sources";
 }
 
 function coverageFor(items) {
@@ -608,6 +630,7 @@ function connectSSE() {
 }
 
 const initialContextReady = initializeContext();
+loadPanels();
 document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
   const dialog = document.getElementById("ai-boundary");
   dialog._trigger = event.currentTarget;
