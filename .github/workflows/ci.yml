@@ -64,7 +64,11 @@ jobs:
       - name: Install skdashboard from the checkout, on top
         run: pip install --no-deps -e .
       - name: Verify towncrier config
-        run: python -m towncrier check --strict 2>&1 || true
+        # Real failing gate: an invalid [tool.towncrier] configuration must
+        # fail CI. The original step ended with `|| true`, which swallowed the
+        # exit code and made the check decorative; run the check directly so a
+        # bad config turns CI red.
+        run: python -m towncrier check
       - name: Smoke test (package imports, static assets + modules intact)
         run: python -m pytest tests/ -q
 

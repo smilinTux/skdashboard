@@ -86,29 +86,83 @@ jobs:
             exit 0
           fi
 
-          # Check for either CHANGELOG.md edit or a changelog.d/ fragment
+          # Check for either CHANGELOG.md edit or a valid changelog.d/ fragment.
+          # A fragment must be a NEWLY ADDED file matching the towncrier naming
+          # convention: changelog.d/<id>.<type>.md where <id> is a card or PR
+          # identifier and <type> is one of the configured towncrier types.
+          # A mere .gitkeep-only change, a directory rename, a deletion, or an
+          # invalid suffix does not satisfy the requirement.
+          BASE_REF="origin/${{ github.base_ref }}"
+          ADDED="$(git diff --diff-filter=A --name-only "$BASE_REF...HEAD" | tr '\n' ' ')"
+          DELETED="$(git diff --diff-filter=D --name-only "$BASE_REF...HEAD" | tr '\n' ' ')"
+          CHANGED="$(tr '\n' ' ' < /tmp/changed.txt)"
           has_changelog=false
           has_fragment=false
-          while IFS= read -r f; do
+          has_valid_fragment=false
+          # Allowed towncrier fragment types (from [tool.towncrier] in pyproject.toml).
+          FRAG_TYPES="added changed deprecated removed fixed security docs"
+          for f in $CHANGED; do
             if [ "$f" = "CHANGELOG.md" ]; then
               has_changelog=true
             fi
             if [[ "$f" == changelog.d/* ]]; then
               has_fragment=true
             fi
-          done < /tmp/changed.txt
+          done
+          for f in $CHANGED; do
+            case "$f" in
+              changelog.d/*)
+                # The fragment only satisfies the requirement if it was ADDED
+                # in this PR and not simultaneously deleted.
+                added=false
+                deleted=false
+                for a in $ADDED; do
+                  if [ "$a" = "$f" ]; then added=true; break; fi
+                done
+                for d_ in $DELETED; do
+                  if [ "$d_" = "$f" ]; then deleted=true; break; fi
+                done
+                if [ "$added" = false ] || [ "$deleted" = true ]; then
+                  continue
+                fi
+                base="${f##*/}"
+                stem="${base%.md}"
+                type="${stem##*.}"
+                id="${stem%.*}"
+                valid=false
+                # A valid fragment is named <id>.<type>.md where <type> is one of
+                # the configured towncrier types, and <id> is a card id (8-hex),
+                # a PR number, or a bare number.
+                case "$type" in
+                  added|changed|deprecated|removed|fixed|security|docs)
+                    if [[ "$id" =~ ^[0-9a-f]{8}$ ]] || [[ "$id" =~ ^pr?[0-9]+$ ]] || [[ "$id" =~ ^[0-9]+$ ]]; then
+                      valid=true
+                    fi
+                    ;;
+                esac
+                if [ "$valid" = true ]; then
+                  has_valid_fragment=true
+                fi
+                ;;
+            esac
+          done
 
           if [ "$has_changelog" = true ]; then
             echo "ok: code changed and CHANGELOG.md updated"
             exit 0
           fi
 
-          if [ "$has_fragment" = true ]; then
-            echo "ok: code changed and changelog.d/ fragment added"
+          if [ "$has_valid_fragment" = true ]; then
+            echo "ok: code changed and a valid changelog.d/ fragment (id.type.md, added) satisfies the changelog requirement"
             exit 0
           fi
+          if [ "$has_fragment" = true ]; then
+            echo "::error::a file under changelog.d/ was added but its name does not match the required pattern changelog.d/<id>.<type>.md with a towncrier type (added, changed, deprecated, removed, fixed, security, docs)."
+            echo "Rename it, e.g. to changelog.d/a45ad9d7.fixed.md"
+            exit 1
+          fi
 
-          echo "::error::code under src/ or pyproject.toml changed but neither CHANGELOG.md nor a changelog.d/ fragment was added."
+          echo "::error::code under src/ or pyproject.toml changed but neither CHANGELOG.md nor a valid changelog.d/ fragment was added."
           echo "Add a fragment to changelog.d/ (e.g., card123.added.md) or use the docs-exempt label / [skip-changelog] for a genuinely trivial change."
           exit 1
 
