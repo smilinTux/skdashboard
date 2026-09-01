@@ -44,7 +44,7 @@ Homepage = "https://github.com/smilinTux/skdashboard"
 where = ["src"]
 
 [tool.setuptools.package-data]
-skdashboard = ["static/**/*", "contracts/**/*.json", "*.html"]
+skdashboard = ["static/**/*", "contracts/**/*.json", "policies/*.json", "*.html"]
 
 [tool.ruff]
 line-length = 99

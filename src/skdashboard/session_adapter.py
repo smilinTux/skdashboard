@@ -22,8 +22,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .operator_policy import CASEY_OPERATOR_POLICY
+
 COOKIE_NAME = "__Host-skdashboard_session"
-SCOPES = "openid skdashboard.read skdashboard.events.read"
+SCOPES = CASEY_OPERATOR_POLICY.oidc_scopes
 SESSION_TTL = 8 * 60 * 60
 LOGIN_TTL = 5 * 60
 MAX_LOGIN_GLOBAL = 128
@@ -400,7 +402,7 @@ class EncryptedSessionAdapter:
             record = self._validate_token_response(token, now)
             if self.control_plane_bridge is not None:
                 control_plane_handle = self.control_plane_bridge.enroll(
-                    record["subject"],
+                    record["principal"],
                     self.config.redirect_uri.rsplit("/auth/callback", 1)[0],
                 )
                 if (
@@ -463,7 +465,13 @@ class EncryptedSessionAdapter:
             headers={"Cache-Control": "no-store"},
         )
 
-    def _validate_token_response(self, token: dict, now: int) -> dict:
+    def _validate_token_response(
+        self,
+        token: dict,
+        now: int,
+        *,
+        expected_subject: str | None = None,
+    ) -> dict:
         required = {
             "access_token",
             "refresh_token",
@@ -475,19 +483,23 @@ class EncryptedSessionAdapter:
             raise ValueError("invalid token response")
         if type(token["expires_in"]) is not int or not 1 <= token["expires_in"] <= 300:
             raise ValueError("invalid token lifetime")
-        if frozenset(str(token["scope"]).split()) != frozenset(
-            {"skdashboard.read", "skdashboard.events.read"}
-        ):
+        if frozenset(str(token["scope"]).split()) != CASEY_OPERATOR_POLICY.scopes:
             raise ValueError("invalid token scope")
+        subject = token.get("_verified_subject", expected_subject)
+        if not isinstance(subject, str) or (
+            expected_subject is not None and not secrets.compare_digest(subject, expected_subject)
+        ):
+            raise ValueError("verified operator subject is required")
+        principal = CASEY_OPERATOR_POLICY.resolve_oidc_principal(
+            subject=subject,
+            audience="skdashboard",
+        )
         return {
             "access_token": str(token["access_token"]),
             "refresh_token": str(token["refresh_token"]),
             "access_expires_at": now + token["expires_in"],
-            **(
-                {"subject": str(token["_verified_subject"])}
-                if token.get("_verified_subject")
-                else {}
-            ),
+            "subject": subject,
+            "principal": principal,
         }
 
     def _load(self, request: Request) -> tuple[str, dict] | None:
@@ -569,7 +581,11 @@ class EncryptedSessionAdapter:
                     "refresh_token": record["refresh_token"],
                 }
             )
-            fresh = self._validate_token_response(token, now)
+            fresh = self._validate_token_response(
+                token,
+                now,
+                expected_subject=record.get("subject"),
+            )
         except Exception:
             with self._connect() as connection:
                 connection.execute(
@@ -590,7 +606,7 @@ class EncryptedSessionAdapter:
         )
 
     def _resolution(self, handle: str, request: Request, record: dict) -> SessionResolution:
-        subject = record.get("subject")
+        subject = record.get("principal")
         control_plane_request = None
         if self.control_plane_bridge is not None:
             try:
