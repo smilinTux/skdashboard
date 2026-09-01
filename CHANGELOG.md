@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Persist the Casey fingerprint as one verified, until-revoked SKDashboard human
+  operator principal. Add exact, separate dashboard read and command OIDC scopes,
+  purpose and resource bindings, and fail-closed denials for wildcard, proxy, shell,
+  filesystem, credential, provider, protected Matter, and external-action authority.
 - Remove hardcoded owner fingerprint from runtime composition. The read-only runtime
   now accepts and validates the exact owner-principal binding from the live owner
   policy instead of hardcoding a Jarvis principal identity. Runtime selection

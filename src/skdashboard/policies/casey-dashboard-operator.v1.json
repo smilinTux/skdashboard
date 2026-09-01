@@ -1,0 +1,32 @@
+{
+  "schema_version": "skdashboard-human-operator-policy/v1",
+  "decision_source": "card:9fdd672b",
+  "principal_id": "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9",
+  "fingerprint": "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9",
+  "oidc_subject": "device:ad80d077a047babf29eec97af454fdbc3b1c37d9",
+  "audience": "skdashboard",
+  "status": "active_until_revoked",
+  "expires_at": null,
+  "read_scopes": [
+    "skdashboard.audit.read",
+    "skdashboard.events.read",
+    "skdashboard.owner-policy.read",
+    "skdashboard.read"
+  ],
+  "command_scopes": [
+    "skdashboard.card.command",
+    "skdashboard.change.command",
+    "skdashboard.cmdb.command",
+    "skdashboard.session.revoke"
+  ],
+  "denied_authorities": [
+    "credential",
+    "external_action",
+    "filesystem",
+    "protected_matter",
+    "provider",
+    "shell",
+    "unrestricted_proxy",
+    "wildcard"
+  ]
+}

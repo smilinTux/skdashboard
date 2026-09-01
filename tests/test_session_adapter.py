@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
+from skdashboard.operator_policy import CASEY_FINGERPRINT, CASEY_OPERATOR_POLICY
 from skdashboard.read_only import create_read_only_app
 from skdashboard.session_adapter import (
     COOKIE_NAME,
@@ -36,7 +37,8 @@ class Tokens:
             "refresh_token": "refresh-" + suffix,
             "token_type": "Bearer",
             "expires_in": 300,
-            "scope": "skdashboard.read skdashboard.events.read",
+            "scope": " ".join(sorted(CASEY_OPERATOR_POLICY.scopes)),
+            "_verified_subject": CASEY_OPERATOR_POLICY.oidc_subject,
         }
 
     async def revoke(self, refresh_token):
@@ -44,10 +46,7 @@ class Tokens:
 
 
 class SubjectTokens(Tokens):
-    async def exchange(self, values, *, expected_nonce=None):
-        token = await super().exchange(values, expected_nonce=expected_nonce)
-        token["_verified_subject"] = "operator@example.test"
-        return token
+    pass
 
 
 def adapter(tmp_path: Path, clock=lambda: 1_000, tokens=None):
@@ -275,7 +274,7 @@ def test_session_capability_issuer_rejects_browser_bearer_and_absent_session(tmp
 def test_control_plane_bridge_persists_only_an_opaque_handle(tmp_path):
     class Bridge:
         def enroll(self, subject, origin):
-            assert subject == "operator@example.test"
+            assert subject == CASEY_FINGERPRINT
             assert origin == ORIGIN
             return "opaque-control-plane-handle-" + "a" * 32
 
