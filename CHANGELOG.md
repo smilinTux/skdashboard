@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- towncrier release notes start -->
+
 - Remove hardcoded owner fingerprint from runtime composition. The read-only runtime
   now accepts and validates the exact owner-principal binding from the live owner
   policy instead of hardcoding a Jarvis principal identity. Runtime selection
