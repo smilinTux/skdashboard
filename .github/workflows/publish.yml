@@ -141,6 +141,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install towncrier
+        run: pip install towncrier
+      - name: Build CHANGELOG.md from fragments
+        run: python -m towncrier build --version "${{ needs.tag.outputs.version }}" --yes
       - name: Assert the version to publish is a real release
         # A dev/local version (.devN, +g<sha>, 0.0.0) is rejected by PyPI with a
         # 400, and by then the tag has already been cut. Fail here instead.

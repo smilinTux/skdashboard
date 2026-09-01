@@ -20,13 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Remove hardcoded owner fingerprint from runtime composition. The read-only runtime
-  now accepts and validates the exact owner-principal binding from the live owner
-  policy instead of hardcoding a Jarvis principal identity. Runtime selection
-  validates node ID, authorized resource ID, and owner policy revision against the
-  current entry, rejecting mismatches, expired or future entries, and hash drift with
-  fail-closed behavior. Test harness repaired to provide complete live composition
-  arguments for all negative policy validation cases.
+
+<!-- towncrier release notes start -->
+<!-- towncrier release notes start -->
+
 - Guide unauthenticated control-plane browsers through the existing encrypted session
   login and return only to strictly allowlisted relative workspace paths.
 - Give every sidebar nav link a real icon mask (card-less repair, PR 124). Nine tabs
