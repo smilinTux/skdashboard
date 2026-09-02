@@ -23,7 +23,7 @@ from skdashboard.dashboard_kanban import (
 
 EVENT_HEADERS = {
     "Authorization": "Bearer valid-events",
-    "Origin": "https://100.81.238.58:7778",
+    "Origin": "https://chiap08.tail204f0c.ts.net:7778",
 }
 
 

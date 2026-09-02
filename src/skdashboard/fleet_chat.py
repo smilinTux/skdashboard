@@ -284,7 +284,7 @@ def fleet_chat(home: Path) -> dict:
             ({"name": k, "count": v} for k, v in speakers.items()),
             key=lambda s: s["count"], reverse=True)[:20],
         "total": len(messages),
-        "source": str(_mail_dir(Path(home))),
+        "source": "skmail",
         "read_only": True,
         "truth_state": freshness["truth_state"],
         "age_seconds": freshness["age_seconds"],

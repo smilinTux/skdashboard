@@ -29,6 +29,7 @@ from .dashboard import _get_agent_status, _get_board_state
 from .runtime_boundary import ALLOWED_BIND_HOSTS
 
 HSTS_POLICY = "max-age=31536000"
+ALLOWED_REQUEST_HOSTS = frozenset(urlsplit(origin).hostname for origin in ALLOWED_BROWSER_ORIGINS)
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
 READ_ONLY_STATIC_ASSETS = frozenset(
@@ -47,6 +48,7 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "js/architecture.js",
         "js/control_plane_scope.js",
         "js/governance.js",
+        "js/fleet_chat.js",
         "js/overview.js",
         "js/projects.js",
         "js/read_only_api.js",
@@ -92,7 +94,7 @@ class SecureTransportMiddleware:
         headers = {key.lower(): value for key, value in scope["headers"]}
         authority = headers.get(b"host", b"").decode("ascii", "ignore")
         host = authority.rsplit(":", 1)[0].lower()
-        if host not in ALLOWED_BIND_HOSTS:
+        if host not in ALLOWED_REQUEST_HOSTS:
             await _plain_response(send, 400, b"named host required")
             return
         if scope["scheme"] != "https":
@@ -367,6 +369,7 @@ def create_read_only_app(
         Route("/control-plane/ai", page("ai.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
+        Route("/fleet-chat", page("fleet_chat.html")),
         Route("/.well-known/skworld-module.json", manifest),
     ]
     routes.extend(
@@ -538,10 +541,7 @@ def main(argv: list[str] | None = None) -> None:
             if len(selected_entries) != 1:
                 raise ValueError
             selected_entry = selected_entries[0]
-            if (
-                selected_entry.subject != "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
-                or selected_entry.acting_principal_id != selected_entry.subject
-            ):
+            if selected_entry.acting_principal_id != selected_entry.subject:
                 raise ValueError
             revisions_payload = _read_exact_value_free_config(
                 args.operator_policy_revisions_file,
@@ -650,6 +650,7 @@ def main(argv: list[str] | None = None) -> None:
 __all__ = [
     "ALLOWED_BIND_HOSTS",
     "ALLOWED_BROWSER_ORIGINS",
+    "ALLOWED_REQUEST_HOSTS",
     "CallbackAccessLogFilter",
     "HSTS_POLICY",
     "SecureTransportMiddleware",

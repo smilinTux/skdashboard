@@ -180,3 +180,51 @@ if (inserted[0].textContent !== "SKDashboard 0.1.91 | 91b248a63059 | v0.1.91") p
         capture_output=True,
         text=True,
     )
+
+
+def test_protected_401_renders_one_bearer_free_sign_in_action() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    module = Path("src/skdashboard/static/js/read_only_api.js").resolve().as_uri()
+    program = r"""
+const api = await import(process.argv[1]);
+const inserted = [];
+const calls = [];
+const navigation = {
+  querySelector() { return null; },
+  append(value) { inserted.push(value); },
+};
+globalThis.location = {
+  pathname: "/control-plane/portfolio",
+  search: "?role=project-manager&scope=estate&window=latest&baseline=none&service=all",
+};
+globalThis.document = {
+  querySelector(selector) { return selector === ".topbar, .sidebar" ? navigation : null; },
+  getElementById(id) { return inserted.find((item) => item.id === id) || null; },
+  createElement() {
+    return {
+      setAttribute(name, value) { this[name] = value; },
+      textContent: "",
+    };
+  },
+};
+globalThis.fetch = async (url, options) => {
+  calls.push([url, options]);
+  return { ok: false, status: 401, json: async () => ({}) };
+};
+await Promise.allSettled([api.getJSON("/api/v1/overview"), api.getJSON("/api/v1/overview")]);
+await new Promise((resolve) => setTimeout(resolve, 0));
+if (inserted.length !== 1 || inserted[0].id !== "session-sign-in") process.exit(1);
+if (inserted[0].textContent !== "Sign in") process.exit(1);
+const expected = "/auth/login?return_to=%2Fcontrol-plane%2Fportfolio%3Frole%3Dproject-manager%26scope%3Destate%26window%3Dlatest%26baseline%3Dnone%26service%3Dall";
+if (inserted[0].href !== expected) process.exit(1);
+if (calls.filter(([url]) => url === "/auth/session").length !== 1) process.exit(1);
+if (calls.some(([_url, options]) => Object.keys(options.headers).some((name) => name.toLowerCase() === "authorization"))) process.exit(1);
+"""
+    subprocess.run(
+        [node, "--input-type=module", "--eval", program, module],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

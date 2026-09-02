@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from skdashboard.read_only import (
     ALLOWED_BIND_HOSTS,
+    ALLOWED_REQUEST_HOSTS,
     HSTS_POLICY,
     CallbackAccessLogFilter,
     create_read_only_app,
@@ -20,6 +21,11 @@ from skdashboard.read_only import (
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
 TAILNET_ORIGIN = "https://100.81.238.58:7778"
+TAILNET_FQDN_ORIGIN = "https://chiap08.tail204f0c.ts.net:7778"
+
+# Test fingerprints for different operators
+CASEY_FINGERPRINT = "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9"
+JARVIS_FINGERPRINT = "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -70,6 +76,13 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
     headers = {"Authorization": "Bearer test", "Origin": LAN_ORIGIN}
     assert client.get("/api/v1/overview", headers=headers).status_code == 200
     assert client.get("/metrics", headers=headers).status_code == 200
+    assert client.get("/fleet-chat").status_code == 200
+    assert client.get("/static/js/fleet_chat.js").status_code == 200
+    assert client.get("/api/v1/fleet-chat").status_code == 401
+    chat = client.get("/api/v1/fleet-chat", headers=headers)
+    assert chat.status_code == 200
+    assert chat.json()["source"] == "skmail"
+    assert chat.json()["read_only"] is True
     for path in (
         "/api/auth/capability",
         "/api/card/x/mutate",
@@ -94,10 +107,13 @@ def test_exact_https_origins_redirect_hsts_and_public_host_denial(
     tmp_path: Path,
 ) -> None:
     app = create_read_only_app(tmp_path, authorizer=lambda *_: True)
-    for origin in (LAN_ORIGIN, TAILNET_ORIGIN):
+    assert ALLOWED_REQUEST_HOSTS == {"10.0.0.139", "chiap08.tail204f0c.ts.net"}
+    for origin in (LAN_ORIGIN, TAILNET_FQDN_ORIGIN):
         response = TestClient(app, base_url=origin).get("/api/v1/health")
         assert response.status_code == 200
         assert response.headers["strict-transport-security"] == HSTS_POLICY
+
+    assert TestClient(app, base_url=TAILNET_ORIGIN).get("/").status_code == 400
 
     redirect = TestClient(app, base_url="http://10.0.0.139:7778").get(
         "/api/v1/health?probe=1", follow_redirects=False
@@ -190,8 +206,8 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         path.chmod(0o600)
     current = datetime.now(timezone.utc)
     entry = AuthorizedCardPolicyEntryV1.issue(
-        subject="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
-        acting_principal_id="C8D406A46F2DF4894E4FB41580A638570C9D41C4",
+        subject=JARVIS_FINGERPRINT,
+        acting_principal_id=JARVIS_FINGERPRINT,
         node_id="chiap08",
         scope=AuthorizedCardScopeV1(role="project-manager"),
         valid_from=current - timedelta(minutes=5),
@@ -457,3 +473,232 @@ def test_protected_routes_keep_auth_and_origin_denials(tmp_path: Path) -> None:
         ).status_code
         == 403
     )
+
+
+def _owner_policy_entry(
+    *,
+    subject: str = CASEY_FINGERPRINT,
+    acting_principal_id: str = CASEY_FINGERPRINT,
+    node_id: str = "chiap08",
+    valid_from_offset: timedelta = -timedelta(minutes=5),
+    expires_at_offset: timedelta = timedelta(hours=1),
+):
+    from skcoord.authorized_card_policy import (
+        AuthorizedCardPolicyEntryV1,
+        AuthorizedCardScopeV1,
+    )
+
+    current = datetime.now(timezone.utc)
+    return AuthorizedCardPolicyEntryV1.issue(
+        subject=subject,
+        acting_principal_id=acting_principal_id,
+        node_id=node_id,
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=current + valid_from_offset,
+        expires_at=current + expires_at_offset,
+    )
+
+
+def _live_owner_policy_args(
+    tmp_path: Path,
+    entries: tuple,
+    *,
+    node_id: str = "chiap08",
+    resource_id: str | None = None,
+    revision: str | None = None,
+    owner_policy_sha256: str | None = None,
+) -> list[str]:
+    from skcoord.authorized_card_policy import AuthorizedCardPolicyDocumentV1
+
+    entry = entries[0]
+    owner_policy = tmp_path / "owner-policy.json"
+    if len(entries) == 1:
+        policy_payload = AuthorizedCardPolicyDocumentV1(entries=entries).model_dump_json()
+    else:
+        policy_payload = json.dumps(
+            {"entries": [item.model_dump(mode="json") for item in entries]}
+        )
+    owner_policy.write_text(policy_payload, encoding="utf-8")
+    owner_policy.chmod(0o600)
+    actual_owner_sha256 = hashlib.sha256(owner_policy.read_bytes()).hexdigest()
+
+    for name in ("session.key", "client.secret"):
+        path = tmp_path / name
+        value = (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+            if name == "session.key"
+            else "non-secret-fixture"
+        )
+        path.write_text(value, encoding="utf-8")
+        path.chmod(0o600)
+    gnupg = tmp_path / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    signer_passphrase = tmp_path / "signer.passphrase"
+    signer_passphrase.write_bytes(b"bounded test passphrase")
+    signer_passphrase.chmod(0o600)
+    trusted = tmp_path / "trusted-issuers.json"
+    trusted.write_text('{"value_free":true}', encoding="ascii")
+    trusted.chmod(0o600)
+    trusted_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+    trusted_signature = tmp_path / "trusted-issuers.json.asc"
+    trusted_signature.write_text("test signature", encoding="ascii")
+    trusted_signature.chmod(0o600)
+    trusted_signature_sha256 = hashlib.sha256(trusted_signature.read_bytes()).hexdigest()
+    revisions = tmp_path / "revisions.json"
+    revisions.write_text(
+        json.dumps(
+            {
+                "issuer": trusted_sha256,
+                "principal": "2" * 64,
+                "acting_principal": "3" * 64,
+                "revocation": "4" * 64,
+                "owner": revision or entry.owner_policy_revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    revisions.chmod(0o600)
+
+    return [
+        "--home",
+        str(tmp_path),
+        "--host",
+        "10.0.0.139",
+        "--tls-certfile",
+        "/run/credentials/skdashboard.crt",
+        "--tls-keyfile",
+        "/run/credentials/skdashboard.key",
+        "--session-db",
+        str(tmp_path / "sessions.db"),
+        "--session-key-file",
+        str(tmp_path / "session.key"),
+        "--oidc-issuer",
+        "https://issuer.example",
+        "--oidc-redirect-uri",
+        f"{LAN_ORIGIN}/auth/callback",
+        "--oidc-client-secret-file",
+        str(tmp_path / "client.secret"),
+        "--legacy-board-url",
+        "https://legacy.example/board",
+        "--authorized-resource-id",
+        resource_id or entry.resource_id,
+        "--owner-policy-file",
+        str(owner_policy),
+        "--owner-policy-sha256",
+        owner_policy_sha256 or actual_owner_sha256,
+        "--owner-policy-revision",
+        revision or entry.owner_policy_revision,
+        "--tenant-id",
+        "platform",
+        "--node-id",
+        node_id,
+        "--operator-session-db",
+        str(tmp_path / "operator-sessions.db"),
+        "--operator-policy-revisions-file",
+        str(revisions),
+        "--operator-policy-revisions-sha256",
+        hashlib.sha256(revisions.read_bytes()).hexdigest(),
+        "--signer-fingerprint",
+        "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5",
+        "--signer-gnupg-home",
+        str(gnupg),
+        "--signer-passphrase-file",
+        str(signer_passphrase),
+        "--trusted-issuer-policy-file",
+        str(trusted),
+        "--trusted-issuer-policy-sha256",
+        trusted_sha256,
+        "--trusted-issuer-signature-file",
+        str(trusted_signature),
+        "--trusted-issuer-signature-sha256",
+        trusted_signature_sha256,
+        "--capability-state-db",
+        str(tmp_path / "capability-state.db"),
+        "--capability-authorizer-factory",
+        "skdashboard.runtime_authorizer:build",
+    ]
+
+
+def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkeypatch) -> None:
+    """Casey's exact current policy subject is the runtime principal."""
+    from types import SimpleNamespace
+
+    observed = {}
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: (
+            observed.update(composition=values)
+            or SimpleNamespace(
+                decision_authorizer="typed-authorizer",
+                invocation_factory="invocation-factory",
+                project_provider="durable-provider",
+                schedule_provider="schedule-provider",
+                session_authorizer="in-process-authorizer",
+                legacy_board_url="https://legacy.example/board",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: observed.update(authorizer=values) or "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
+
+    entry = _owner_policy_entry()
+    main(_live_owner_policy_args(tmp_path, (entry,)))
+
+    assert observed["authorizer"]["principal"].principal_id == CASEY_FINGERPRINT
+    assert observed["authorizer"]["principal"].subject == CASEY_FINGERPRINT
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "mismatched-subject",
+        "duplicate-current",
+        "wrong-node",
+        "wrong-resource",
+        "wrong-revision",
+        "expired",
+        "future",
+        "hash-drift",
+    ),
+)
+def test_owner_policy_selection_rejects_invalid_current_entry(
+    tmp_path: Path, capsys, case: str
+) -> None:
+    """Every ambiguous, stale, drifted, or mismatched policy fails closed."""
+    entry_kwargs = {}
+    args_kwargs = {}
+    if case == "mismatched-subject":
+        entry_kwargs["acting_principal_id"] = JARVIS_FINGERPRINT
+    elif case == "wrong-node":
+        entry_kwargs["node_id"] = "wrong-node"
+    elif case == "expired":
+        entry_kwargs.update(
+            valid_from_offset=-timedelta(hours=2),
+            expires_at_offset=-timedelta(hours=1),
+        )
+    elif case == "future":
+        entry_kwargs.update(
+            valid_from_offset=timedelta(hours=1),
+            expires_at_offset=timedelta(hours=2),
+        )
+
+    entry = _owner_policy_entry(**entry_kwargs)
+    entries = (entry, entry) if case == "duplicate-current" else (entry,)
+    if case == "wrong-resource":
+        args_kwargs["resource_id"] = "authorized-card-set:sha256:" + "b" * 64
+    elif case == "wrong-revision":
+        args_kwargs["revision"] = "b" * 64
+    elif case == "hash-drift":
+        args_kwargs["owner_policy_sha256"] = "b" * 64
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(_live_owner_policy_args(tmp_path, entries, **args_kwargs))
+    assert exc_info.value.code == 2
+    assert "runtime policy composition is unavailable" in capsys.readouterr().err

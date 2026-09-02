@@ -452,6 +452,25 @@ def _protected_handler(
             try:
                 resolved = await session_resolver(request)
                 state = getattr(resolved, "state", None)
+                if state == "reauth_required":
+                    from .session_adapter import COOKIE_NAME
+
+                    counters["denied"] += 1
+                    response = _error(
+                        request,
+                        401,
+                        "UNAUTHORIZED",
+                        "browser reauthentication is required",
+                    )
+                    response.delete_cookie(
+                        COOKIE_NAME,
+                        path="/",
+                        secure=True,
+                        httponly=True,
+                        samesite="strict",
+                    )
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
                 if state in {"corrupt", "unavailable"}:
                     counters["denied"] += 1
                     response = _error(
@@ -1426,6 +1445,11 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    async def fleet_chat_projection(_request):
+        from .fleet_chat import fleet_chat
+
+        return JSONResponse(fleet_chat(home), headers={"Cache-Control": "no-store"})
+
     return [
         Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
@@ -1449,6 +1473,10 @@ def routes(
         Route("/api/v1/board/summary", protected(board, "skdashboard.read")),
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
+        Route(
+            "/api/v1/fleet-chat",
+            protected(fleet_chat_projection, "skdashboard.read"),
+        ),
         Route(
             "/api/v1/events",
             protected(events, "skdashboard.events.read", require_stream_context=True),

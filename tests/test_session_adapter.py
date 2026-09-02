@@ -67,8 +67,12 @@ def adapter(tmp_path: Path, clock=lambda: 1_000, tokens=None):
     )
 
 
-def login(client):
-    start = client.get("/auth/login", follow_redirects=False)
+def login(client, return_to=None):
+    start = client.get(
+        "/auth/login",
+        params={"return_to": return_to} if return_to is not None else None,
+        follow_redirects=False,
+    )
     query = parse_qs(urlparse(start.headers["location"]).query)
     return query, client.get(
         "/auth/callback",
@@ -96,6 +100,51 @@ def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     assert "access-" not in cookie and "refresh-" not in cookie
     data = (tmp_path / "state" / "sessions.db").read_bytes()
     assert b"access-1" not in data and b"refresh-1" not in data and b"test-secret" not in data
+
+
+def test_login_returns_once_to_original_portfolio_query(tmp_path):
+    target = (
+        "/control-plane/portfolio?role=project-manager&scope=estate&window=latest"
+        "&baseline=none&service=all"
+    )
+    session = adapter(tmp_path)
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    query, response = login(client, target)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == target
+    assert query["redirect_uri"] == [f"{ORIGIN}/auth/callback"]
+    data = session.database.read_bytes()
+    assert target.encode() not in data
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://evil.example/control-plane/now",
+        "//evil.example/control-plane/now",
+        "https://user:password@evil.example/control-plane/now",
+        "/control-plane/../board",
+        "/control-plane/%2e%2e/board",
+        "/control-plane/now\\@evil.example",
+        "/control-plane/now\n?role=project-manager",
+        "/control-plane/now#fragment",
+        "/control-plane/now?authorization=secret",
+        "/control-plane/now?role=one&role=two",
+        "/board",
+        "/control-plane/now?role=" + "x" * 257,
+        "/control-plane/now?role=" + "x" * 1024,
+    ],
+)
+def test_login_ignores_unsafe_return_targets(tmp_path, target):
+    session = adapter(tmp_path)
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    _query, response = login(client, target)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
 
 
 def test_state_is_one_use_and_restart_recovers_session(tmp_path):
@@ -266,6 +315,66 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
 
     assert response.status_code == 503
     assert response.json()["error"] == "authentication_unavailable"
+
+
+def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
+    from types import SimpleNamespace
+
+    from test_control_plane_decision_context import Signer
+
+    from skdashboard.live_control_plane import InProcessOperatorBridge, LiveControlPlaneConfig
+
+    class OperatorSessions:
+        def create(self, **_values):
+            return SimpleNamespace(take=lambda: ("operator-cookie", "operator-csrf"))
+
+    def bridge():
+        return InProcessOperatorBridge(
+            config=LiveControlPlaneConfig(
+                legacy_board_url="https://legacy.example/board",
+                resource_id="authorized-card-set:sha256:" + "a" * 64,
+                owner_policy_revision="b" * 64,
+                tenant_id="platform",
+            ),
+            sessions=OperatorSessions(),
+            revisions=object(),
+            signer=Signer(),
+        )
+
+    first_bridge = bridge()
+    first = adapter(tmp_path, tokens=SubjectTokens())
+    first.control_plane_bridge = first_bridge
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=first), base_url=ORIGIN)
+    login(client)
+    assert len(first_bridge._proofs) == 1
+
+    restarted_bridge = bridge()
+    restarted = EncryptedSessionAdapter(
+        first.database,
+        tmp_path / "session.key",
+        first.config,
+        oidc_client=SubjectTokens(),
+        control_plane_bridge=restarted_bridge,
+        clock=lambda: 1_001,
+    )
+    app = create_read_only_app(
+        tmp_path,
+        session_adapter=restarted,
+        session_authorizer=restarted_bridge,
+    )
+    after_restart = TestClient(app, base_url=ORIGIN)
+    after_restart.cookies.update(client.cookies)
+
+    response = after_restart.get("/api/v1/overview", headers={"Origin": ORIGIN})
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "browser reauthentication is required"
+    assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert COOKIE_NAME not in after_restart.cookies
+    assert after_restart.get("/auth/session").status_code == 401
+    with restarted._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
 
 
 def test_legacy_refresh_reservation_without_timestamp_is_recovered(tmp_path):

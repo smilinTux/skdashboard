@@ -24,7 +24,6 @@ from capauth.delegated import (
 AUDIENCE = "skdashboard"
 CAPABILITIES = frozenset({"skdashboard.read", "skdashboard.events.read"})
 ISSUER_FINGERPRINT = "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5"
-OPERATOR_ID = "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
 PRINCIPAL_KIND = "human"
 POLICY_SCHEMA = "skdashboard-scoped-trust-policy/v1"
 POLICY_VERSION = "skdashboard-read-only/v1"
@@ -242,8 +241,7 @@ class ExactPrincipalBackend:
     def __init__(self, principal: Principal, revision: str) -> None:
         if (
             principal.kind != PRINCIPAL_KIND
-            or principal.principal_id != OPERATOR_ID
-            or principal.subject != OPERATOR_ID
+            or principal.principal_id != principal.subject
             or len(revision) != 64
             or any(character not in "0123456789abcdef" for character in revision)
         ):

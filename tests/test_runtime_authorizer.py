@@ -10,11 +10,14 @@ from capauth import Principal
 
 from skdashboard.runtime_authorizer import (
     CAPABILITIES,
-    OPERATOR_ID,
     ExactPrincipalBackend,
     FileTrustedIssuerBackend,
     SQLiteCapabilityState,
 )
+
+# Test fingerprints for different operators
+CASEY_FINGERPRINT = "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9"
+JARVIS_FINGERPRINT = "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
 
 FINGERPRINT = "DCE38ED7BC9D95D724B5FE7FECF9D6A423EC83F5"
 
@@ -109,12 +112,121 @@ def test_file_trust_backend_rejects_scope_widening(tmp_path: Path) -> None:
 
 
 def test_exact_principal_backend_rejects_every_other_operator() -> None:
-    approved = Principal(principal_id=OPERATOR_ID, subject=OPERATOR_ID, kind="human")
+    # Test with Casey fingerprint
+    approved = Principal(principal_id=CASEY_FINGERPRINT, subject=CASEY_FINGERPRINT, kind="human")
     backend = ExactPrincipalBackend(approved, "a" * 64)
 
     assert backend.snapshot(approved).active is True
+    # Reject different principal_id
     with pytest.raises(PermissionError, match="not approved"):
         backend.snapshot(approved.model_copy(update={"principal_id": "other"}))
+
+
+def test_exact_principal_backend_accepts_casey_fingerprint() -> None:
+    """Prove Casey fingerprint AD80 composes when uniquely and exactly selected."""
+    approved = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=CASEY_FINGERPRINT,
+        kind="human",
+    )
+    backend = ExactPrincipalBackend(approved, "a" * 64)
+    snapshot = backend.snapshot(approved)
+
+    assert snapshot.active is True
+    assert snapshot.principal.principal_id == CASEY_FINGERPRINT
+    assert snapshot.principal.subject == CASEY_FINGERPRINT
+
+
+def test_exact_principal_backend_accepts_jarvis_fingerprint() -> None:
+    """Prove Jarvis fingerprint C8D composes when uniquely and exactly selected."""
+    approved = Principal(
+        principal_id=JARVIS_FINGERPRINT,
+        subject=JARVIS_FINGERPRINT,
+        kind="human",
+    )
+    backend = ExactPrincipalBackend(approved, "b" * 64)
+    snapshot = backend.snapshot(approved)
+
+    assert snapshot.active is True
+    assert snapshot.principal.principal_id == JARVIS_FINGERPRINT
+    assert snapshot.principal.subject == JARVIS_FINGERPRINT
+
+
+def test_exact_principal_backend_rejects_mismatched_subject() -> None:
+    """Prove mismatched subject (subject != acting_principal_id) fails closed."""
+    mismatched = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=JARVIS_FINGERPRINT,  # Mismatched subject
+        kind="human",
+    )
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(mismatched, "a" * 64)
+
+
+def test_exact_principal_backend_requires_subject_equals_principal_id() -> None:
+    """Prove subject must equal acting_principal_id (no hardcoded fingerprint)."""
+    # Valid: subject equals principal_id
+    valid_casey = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=CASEY_FINGERPRINT,
+        kind="human",
+    )
+    backend_casey = ExactPrincipalBackend(valid_casey, "a" * 64)
+    assert backend_casey.snapshot(valid_casey).active is True
+
+    # Valid: subject equals principal_id (different fingerprint)
+    valid_jarvis = Principal(
+        principal_id=JARVIS_FINGERPRINT,
+        subject=JARVIS_FINGERPRINT,
+        kind="human",
+    )
+    backend_jarvis = ExactPrincipalBackend(valid_jarvis, "b" * 64)
+    assert backend_jarvis.snapshot(valid_jarvis).active is True
+
+    # Invalid: subject does not equal principal_id
+    invalid = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=CASEY_FINGERPRINT.lower(),  # Different case
+        kind="human",
+    )
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(invalid, "a" * 64)
+
+
+def test_exact_principal_backend_requires_valid_revision() -> None:
+    """Prove invalid revision format fails closed."""
+    principal = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=CASEY_FINGERPRINT,
+        kind="human",
+    )
+
+    # Invalid: too short
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(principal, "a" * 63)
+
+    # Invalid: too long
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(principal, "a" * 65)
+
+    # Invalid: non-hex characters
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(principal, "g" * 64)
+
+    # Valid: exactly 64 hex characters
+    backend = ExactPrincipalBackend(principal, "a" * 64)
+    assert backend.snapshot(principal).active is True
+
+
+def test_exact_principal_backend_requires_human_kind() -> None:
+    """Prove non-human principal kind fails closed."""
+    machine = Principal(
+        principal_id=CASEY_FINGERPRINT,
+        subject=CASEY_FINGERPRINT,
+        kind="machine",
+    )
+    with pytest.raises(ValueError, match="exact current human principal is required"):
+        ExactPrincipalBackend(machine, "a" * 64)
 
 
 def test_sqlite_state_is_durable_replay_safe_and_audit_append_only(tmp_path: Path) -> None:
