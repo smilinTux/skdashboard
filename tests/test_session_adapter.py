@@ -349,7 +349,8 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
     assert response.json()["error"] == "authentication_unavailable"
 
 
-def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
+@pytest.mark.parametrize("path", ["/api/v1/overview", "/auth/session"])
+def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path, path):
     from types import SimpleNamespace
 
     from capauth import CurrentPolicyRevisions
@@ -404,10 +405,13 @@ def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
     after_restart = TestClient(app, base_url=ORIGIN)
     after_restart.cookies.update(client.cookies)
 
-    response = after_restart.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    response = after_restart.get(path, headers={"Origin": ORIGIN})
 
     assert response.status_code == 401
-    assert response.json()["message"] == "browser reauthentication is required"
+    if path == "/api/v1/overview":
+        assert response.json()["message"] == "browser reauthentication is required"
+    else:
+        assert response.json() == {"authenticated": False}
     assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
     assert "Max-Age=0" in response.headers["set-cookie"]
     assert COOKIE_NAME not in after_restart.cookies

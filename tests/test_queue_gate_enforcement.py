@@ -324,7 +324,7 @@ def test_no_unguarded_request_run_callers_in_skdashboard():
             if "request_run(" in line and "def request_run(" not in line:
                 hits.append(f"{path.relative_to(src_dir)}:{lineno}")
 
-    assert hits == ["dashboard.py:1121"], (
+    assert hits == ["dashboard.py:1129"], (
         "unexpected set of agent_run.request_run call sites in skdashboard: "
         f"{hits!r}; the assistant must never be a caller"
     )

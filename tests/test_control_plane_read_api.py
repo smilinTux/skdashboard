@@ -117,10 +117,54 @@ def test_v1_economy_keeps_unavailable_cost_distinct_from_zero(tmp_path: Path) ->
     }
     with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
         response = TestClient(_app(tmp_path)).get("/api/v1/economy/summary", headers=READ_HEADERS)
-    item = response.json()["items"][0]
-    assert item["tokens"]["total"] == 5
-    assert item["cost_usd"] is None
-    assert item["cost_state"] == "unavailable"
+    body = response.json()
+    # No provider and no typed decision context: the route fails closed as
+    # "unavailable" (ECONOMY_UNAVAILABLE), keeping missing cost distinct
+    # from zero rather than rendering a healthy aggregate.
+    assert body["freshness"]["truth_state"] == "unavailable"
+    assert body["errors"][0]["code"] == "ECONOMY_UNAVAILABLE"
+
+
+def test_v1_gateway_summary_is_bounded_read_only_and_keeps_throughput(tmp_path: Path) -> None:
+    usage = {
+        "schema_version": "skcounter.snapshot.v1",
+        "generated_at": "2026-09-02T00:00:00Z",
+        "selected_lane": "gateway_observed",
+        "available_lanes": ["gateway_observed"],
+        "summary": {
+            "input": 120,
+            "output": 80,
+            "cache_read": 40,
+            "cache_write": 0,
+            "reasoning": 20,
+            "total": 260,
+            "duration_ms": 2000,
+            "timed_tokens": 200,
+            "cost_usd": 0.0,
+            "cost_state": "unavailable",
+        },
+        "collectors": [{"status": "fresh", "last_seen": "2026-09-02T00:00:00Z"}],
+        "coverage": {
+            "expected_nodes": 1,
+            "reporting_nodes": 1,
+            "fresh_collectors": 1,
+            "delayed_collectors": 0,
+            "stale_collectors": 0,
+        },
+        "observation_count": 2,
+        "errors": [],
+    }
+    with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
+        client = TestClient(_app(tmp_path))
+        response = client.get("/api/v1/gateway/summary", headers=READ_HEADERS)
+        denied = client.post("/api/v1/gateway/summary", headers=READ_HEADERS)
+    assert response.status_code == 200
+    aggregate = response.json()["items"][0]
+    assert aggregate["tokens"]["total"] == 260
+    assert aggregate["tokens"]["cache_read"] == 40
+    assert aggregate["tokens_per_second"] == 100.0
+    assert aggregate["cost_usd"] is None
+    assert denied.status_code == 405
 
 
 def test_v1_fleet_disables_alert_side_effects(tmp_path: Path) -> None:
