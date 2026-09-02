@@ -225,6 +225,7 @@ def create_read_only_app(
     session_authorizer=None,
     architecture_provider=None,
     governance_provider=None,
+    economy_provider=None,
     report_provider=None,
     legacy_board_url=None,
 ) -> Starlette:
@@ -243,6 +244,10 @@ def create_read_only_app(
         from .dashboard_governance import GovernanceProjectionProvider
 
         governance_provider = GovernanceProjectionProvider()
+    if economy_provider is None and decision_authorizer is not None:
+        from .dashboard_economy_provider import EconomyProjectionProvider
+
+        economy_provider = EconomyProjectionProvider()
     if report_provider is None and decision_authorizer is not None:
         from .dashboard_reports import ReportProjectionProvider
 
@@ -394,6 +399,7 @@ def create_read_only_app(
             session_authorizer=session_authorizer,
             architecture_provider=architecture_provider,
             governance_provider=governance_provider,
+            economy_provider=economy_provider,
             report_provider=report_provider,
         )
     )

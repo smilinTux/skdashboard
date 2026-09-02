@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from .build_info import build_information
+from .dashboard_economy_provider import EconomyProjectionProvider
 from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
 
 SCHEMA_VERSION = "1.1.0"
@@ -630,6 +631,7 @@ def routes(
     session_authorizer=None,
     architecture_provider=None,
     governance_provider=None,
+    economy_provider=None,
     report_provider=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
@@ -755,44 +757,51 @@ def routes(
             lane = request.query_params.get("measurement_lane", "harness_reported")
             if lane not in dashboard_skcounter.LANES:
                 raise ValueError("measurement_lane is invalid")
-            raw = dashboard_skcounter.get_ai_usage(
-                home,
-                {
-                    "lane": lane,
-                    "from": request.query_params.get("from", ""),
-                    "to": request.query_params.get("to", ""),
-                },
-            )
-            summary = raw.get("summary", {})
-            coverage = raw.get("coverage", {})
-            cost = summary.get("cost_usd") if summary.get("cost_state") == "available" else None
-            items = [
-                {
-                    "measurement_lane": raw.get("selected_lane"),
-                    "available_lanes": raw.get("available_lanes", []),
-                    "tokens": {
-                        key: summary.get(key, 0) for key in dashboard_skcounter.TOKEN_FIELDS
-                    },
-                    "cost_usd": cost,
-                    "cost_state": summary.get("cost_state", "unavailable"),
-                    "collectors": raw.get("collectors", []),
-                    "expected_nodes": coverage.get("expected_nodes", 0),
-                    "reporting_nodes": coverage.get("reporting_nodes", 0),
-                    "missing_nodes": coverage.get("missing_nodes", []),
-                }
-            ]
-            return _response(
-                request,
-                _page(
-                    request,
-                    "skcounter",
-                    items,
-                    [str(x) for x in raw.get("errors", [])],
-                    observed_at=raw.get("generated_at"),
-                ),
-            )
+            if "from" in request.query_params or "to" in request.query_params:
+                raise ValueError("time range filters are not supported by the governed projection")
         except ValueError as exc:
             return _error(request, 400, "INVALID_QUERY", str(exc))
+
+        from .control_plane_scope import ProtectedScopeDenied, ScopeQueryError, parse_now_scope
+
+        try:
+            query = parse_now_scope(request.query_params)
+        except ProtectedScopeDenied:
+            return _error(
+                request,
+                403,
+                "PROTECTED_SCOPE_DENIED",
+                "protected scope is not available",
+            )
+        except ScopeQueryError as exc:
+            return _error(request, 400, "INVALID_SCOPE", str(exc))
+
+        from skcoord.authorized_card_snapshot import AuthorizedCardScopeV1
+
+        query = AuthorizedCardScopeV1(
+            role=query.role,
+            scope=query.scope,
+            window=query.window,
+            baseline=query.baseline,
+            service=query.service,
+        )
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        if verifier is not None:
+            provider = economy_provider or EconomyProjectionProvider()
+            projection = provider.read(context, query, home, currentness_verifier=verifier)
+        elif economy_provider is not None:
+            projection = economy_provider.read(context, query, home)
+        else:
+            projection = {
+                "schema_version": "economy-projection/v1",
+                "scope": {"role": query.role, "scope": query.scope, "window": query.window,
+                          "baseline": query.baseline, "service": query.service},
+                "items": [],
+                "freshness": {"truth_state": "unavailable", "observed_at": None, "projected_at": _now(), "age_seconds": 0},
+                "errors": [{"code": "ECONOMY_UNAVAILABLE", "message": "Economy provider is not configured", "retryable": True}],
+            }
+        return _response(request, projection)
 
     async def overview(request):
         from .control_plane_adapters import default_readers, project_estate
