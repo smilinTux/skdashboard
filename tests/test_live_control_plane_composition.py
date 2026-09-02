@@ -25,6 +25,7 @@ from skdashboard.live_control_plane import (
     EVENTS_CAPABILITY,
     EVENTS_RESOURCE_TYPE,
     EVENTS_TARGET,
+    FLEET_CHAT_TARGET,
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
@@ -100,6 +101,7 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     ("capability", "target", "resource_type", "resource_id"),
     [
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, FLEET_CHAT_TARGET, RESOURCE_TYPE, RESOURCE_ID),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ],
 )
@@ -437,6 +439,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     direct_watermarks = direct_projection["items"][0]["source_watermarks"]
     for capability, target, resource_type, resource_id in (
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, FLEET_CHAT_TARGET, RESOURCE_TYPE, entry.resource_id),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ):
         projection_request = request(
