@@ -663,6 +663,7 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
         "/api/v1/board/summary",
         "/api/v1/fleet/summary",
         "/api/v1/economy/summary",
+        "/api/v1/gateway/summary",
         "/api/v1/events",
     } <= route_paths
 
