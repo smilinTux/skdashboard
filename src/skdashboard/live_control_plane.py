@@ -160,7 +160,17 @@ class _UnavailableSessionAuthorizer:
 class InProcessOperatorBridge:
     """Bind a validated browser login to atomic in-process authorization."""
 
-    __slots__ = ("_config", "_factories", "_proofs", "_revisions", "_sessions")
+    __slots__ = (
+        "_config",
+        "_factories",
+        "_owner_policy_revisions",
+        "_proof_owner_revisions",
+        "_proofs",
+        "_revisions",
+        "_sessions",
+        "_signer",
+        "_clock",
+    )
 
     def __init__(
         self,
@@ -169,19 +179,30 @@ class InProcessOperatorBridge:
         sessions: OperatorSessionManager,
         revisions: CurrentPolicyRevisions,
         signer,
+        owner_policy_revisions=None,
         clock=None,
     ) -> None:
-        issuer = _InjectedCapabilityIssuer(signer, clock=clock)
         self._config = config
-        self._proofs: dict[str, dict[str, tuple[str, str, str]]] = {}
+        self._clock = clock
+        self._signer = signer
+        self._owner_policy_revisions = (
+            None if owner_policy_revisions is None else dict(owner_policy_revisions)
+        )
+        self._proofs: dict[str, dict[str, tuple[str, str, str, str]]] = {}
+        self._proof_owner_revisions: dict[str, str] = {}
         self._sessions = sessions
         self._revisions = revisions
-        self._factories = {
-            (origin, capability, target): InProcessIssuerFactory(
-                sessions=sessions,
+        self._factories = {}
+
+    def _factory(self, origin: str, capability: str, target: str, owner_revision: str):
+        key = (origin, capability, target, owner_revision)
+        factory = self._factories.get(key)
+        if factory is None:
+            factory = InProcessIssuerFactory(
+                sessions=self._sessions,
                 config=DashboardIssuerAuthorizationConfigV1(
                     allowed_origin=origin,
-                    node_id=config.node_id,
+                    node_id=self._config.node_id,
                     purpose=PURPOSE,
                     capability=capability,
                     operation="read",
@@ -190,18 +211,19 @@ class InProcessOperatorBridge:
                         EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
                     ),
                     resource_id=(
-                        config.tenant_id if capability == EVENTS_CAPABILITY else config.resource_id
+                        self._config.tenant_id
+                        if capability == EVENTS_CAPABILITY
+                        else self._config.resource_id
                     ),
-                    owner_policy_revision=config.owner_policy_revision,
-                    ttl_seconds=config.capability_ttl_seconds,
+                    owner_policy_revision=owner_revision,
+                    ttl_seconds=self._config.capability_ttl_seconds,
                 ),
-                issuer=issuer,
+                issuer=_InjectedCapabilityIssuer(self._signer, clock=self._clock),
                 enabled=True,
-                clock=clock,
+                clock=self._clock,
             )
-            for origin in ALLOWED_BROWSER_ORIGINS
-            for capability, target in AUTHENTICATED_BINDINGS
-        }
+            self._factories[key] = factory
+        return factory
 
     def enroll(self, subject: str, origin: str) -> str:
         if (
@@ -210,11 +232,21 @@ class InProcessOperatorBridge:
             or not 1 <= len(subject) <= 256
             or subject != subject.strip()
             or origin not in ALLOWED_BROWSER_ORIGINS
+            or (
+                self._owner_policy_revisions is not None
+                and subject not in self._owner_policy_revisions
+            )
         ):
             raise PermissionError("validated operator subject is unavailable")
         principal = Principal(principal_id=subject, subject=subject, kind="human")
         device = secrets.token_urlsafe(32)
         proofs = {}
+        owner_revision = (
+            self._config.owner_policy_revision
+            if self._owner_policy_revisions is None
+            else self._owner_policy_revisions[subject]
+        )
+        revisions = self._revisions.model_copy(update={"owner": owner_revision})
         for capability in (CAPABILITY, EVENTS_CAPABILITY):
             material = self._sessions.create(
                 principal=principal,
@@ -223,12 +255,12 @@ class InProcessOperatorBridge:
                 capability_ceiling=(capability,),
                 purpose=PURPOSE,
                 allowed_origin=origin,
-                revisions=self._revisions,
+                revisions=revisions,
                 ttl_seconds=8 * 60 * 60,
                 idle_seconds=30 * 60,
             )
             cookie, csrf = material.take()
-            proofs[capability] = (cookie, csrf, device)
+            proofs[capability] = (cookie, csrf, device, owner_revision)
         if len(self._proofs) >= MAX_OPERATOR_PROOFS:
             self._proofs.pop(next(iter(self._proofs)))
         handle = secrets.token_urlsafe(32)
@@ -255,16 +287,18 @@ class InProcessOperatorBridge:
             )
         if capability is None or capability not in proofs:
             raise PermissionError("operator session material is unavailable")
-        cookie, csrf, device = proofs[capability]
+        cookie, csrf, device, owner_revision = proofs[capability]
         nonce = request.headers.get("x-request-id", "")[:256]
         if len(nonce) < 16:
             nonce = secrets.token_hex(16)
-        return InProcessIssuerRequest(
+        proof = InProcessIssuerRequest(
             session_cookie=cookie,
             csrf_token=csrf,
             request_nonce=nonce,
             device_fingerprint=device,
         )
+        self._proof_owner_revisions[id(proof)] = owner_revision
+        return proof
 
     def discard(self, handle: str) -> None:
         if isinstance(handle, str):
@@ -288,9 +322,10 @@ class InProcessOperatorBridge:
             origin = _approved_request_origin(request)
         except PermissionError:
             return None
-        factory = self._factories.get((origin, capability, target))
-        if factory is None:
+        owner_revision = self._proof_owner_revisions.pop(id(proof), None)
+        if owner_revision is None:
             return None
+        factory = self._factory(origin, capability, target, owner_revision)
         invocation = invocation_factory(request, capability, target)
         result, verifier = factory.authorize(proof, authorizer, invocation)
         if not result.allow or result.context is None or verifier is None:
@@ -601,6 +636,7 @@ def compose_file_backed_live_control_plane(
     credential_signer=None,
     operator_sessions: OperatorSessionManager | None = None,
     operator_revisions: CurrentPolicyRevisions | None = None,
+    owner_policy_revisions=None,
     clock=None,
 ) -> LiveControlPlaneComposition:
     """Compose the live runtime with SKCoord's durable fail-closed backend."""
@@ -624,6 +660,7 @@ def compose_file_backed_live_control_plane(
         credential_signer=credential_signer,
         operator_sessions=operator_sessions,
         operator_revisions=operator_revisions,
+        owner_policy_revisions=owner_policy_revisions,
         clock=clock,
     )
 
@@ -637,6 +674,7 @@ def compose_live_control_plane(
     credential_signer=None,
     operator_sessions: OperatorSessionManager | None = None,
     operator_revisions: CurrentPolicyRevisions | None = None,
+    owner_policy_revisions=None,
     clock=None,
 ) -> LiveControlPlaneComposition:
     """Compose CapAuth and SKCoord around one durable owner-provider instance."""
@@ -699,6 +737,7 @@ def compose_live_control_plane(
             sessions=operator_sessions,
             revisions=operator_revisions,
             signer=credential_signer,
+            owner_policy_revisions=owner_policy_revisions,
             clock=clock,
         )
 

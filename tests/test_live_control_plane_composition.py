@@ -403,6 +403,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
                 owner=entry.owner_policy_revision,
             )
         ),
+        owner_policy_revisions={principal.subject: entry.owner_policy_revision},
         clock=clock,
     )
     bridge = composition.session_authorizer

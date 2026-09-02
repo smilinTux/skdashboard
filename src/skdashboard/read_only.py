@@ -548,6 +548,19 @@ def main(argv: list[str] | None = None) -> None:
             selected_entry = selected_entries[0]
             if selected_entry.acting_principal_id != selected_entry.subject:
                 raise ValueError
+            active_entries = tuple(
+                entry
+                for entry in owner_document.entries
+                if entry.node_id == args.node_id
+                and entry.resource_id == args.authorized_resource_id
+                and entry.valid_from <= current < entry.expires_at
+                and entry.acting_principal_id == entry.subject
+            )
+            owner_policy_revisions = {
+                entry.subject: entry.owner_policy_revision for entry in active_entries
+            }
+            if not active_entries or len(owner_policy_revisions) != len(active_entries):
+                raise ValueError
             revisions_payload = _read_exact_value_free_config(
                 args.operator_policy_revisions_file,
                 args.operator_policy_revisions_sha256,
@@ -566,10 +579,13 @@ def main(argv: list[str] | None = None) -> None:
                 trusted_issuer_signature_sha256=args.trusted_issuer_signature_sha256,
                 issuer_fingerprint=args.signer_fingerprint,
                 verifier_gnupg_home=args.signer_gnupg_home,
-                principal=Principal(
-                    principal_id=selected_entry.acting_principal_id,
-                    subject=selected_entry.subject,
-                    kind="human",
+                principals=tuple(
+                    Principal(
+                        principal_id=entry.acting_principal_id,
+                        subject=entry.subject,
+                        kind="human",
+                    )
+                    for entry in active_entries
                 ),
                 principal_revision=revisions.principal,
                 state_db=args.capability_state_db,
@@ -579,13 +595,21 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(f"runtime policy composition is unavailable: {type(exc).__name__}")
         try:
 
-            def current_revisions(_binding=None):
+            def current_revisions(binding=None):
                 payload = _read_exact_value_free_config(
                     args.operator_policy_revisions_file,
                     args.operator_policy_revisions_sha256,
                     expected_uid=expected_uid,
                 )
-                return CurrentPolicyRevisions.model_validate_json(payload, strict=True)
+                current_revisions_value = CurrentPolicyRevisions.model_validate_json(
+                    payload, strict=True
+                )
+                if binding is None:
+                    return current_revisions_value
+                owner_revision = binding.revisions.owner
+                if owner_revision not in owner_policy_revisions.values():
+                    raise PermissionError("owner policy revision is not active")
+                return current_revisions_value.model_copy(update={"owner": owner_revision})
 
             sessions = OperatorSessionManager(
                 backend=SQLiteOperatorSessionBackend(args.operator_session_db),
@@ -616,6 +640,7 @@ def main(argv: list[str] | None = None) -> None:
             credential_signer=signer,
             operator_sessions=sessions,
             operator_revisions=revisions,
+            owner_policy_revisions=owner_policy_revisions,
         )
         session_adapter.control_plane_bridge = composition.session_authorizer
         app_options.update(
