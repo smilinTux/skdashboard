@@ -1445,6 +1445,11 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    async def fleet_chat_projection(_request):
+        from .fleet_chat import fleet_chat
+
+        return JSONResponse(fleet_chat(home), headers={"Cache-Control": "no-store"})
+
     return [
         Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
@@ -1468,6 +1473,10 @@ def routes(
         Route("/api/v1/board/summary", protected(board, "skdashboard.read")),
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
+        Route(
+            "/api/v1/fleet-chat",
+            protected(fleet_chat_projection, "skdashboard.read"),
+        ),
         Route(
             "/api/v1/events",
             protected(events, "skdashboard.events.read", require_stream_context=True),

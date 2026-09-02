@@ -76,6 +76,13 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
     headers = {"Authorization": "Bearer test", "Origin": LAN_ORIGIN}
     assert client.get("/api/v1/overview", headers=headers).status_code == 200
     assert client.get("/metrics", headers=headers).status_code == 200
+    assert client.get("/fleet-chat").status_code == 200
+    assert client.get("/static/js/fleet_chat.js").status_code == 200
+    assert client.get("/api/v1/fleet-chat").status_code == 401
+    chat = client.get("/api/v1/fleet-chat", headers=headers)
+    assert chat.status_code == 200
+    assert chat.json()["source"] == "skmail"
+    assert chat.json()["read_only"] is True
     for path in (
         "/api/auth/capability",
         "/api/card/x/mutate",

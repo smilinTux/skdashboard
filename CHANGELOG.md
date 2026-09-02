@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add an authenticated, read-only Fleet Chat view over bounded SKMail records,
+  including canonical timestamps, explicit freshness, recipient validation,
+  and secret-shaped redaction.
 - Remove hardcoded owner fingerprint from runtime composition. The read-only runtime
   now accepts and validates the exact owner-principal binding from the live owner
   policy instead of hardcoding a Jarvis principal identity. Runtime selection

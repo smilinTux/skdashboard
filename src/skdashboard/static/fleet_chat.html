@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SKDashboard: Fleet Drift</title>
+  <title>SKDashboard | Fleet Chat</title>
   <link rel="stylesheet" href="/static/css/board.css">
   <link rel="stylesheet" href="/static/css/cockpit.css">
-  <link rel="stylesheet" href="/static/css/fleet.css">
+  <link rel="stylesheet" href="/static/css/overview.css">
+  <link rel="stylesheet" href="/static/css/projects.css">
+  <link rel="stylesheet" href="/static/css/reliability.css">
 </head>
 <body>
   <div class="wrap">
-    <div class="topbar sidebar" role="navigation" aria-label="Dashboard sections">
+    <nav class="topbar sidebar" aria-label="Dashboard sections">
       <div class="brand"><div class="glyph">SK</div><h1>SKDashboard</h1></div>
       <div class="tabs">
         <a class="tab" data-nav="home" href="/control-plane/now">Now</a>
@@ -32,28 +34,36 @@
         <a class="tab" data-nav="trust" href="/trust">Trust</a>
         <a class="tab" data-nav="models" href="/models">Models</a>
         <a class="tab" data-nav="economy" href="/economy">Economy</a>
-        <a class="tab active" data-nav="fleet" href="/fleet">Fleet Drift</a>
+        <a class="tab" data-nav="fleet" href="/fleet">Fleet Drift</a>
       </div>
-      <div class="spacer"></div>
-      <span id="fl-errors" class="fl-err" hidden></span>
-      <button class="btn" id="btn-refresh">Refresh</button>
-    </div>
+      <div class="spacer"></div><span class="quality-mode">Read only</span>
+    </nav>
 
-    <div class="kpirow" id="fl-kpi"></div>
-
-    <div class="card" style="margin-top:14px">
-      <h2>Graded nodes <span class="badge">observed inventory vs install profile</span></h2>
-      <div class="cbody" id="fl-nodes"><div class="spinner"></div></div>
-    </div>
-
-    <div class="card" style="margin-top:14px">
-      <h2>Not graded <span class="badge">no verdict is possible, and that is not a clean bill</span></h2>
-      <div class="cbody" id="fl-skipped"><div class="spinner"></div></div>
-    </div>
+    <main>
+      <div class="eyebrow">FLEET CHAT</div>
+      <h2>Channels</h2>
+      <p class="sub">Every message in the skmail store, as it happened. Read only.</p>
+      <div id="fc-wrap" class="fc-wrap">
+        <aside class="fc-rail">
+          <div class="fc-rail-h">CHANNELS</div>
+          <ul id="fc-channels" class="fc-channels"></ul>
+          <div class="fc-rail-h">SPEAKERS</div>
+          <ul id="fc-speakers" class="fc-speakers"></ul>
+        </aside>
+        <section class="fc-main">
+          <div class="fc-toolbar">
+            <input id="fc-filter" class="fc-filter" type="search"
+                   placeholder="filter by text, sender or card id" autocomplete="off">
+            <label class="fc-toggle"><input type="checkbox" id="fc-urgent"> urgent only</label>
+            <span id="fc-count" class="fc-count"></span>
+          </div>
+          <ol id="fc-log" class="fc-log" aria-live="polite"></ol>
+          <p id="fc-empty" class="fc-empty" hidden>No messages match.</p>
+        </section>
+      </div>
+</main>
   </div>
-
-  <div class="toast" id="toast"></div>
-
-  <script type="module" src="/static/js/fleet.js"></script>
-</body>
+  <script type="module" src="/static/js/reliability.js"></script>
+    <script src="/static/js/fleet_chat.js"></script>
+  </body>
 </html>
