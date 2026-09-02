@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from .build_info import build_information
+from .dashboard_economy_provider import EconomyProjectionProvider
 from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
 
 SCHEMA_VERSION = "1.1.0"

@@ -4,9 +4,9 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from starlette.testclient import TestClient
-from unittest.mock import patch
 
 from skdashboard.dashboard import create_app
 from skdashboard.dashboard_economy_provider import (
