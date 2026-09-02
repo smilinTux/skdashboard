@@ -556,10 +556,8 @@ def main(argv: list[str] | None = None) -> None:
                 and entry.valid_from <= current < entry.expires_at
                 and entry.acting_principal_id == entry.subject
             )
-            owner_policy_revisions = {
-                entry.subject: entry.owner_policy_revision for entry in active_entries
-            }
-            if not active_entries or len(owner_policy_revisions) != len(active_entries):
+            owner_policy_entries = {entry.subject: entry for entry in active_entries}
+            if not active_entries or len(owner_policy_entries) != len(active_entries):
                 raise ValueError
             revisions_payload = _read_exact_value_free_config(
                 args.operator_policy_revisions_file,
@@ -607,7 +605,13 @@ def main(argv: list[str] | None = None) -> None:
                 if binding is None:
                     return current_revisions_value
                 owner_revision = binding.revisions.owner
-                if owner_revision not in owner_policy_revisions.values():
+                matching_owner_entries = tuple(
+                    entry
+                    for entry in owner_policy_entries.values()
+                    if entry.owner_policy_revision == owner_revision
+                    and entry.valid_from <= datetime.now(timezone.utc) < entry.expires_at
+                )
+                if len(matching_owner_entries) != 1:
                     raise PermissionError("owner policy revision is not active")
                 return current_revisions_value.model_copy(update={"owner": owner_revision})
 
@@ -640,7 +644,7 @@ def main(argv: list[str] | None = None) -> None:
             credential_signer=signer,
             operator_sessions=sessions,
             operator_revisions=revisions,
-            owner_policy_revisions=owner_policy_revisions,
+            owner_policy_entries=owner_policy_entries,
         )
         session_adapter.control_plane_bridge = composition.session_authorizer
         app_options.update(

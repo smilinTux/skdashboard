@@ -179,14 +179,14 @@ class InProcessOperatorBridge:
         sessions: OperatorSessionManager,
         revisions: CurrentPolicyRevisions,
         signer,
-        owner_policy_revisions=None,
+        owner_policy_entries=None,
         clock=None,
     ) -> None:
         self._config = config
-        self._clock = clock
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._signer = signer
         self._owner_policy_revisions = (
-            None if owner_policy_revisions is None else dict(owner_policy_revisions)
+            None if owner_policy_entries is None else dict(owner_policy_entries)
         )
         self._proofs: dict[str, dict[str, tuple[str, str, str, str]]] = {}
         self._proof_owner_revisions: dict[str, str] = {}
@@ -234,7 +234,14 @@ class InProcessOperatorBridge:
             or origin not in ALLOWED_BROWSER_ORIGINS
             or (
                 self._owner_policy_revisions is not None
-                and subject not in self._owner_policy_revisions
+                and (
+                    subject not in self._owner_policy_revisions
+                    or not (
+                        self._owner_policy_revisions[subject].valid_from
+                        <= self._clock()
+                        < self._owner_policy_revisions[subject].expires_at
+                    )
+                )
             )
         ):
             raise PermissionError("validated operator subject is unavailable")
@@ -244,7 +251,7 @@ class InProcessOperatorBridge:
         owner_revision = (
             self._config.owner_policy_revision
             if self._owner_policy_revisions is None
-            else self._owner_policy_revisions[subject]
+            else self._owner_policy_revisions[subject].owner_policy_revision
         )
         revisions = self._revisions.model_copy(update={"owner": owner_revision})
         for capability in (CAPABILITY, EVENTS_CAPABILITY):
@@ -636,7 +643,7 @@ def compose_file_backed_live_control_plane(
     credential_signer=None,
     operator_sessions: OperatorSessionManager | None = None,
     operator_revisions: CurrentPolicyRevisions | None = None,
-    owner_policy_revisions=None,
+    owner_policy_entries=None,
     clock=None,
 ) -> LiveControlPlaneComposition:
     """Compose the live runtime with SKCoord's durable fail-closed backend."""
@@ -660,7 +667,7 @@ def compose_file_backed_live_control_plane(
         credential_signer=credential_signer,
         operator_sessions=operator_sessions,
         operator_revisions=operator_revisions,
-        owner_policy_revisions=owner_policy_revisions,
+        owner_policy_entries=owner_policy_entries,
         clock=clock,
     )
 
@@ -674,7 +681,7 @@ def compose_live_control_plane(
     credential_signer=None,
     operator_sessions: OperatorSessionManager | None = None,
     operator_revisions: CurrentPolicyRevisions | None = None,
-    owner_policy_revisions=None,
+    owner_policy_entries=None,
     clock=None,
 ) -> LiveControlPlaneComposition:
     """Compose CapAuth and SKCoord around one durable owner-provider instance."""
@@ -737,7 +744,7 @@ def compose_live_control_plane(
             sessions=operator_sessions,
             revisions=operator_revisions,
             signer=credential_signer,
-            owner_policy_revisions=owner_policy_revisions,
+            owner_policy_entries=owner_policy_entries,
             clock=clock,
         )
 

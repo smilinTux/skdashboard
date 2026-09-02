@@ -697,9 +697,9 @@ def test_owner_policy_selection_authorizes_all_active_human_principals(
         CASEY_FINGERPRINT,
         JARVIS_FINGERPRINT,
     }
-    assert observed["composition"]["owner_policy_revisions"] == {
-        CASEY_FINGERPRINT: casey.owner_policy_revision,
-        JARVIS_FINGERPRINT: jarvis.owner_policy_revision,
+    assert observed["composition"]["owner_policy_entries"] == {
+        CASEY_FINGERPRINT: casey,
+        JARVIS_FINGERPRINT: jarvis,
     }
 
 

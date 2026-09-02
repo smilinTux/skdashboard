@@ -29,6 +29,7 @@ from skdashboard.live_control_plane import (
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
+    InProcessOperatorBridge,
     LiveControlPlaneConfig,
     compose_file_backed_live_control_plane,
     compose_live_control_plane,
@@ -69,6 +70,52 @@ def request(
             "headers": headers,
         }
     )
+
+
+def test_operator_bridge_rejects_enrollment_after_owner_policy_expires() -> None:
+    from capauth import CurrentPolicyRevisions
+    from test_control_plane_decision_context import Signer
+
+    now = datetime.now(timezone.utc)
+    subject = "human@example.test"
+    entry = AuthorizedCardPolicyEntryV1.issue(
+        subject=subject,
+        acting_principal_id=subject,
+        node_id="chiap08",
+        scope=AuthorizedCardScopeV1(role="project-manager"),
+        valid_from=now - timedelta(minutes=1),
+        expires_at=now + timedelta(minutes=1),
+    )
+
+    class Sessions:
+        def create(self, **_values):
+            return SimpleNamespace(take=lambda: ("cookie", "csrf"))
+
+    current = [now]
+    bridge = InProcessOperatorBridge(
+        config=LiveControlPlaneConfig(
+            legacy_board_url="https://legacy.example/board",
+            resource_id=entry.resource_id,
+            owner_policy_revision=entry.owner_policy_revision,
+            tenant_id="platform",
+        ),
+        sessions=Sessions(),
+        revisions=CurrentPolicyRevisions(
+            issuer="1" * 64,
+            principal="2" * 64,
+            acting_principal="3" * 64,
+            revocation="4" * 64,
+            owner=entry.owner_policy_revision,
+        ),
+        signer=Signer(),
+        owner_policy_entries={subject: entry},
+        clock=lambda: current[0],
+    )
+
+    assert bridge.enroll(subject, ORIGIN)
+    current[0] = entry.expires_at
+    with pytest.raises(PermissionError, match="subject is unavailable"):
+        bridge.enroll(subject, ORIGIN)
 
 
 def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> None:
@@ -403,7 +450,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
                 owner=entry.owner_policy_revision,
             )
         ),
-        owner_policy_revisions={principal.subject: entry.owner_policy_revision},
+        owner_policy_entries={principal.subject: entry},
         clock=clock,
     )
     bridge = composition.session_authorizer
