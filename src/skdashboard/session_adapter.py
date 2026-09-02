@@ -40,6 +40,7 @@ RETURN_TO_PATHS = frozenset(
         "/control-plane/reliability",
         "/control-plane/reports",
         "/control-plane/schedule",
+        "/fleet-chat",
     }
 )
 RETURN_TO_QUERY_KEYS = frozenset(
@@ -621,7 +622,13 @@ class EncryptedSessionAdapter:
                 headers={"Cache-Control": "no-store"},
             )
         return JSONResponse(
-            {"authenticated": True, "csrf_token": loaded[1]["csrf"]},
+            {
+                "authenticated": True,
+                "authenticator": "CapAuth",
+                "subject": loaded[1].get("subject"),
+                "expires_at": loaded[1]["expires_at"],
+                "csrf_token": loaded[1]["csrf"],
+            },
             headers={"Cache-Control": "no-store"},
         )
 

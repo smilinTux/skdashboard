@@ -102,6 +102,26 @@ def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     assert b"access-1" not in data and b"refresh-1" not in data and b"test-secret" not in data
 
 
+def test_app_pages_show_shared_capauth_status_and_identity(tmp_path):
+    session = adapter(tmp_path, tokens=SubjectTokens())
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    for path in ("/", "/control-plane/portfolio", "/fleet-chat"):
+        page = client.get(path)
+        assert page.status_code == 200
+        assert '<script src="/static/js/auth_status.js"></script>' in page.text
+    assert client.get("/static/js/auth_status.js").status_code == 200
+
+    _query, response = login(client, "/fleet-chat")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/fleet-chat"
+    current = client.get("/auth/session")
+    assert current.status_code == 200
+    assert current.json()["authenticator"] == "CapAuth"
+    assert current.json()["subject"] == "operator@example.test"
+    assert current.json()["expires_at"] == 29_800
+
+
 def test_login_returns_once_to_original_portfolio_query(tmp_path):
     target = (
         "/control-plane/portfolio?role=project-manager&scope=estate&window=latest"
