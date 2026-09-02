@@ -51,11 +51,13 @@ TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
+FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
         (CAPABILITY, BOARD_TARGET),
+        (CAPABILITY, FLEET_CHAT_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
     }
 )
@@ -717,6 +719,7 @@ __all__ = [
     "BOARD_TARGET",
     "CAPABILITY",
     "EVENTS_CAPABILITY",
+    "FLEET_CHAT_TARGET",
     "EVENTS_TARGET",
     "AuthorizedCardScheduleSource",
     "LiveControlPlaneComposition",
