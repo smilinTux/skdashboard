@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Compose the existing governed Reliability provider into the authenticated
+  read-only runtime and fail closed when source evidence is unavailable.
 - Keep the DCE38 dashboard service signer fixed while authorizing each active
   browser principal with its own current owner-policy revision, without restart.
 - Bind Fleet Chat to the same in-process `skdashboard.read` session capability

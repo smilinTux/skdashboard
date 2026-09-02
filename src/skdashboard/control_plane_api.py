@@ -1133,12 +1133,21 @@ def routes(
                 "the authorized reliability projection is unavailable",
                 retryable=True,
             )
-        projection = reliability_provider.read(
-            context,
-            query,
-            home,
-            currentness_verifier=verifier,
-        )
+        try:
+            projection = reliability_provider.read(
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+            )
+        except Exception as exc:
+            return _error(
+                request,
+                503,
+                "RELIABILITY_UNAVAILABLE",
+                f"the authorized reliability projection is unavailable: {type(exc).__name__}",
+                retryable=True,
+            )
         if not isinstance(projection, dict):
             return _error(
                 request,

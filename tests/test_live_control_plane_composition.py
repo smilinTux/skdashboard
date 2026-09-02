@@ -26,6 +26,7 @@ from skdashboard.live_control_plane import (
     EVENTS_RESOURCE_TYPE,
     EVENTS_TARGET,
     FLEET_CHAT_TARGET,
+    RELIABILITY_TARGET,
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
@@ -132,6 +133,7 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
         composition.decision_authorizer._owner_policy._project_provider
         is composition.project_provider
     )
+    assert composition.reliability_provider.__class__.__name__ == "ReliabilityProjectionProvider"
     invocation = composition.invocation_factory(request(), CAPABILITY, TARGET)
     assert invocation.node_id == "chiap08"
     assert invocation.purpose == "project-management-reporting"
@@ -487,6 +489,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     direct_watermarks = direct_projection["items"][0]["source_watermarks"]
     for capability, target, resource_type, resource_id in (
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, RELIABILITY_TARGET, RESOURCE_TYPE, entry.resource_id),
         (CAPABILITY, FLEET_CHAT_TARGET, RESOURCE_TYPE, entry.resource_id),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ):
@@ -534,6 +537,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
         invocation_factory=composition.invocation_factory,
         project_provider=composition.project_provider,
         schedule_provider=composition.schedule_provider,
+        reliability_provider=composition.reliability_provider,
         session_adapter=session,
         session_authorizer=composition.session_authorizer,
         legacy_board_url=composition.legacy_board_url,
