@@ -332,6 +332,7 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "/api/v1/board/summary",
         "/api/v1/fleet/summary",
         "/api/v1/economy/summary",
+        "/api/v1/gateway/summary",
         "/api/v1/events",
     } <= routes
     assert observed["app"].routes

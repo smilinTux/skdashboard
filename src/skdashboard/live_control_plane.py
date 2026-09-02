@@ -49,6 +49,7 @@ CAPABILITY = "skdashboard.read"
 EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
+GATEWAY_TARGET = "/api/v1/gateway/summary"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
 FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
@@ -56,6 +57,7 @@ AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
+        (CAPABILITY, GATEWAY_TARGET),
         (CAPABILITY, BOARD_TARGET),
         (CAPABILITY, FLEET_CHAT_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
@@ -775,6 +777,7 @@ __all__ = [
     "PURPOSE",
     "RESOURCE_TYPE",
     "SCHEDULE_TARGET",
+    "GATEWAY_TARGET",
     "TARGET",
     "compose_file_backed_live_control_plane",
     "compose_live_control_plane",
