@@ -352,6 +352,7 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
 def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
     from types import SimpleNamespace
 
+    from capauth import CurrentPolicyRevisions
     from test_control_plane_decision_context import Signer
 
     from skdashboard.live_control_plane import InProcessOperatorBridge, LiveControlPlaneConfig
@@ -369,7 +370,13 @@ def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
                 tenant_id="platform",
             ),
             sessions=OperatorSessions(),
-            revisions=object(),
+            revisions=CurrentPolicyRevisions(
+                issuer="1" * 64,
+                principal="2" * 64,
+                acting_principal="3" * 64,
+                revocation="4" * 64,
+                owner="b" * 64,
+            ),
             signer=Signer(),
         )
 

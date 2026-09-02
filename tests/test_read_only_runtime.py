@@ -317,7 +317,7 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
     )
     assert observed["composition"]["capability_authorizer"] == "durable-authorizer"
     assert observed["authorizer"]["trusted_issuer_policy_file"] == trusted
-    assert observed["authorizer"]["principal"].principal_id == entry.acting_principal_id
+    assert observed["authorizer"]["principals"][0].principal_id == entry.acting_principal_id
     routes = {route.path for route in observed["app"].routes}
     assert {
         "/control-plane/now",
@@ -353,7 +353,9 @@ def test_workspace_routes_are_truthful_read_only_entrypoints(tmp_path: Path) -> 
     assert matters.headers["location"].endswith("selected_silo=legal")
     assert tasks.headers["location"] == "https://legacy.example/board"
     assert queue.headers["location"] == "https://legacy.example/board"
-    assert all(response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue))
+    assert all(
+        response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue)
+    )
 
 
 def test_queue_routes_fail_closed_without_authorized_board_source(tmp_path: Path) -> None:
@@ -651,8 +653,54 @@ def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkey
     entry = _owner_policy_entry()
     main(_live_owner_policy_args(tmp_path, (entry,)))
 
-    assert observed["authorizer"]["principal"].principal_id == CASEY_FINGERPRINT
-    assert observed["authorizer"]["principal"].subject == CASEY_FINGERPRINT
+    assert observed["authorizer"]["principals"][0].principal_id == CASEY_FINGERPRINT
+    assert observed["authorizer"]["principals"][0].subject == CASEY_FINGERPRINT
+
+
+def test_owner_policy_selection_authorizes_all_active_human_principals(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    observed = {}
+    monkeypatch.setattr(
+        "skdashboard.live_control_plane.compose_file_backed_live_control_plane",
+        lambda **values: (
+            observed.update(composition=values)
+            or SimpleNamespace(
+                decision_authorizer="typed-authorizer",
+                invocation_factory="invocation-factory",
+                project_provider="durable-provider",
+                schedule_provider="schedule-provider",
+                session_authorizer="in-process-authorizer",
+                legacy_board_url="https://legacy.example/board",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "skdashboard.session_adapter.EncryptedSessionAdapter",
+        lambda *args, **kwargs: SimpleNamespace(resolve="session-resolver", routes=lambda: []),
+    )
+    monkeypatch.setattr(
+        "skdashboard.runtime_authorizer.build",
+        lambda **values: observed.update(authorizer=values) or "durable-authorizer",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: observed.update(app=app))
+    casey = _owner_policy_entry()
+    jarvis = _owner_policy_entry(
+        subject=JARVIS_FINGERPRINT, acting_principal_id=JARVIS_FINGERPRINT
+    )
+
+    main(_live_owner_policy_args(tmp_path, (casey, jarvis)))
+
+    assert {principal.subject for principal in observed["authorizer"]["principals"]} == {
+        CASEY_FINGERPRINT,
+        JARVIS_FINGERPRINT,
+    }
+    assert observed["composition"]["owner_policy_entries"] == {
+        CASEY_FINGERPRINT: casey,
+        JARVIS_FINGERPRINT: jarvis,
+    }
 
 
 @pytest.mark.parametrize(

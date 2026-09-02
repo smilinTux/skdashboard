@@ -152,6 +152,17 @@ def test_exact_principal_backend_accepts_jarvis_fingerprint() -> None:
     assert snapshot.principal.subject == JARVIS_FINGERPRINT
 
 
+def test_exact_principal_backend_accepts_multiple_approved_operators() -> None:
+    casey = Principal(principal_id=CASEY_FINGERPRINT, subject=CASEY_FINGERPRINT, kind="human")
+    jarvis = Principal(principal_id=JARVIS_FINGERPRINT, subject=JARVIS_FINGERPRINT, kind="human")
+    backend = ExactPrincipalBackend((casey, jarvis), "c" * 64)
+
+    assert backend.snapshot(casey).principal == casey
+    assert backend.snapshot(jarvis).principal == jarvis
+    with pytest.raises(PermissionError, match="not approved"):
+        backend.snapshot(Principal(principal_id="unknown", subject="unknown", kind="human"))
+
+
 def test_exact_principal_backend_rejects_mismatched_subject() -> None:
     """Prove mismatched subject (subject != acting_principal_id) fails closed."""
     mismatched = Principal(

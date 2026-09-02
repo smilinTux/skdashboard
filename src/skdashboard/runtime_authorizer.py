@@ -234,27 +234,33 @@ class FileTrustedIssuerBackend:
 
 
 class ExactPrincipalBackend:
-    """Accept only the approved current human operator."""
+    """Accept only approved current human operators."""
 
-    __slots__ = ("_principal", "_revision")
+    __slots__ = ("_principals", "_revision")
 
-    def __init__(self, principal: Principal, revision: str) -> None:
+    def __init__(self, principals: Principal | tuple[Principal, ...], revision: str) -> None:
+        if isinstance(principals, Principal):
+            principals = (principals,)
         if (
-            principal.kind != PRINCIPAL_KIND
-            or principal.principal_id != principal.subject
+            not principals
+            or len(set(principals)) != len(principals)
+            or any(
+                principal.kind != PRINCIPAL_KIND or principal.principal_id != principal.subject
+                for principal in principals
+            )
             or len(revision) != 64
             or any(character not in "0123456789abcdef" for character in revision)
         ):
             raise ValueError("exact current human principal is required")
-        self._principal = principal
+        self._principals = frozenset(principals)
         self._revision = revision
 
     def snapshot(self, principal: Principal) -> PrincipalPolicySnapshot:
-        if principal != self._principal:
+        if principal not in self._principals:
             raise PermissionError("principal is not approved")
         return PrincipalPolicySnapshot(
             revision=self._revision,
-            principal=self._principal,
+            principal=principal,
             active=True,
         )
 
@@ -382,7 +388,7 @@ def build(
     trusted_issuer_signature_sha256: str,
     issuer_fingerprint: str,
     verifier_gnupg_home: Path,
-    principal: Principal,
+    principals: tuple[Principal, ...],
     principal_revision: str,
     state_db: Path,
     expected_uid: int,
@@ -409,7 +415,7 @@ def build(
     trusted.snapshot()
     return CapabilityAuthorizer(
         trusted_issuers=trusted,
-        principals=ExactPrincipalBackend(principal, principal_revision),
+        principals=ExactPrincipalBackend(principals, principal_revision),
         revocations=state,
         replay=state,
         audit=state,
