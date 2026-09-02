@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Expose authenticated read-only SKGateway request, token, throughput,
+  latency, cache, model, lane, and error aggregates without payload content.
 - Keep the DCE38 dashboard service signer fixed while authorizing each active
   browser principal with its own current owner-policy revision, without restart.
 - Bind Fleet Chat to the same in-process `skdashboard.read` session capability
