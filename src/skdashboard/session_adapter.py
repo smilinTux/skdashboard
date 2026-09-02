@@ -123,11 +123,15 @@ def _safe_return_to(value: str | None) -> str:
         ):
             return "/"
         parsed = urlsplit(value)
-        query = parse_qsl(
-            parsed.query,
-            keep_blank_values=True,
-            strict_parsing=True,
-            max_num_fields=len(RETURN_TO_QUERY_KEYS),
+        query = (
+            parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=len(RETURN_TO_QUERY_KEYS),
+            )
+            if parsed.query
+            else []
         )
     except (UnicodeError, ValueError):
         return "/"
