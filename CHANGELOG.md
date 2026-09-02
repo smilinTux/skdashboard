@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bind Fleet Chat to the same in-process `skdashboard.read` session capability
   used by the protected control-plane views instead of failing with HTTP 503.
-- Show one app-wide CapAuth status control with the authenticated identity and
-  one-click login or logout, including return to Fleet Chat after login.
+- Show one compact app-wide CapAuth account control with the authenticated
+  identity and one-click login or logout, including return to Fleet Chat after login.
 - Add an authenticated, read-only Fleet Chat view over bounded SKMail records,
   including canonical timestamps, explicit freshness, recipient validation,
   and secret-shaped redaction.

@@ -122,6 +122,18 @@ def test_app_pages_show_shared_capauth_status_and_identity(tmp_path):
     assert current.json()["expires_at"] == 29_800
 
 
+def test_auth_status_uses_compact_native_account_disclosure(tmp_path):
+    session = adapter(tmp_path)
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
+
+    asset = client.get("/static/js/auth_status.js")
+    assert asset.status_code == 200
+    assert '<details id="sk-auth-menu">' in asset.text
+    assert "Login with CapAuth" in asset.text
+    assert "Logout" in asset.text
+    assert "menu.open = false" in asset.text
+
+
 def test_login_returns_once_to_original_portfolio_query(tmp_path):
     target = (
         "/control-plane/portfolio?role=project-manager&scope=estate&window=latest"
