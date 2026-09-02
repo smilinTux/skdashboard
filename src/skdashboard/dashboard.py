@@ -776,6 +776,7 @@ def create_app(
     control_plane_reliability_provider=None,
     control_plane_architecture_provider=None,
     control_plane_governance_provider=None,
+    control_plane_economy_provider=None,
     control_plane_report_provider=None,
 ):
     """Build the Starlette ASGI app for the dashboard.
@@ -827,6 +828,13 @@ def create_app(
         from .dashboard_architecture import ArchitectureProjectionProvider
 
         control_plane_architecture_provider = ArchitectureProjectionProvider()
+    if (
+        control_plane_economy_provider is None
+        and control_plane_decision_authorizer is not None
+    ):
+        from .dashboard_economy_provider import EconomyProjectionProvider
+
+        control_plane_economy_provider = EconomyProjectionProvider()
     if (
         control_plane_governance_provider is None
         and control_plane_decision_authorizer is not None
@@ -1991,6 +1999,7 @@ def create_app(
             schedule_forecast_provider=control_plane_schedule_forecast_provider,
             reliability_provider=control_plane_reliability_provider,
             architecture_provider=control_plane_architecture_provider,
+            economy_provider=control_plane_economy_provider,
             governance_provider=control_plane_governance_provider,
             report_provider=control_plane_report_provider,
         )

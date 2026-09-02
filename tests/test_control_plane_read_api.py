@@ -117,10 +117,12 @@ def test_v1_economy_keeps_unavailable_cost_distinct_from_zero(tmp_path: Path) ->
     }
     with patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=usage):
         response = TestClient(_app(tmp_path)).get("/api/v1/economy/summary", headers=READ_HEADERS)
-    item = response.json()["items"][0]
-    assert item["tokens"]["total"] == 5
-    assert item["cost_usd"] is None
-    assert item["cost_state"] == "unavailable"
+    body = response.json()
+    # No provider and no typed decision context: the route fails closed as
+    # "unavailable" (ECONOMY_UNAVAILABLE), keeping missing cost distinct
+    # from zero rather than rendering a healthy aggregate.
+    assert body["freshness"]["truth_state"] == "unavailable"
+    assert body["errors"][0]["code"] == "ECONOMY_UNAVAILABLE"
 
 
 def test_v1_fleet_disables_alert_side_effects(tmp_path: Path) -> None:
