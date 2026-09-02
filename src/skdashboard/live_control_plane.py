@@ -40,6 +40,7 @@ from skcoord.authorized_card_policy import (
 )
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
+from .dashboard_itil import ReliabilityProjectionProvider
 from .dashboard_schedule import DATE_FIELDS, ScheduleProjectionProvider, ScheduleSourceRequest
 
 NODE_ID = "chiap08"
@@ -49,6 +50,7 @@ CAPABILITY = "skdashboard.read"
 EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
+RELIABILITY_TARGET = "/api/v1/reliability/projection"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
 FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
@@ -56,6 +58,7 @@ AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
+        (CAPABILITY, RELIABILITY_TARGET),
         (CAPABILITY, BOARD_TARGET),
         (CAPABILITY, FLEET_CHAT_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
@@ -127,6 +130,7 @@ class LiveControlPlaneComposition:
     invocation_factory: object
     project_provider: AuthorizedCardPolicyProvider
     schedule_provider: ScheduleProjectionProvider
+    reliability_provider: ReliabilityProjectionProvider
     session_authorizer: object | None
     legacy_board_url: str
 
@@ -753,6 +757,7 @@ def compose_live_control_plane(
         invocation_factory=invocation_factory,
         project_provider=provider,
         schedule_provider=schedule_provider,
+        reliability_provider=ReliabilityProjectionProvider(),
         session_authorizer=session_authorizer,
         legacy_board_url=config.legacy_board_url,
     )
@@ -774,6 +779,7 @@ __all__ = [
     "NODE_ID",
     "PURPOSE",
     "RESOURCE_TYPE",
+    "RELIABILITY_TARGET",
     "SCHEDULE_TARGET",
     "TARGET",
     "compose_file_backed_live_control_plane",

@@ -652,6 +652,7 @@ def main(argv: list[str] | None = None) -> None:
             invocation_factory=composition.invocation_factory,
             project_provider=composition.project_provider,
             schedule_provider=composition.schedule_provider,
+            reliability_provider=composition.reliability_provider,
             session_authorizer=composition.session_authorizer,
             legacy_board_url=composition.legacy_board_url,
             schedule_forecast_provider=None,
