@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SKDashboard — Assistant</title>
+  <title>SKDashboard | Assistant</title>
   <link rel="stylesheet" href="/static/css/board.css">
   <link rel="stylesheet" href="/static/css/assistant.css">
 </head>
@@ -40,7 +40,7 @@
     <div class="chat" id="chat">
       <div class="msg assistant">
         <div class="bubble">
-          Ask me about the board and ITIL, or tell me to act on a ticket. For example:
+          Ask me about bounded board and ITIL aggregates. This assistant is read only and cannot act on a ticket. For example:
           <div class="examples">
             <button class="ex">top 5 incidents by severity</button>
             <button class="ex">top 2 most-involved tasks</button>
@@ -52,7 +52,7 @@
     </div>
 
     <form class="composer-bar" id="ask-form">
-      <input type="text" id="ask" placeholder="Ask a report, or 'add a note to inc-… and queue lumina to draft the fix'…" autocomplete="off">
+      <input type="text" id="ask" maxlength="4000" placeholder="Ask about the current aggregate board and ITIL observations" autocomplete="off">
       <button class="btn primary" id="ask-send" type="submit">Ask</button>
     </form>
   </div>
