@@ -40,6 +40,7 @@ RETURN_TO_PATHS = frozenset(
         "/control-plane/reliability",
         "/control-plane/reports",
         "/control-plane/schedule",
+        "/fleet-chat",
     }
 )
 RETURN_TO_QUERY_KEYS = frozenset(
@@ -122,11 +123,15 @@ def _safe_return_to(value: str | None) -> str:
         ):
             return "/"
         parsed = urlsplit(value)
-        query = parse_qsl(
-            parsed.query,
-            keep_blank_values=True,
-            strict_parsing=True,
-            max_num_fields=len(RETURN_TO_QUERY_KEYS),
+        query = (
+            parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=len(RETURN_TO_QUERY_KEYS),
+            )
+            if parsed.query
+            else []
         )
     except (UnicodeError, ValueError):
         return "/"
@@ -621,7 +626,13 @@ class EncryptedSessionAdapter:
                 headers={"Cache-Control": "no-store"},
             )
         return JSONResponse(
-            {"authenticated": True, "csrf_token": loaded[1]["csrf"]},
+            {
+                "authenticated": True,
+                "authenticator": "CapAuth",
+                "subject": loaded[1].get("subject"),
+                "expires_at": loaded[1]["expires_at"],
+                "csrf_token": loaded[1]["csrf"],
+            },
             headers={"Cache-Control": "no-store"},
         )
 

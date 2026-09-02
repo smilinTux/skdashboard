@@ -46,6 +46,7 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "css/schedule.css",
         "js/ai.js",
         "js/architecture.js",
+        "js/auth_status.js",
         "js/control_plane_scope.js",
         "js/governance.js",
         "js/fleet_chat.js",
@@ -274,6 +275,10 @@ def create_read_only_app(
             html = (static_dir / name).read_text(encoding="utf-8")
             for path, url in legacy_runtime_urls.items():
                 html = html.replace(f'href="{path}"', f'href="{url}"')
+            if session_adapter is not None:
+                html = html.replace(
+                    "</body>", '<script src="/static/js/auth_status.js"></script>\n</body>'
+                )
             return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
         return serve
