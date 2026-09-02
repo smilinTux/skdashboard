@@ -32,7 +32,9 @@ function coverage(source) {
 }
 
 function observed(source) {
-  return source.observed_at || "Not observed";
+  if (!source.observed_at) return "Not observed | exact age unavailable";
+  const age = Number.isInteger(source.age_seconds) ? `${source.age_seconds}s old` : "exact age unavailable";
+  return `${source.observed_at} | ${age}`;
 }
 
 function value(source, key, unit) {

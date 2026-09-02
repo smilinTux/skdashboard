@@ -76,7 +76,7 @@ def test_ai_workspace_keeps_units_lanes_unknowns_and_provenance_distinct() -> No
     assert "const current = epoch" in js
     assert "lastTrigger.focus()" in js
     assert 'aria-label="Open ${esc(dimension)} drilldown"' in js
-    assert "/api/v1/ai" not in js
+    assert "getJSON(apiUrl(context))" in js
     assert "fetch(" not in js
     assert "localStorage" not in js
     assert "sessionStorage" not in js
@@ -86,6 +86,11 @@ def test_ai_workspace_keeps_units_lanes_unknowns_and_provenance_distinct() -> No
     assert "session_id" not in js
     assert "cost_usd" in js
     assert "total_supply" in js
+    assert "source.observed_at" in js
+    assert "source.age_seconds" in js
+    assert "source.watermark" in js
+    assert "prompt" not in js.lower()
+    assert "credential" not in js.lower()
     assert "pricing revision" not in js.lower() or "Not projected" in js
     assert "@media(max-width:560px)" in css
     assert "@media(prefers-reduced-motion:reduce)" in css

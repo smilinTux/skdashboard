@@ -1713,10 +1713,14 @@ def create_app(
             body = {}
         prompt = (body.get("prompt") or "").strip()
         actor = request.headers.get("x-sk-actor") or "operator"
-        cap_ok, _ = _ai_capability_ok(request)
+        decision = _capability_gate(
+            request, resource="assistant", capability="skdashboard.read", actor=actor
+        )
+        if not decision["ok"]:
+            return _gate_deny(decision["reason"])
         if not prompt:
             return _json({"error": "prompt required"})
-        gen = da.stream_answer(home, prompt, actor=actor, capability_ok=cap_ok)
+        gen = da.stream_answer(home, prompt, actor=actor)
         return StreamingResponse(
             gen,
             media_type="text/event-stream",

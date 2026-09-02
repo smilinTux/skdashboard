@@ -1,6 +1,6 @@
-// Assistant console: POST a prompt, stream the answer over SSE (read from the
-// fetch body), render tokens live, and show any gated action result.
-import { esc, toast, authHeaders } from "./api.js";
+// Read-only assistant console: send one bounded question and render the
+// SKGateway-mediated SSE answer. No capability or action protocol is used.
+import { esc, toast } from "./api.js";
 
 const chat = document.getElementById("chat");
 const form = document.getElementById("ask-form");
@@ -30,7 +30,7 @@ async function ask(prompt) {
   try {
     const resp = await fetch("/api/assistant", {
       method: "POST",
-      headers: await authHeaders({ "Content-Type": "application/json" }),
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
       body: JSON.stringify({ prompt }),
     });
     if (!resp.ok || !resp.body) throw new Error("assistant unavailable");
@@ -50,9 +50,7 @@ async function ask(prompt) {
     if (!text) bubble.textContent = "Sorry, I could not reach the model.";
   } finally {
     bubble.classList.remove("cursor-blink");
-    if (!text.trim() && !bubble.querySelector(".action-result")) {
-      bubble.textContent = bubble.textContent || "(no response)";
-    }
+    if (!text.trim()) bubble.textContent = bubble.textContent || "(no response)";
     busy = false;
     input.focus();
   }
@@ -69,21 +67,10 @@ function handleFrame(frame, bubble, onText) {
   try { obj = JSON.parse(data); } catch (_) { return; }
   if (ev === "token") {
     if (bubble.querySelector(".thinking")) bubble.innerHTML = "";
-    // strip a trailing ACTION line from the visible text
     bubble._raw = (bubble._raw || "") + obj.text;
-    const visible = bubble._raw.replace(/ACTION\s*\{[\s\S]*$/, "").trim();
-    bubble.innerHTML = esc(visible);
+    bubble.innerHTML = esc(bubble._raw.trim());
     onText(obj.text);
     window.scrollTo(0, document.body.scrollHeight);
-  } else if (ev === "action") {
-    const ok = obj.ok;
-    const msg = ok
-      ? `${esc(obj.tool)} on ${esc(obj.card_id)}${obj.run_id ? " · " + esc(obj.run_id) : ""}`
-      : esc(obj.error || "action failed");
-    const el = document.createElement("div");
-    el.className = `action-result ${ok ? "ok" : "err"}`;
-    el.innerHTML = `<span class="ic">${ok ? "✅" : "⚠️"}</span><span>${ok ? "Did: " : ""}${msg}</span>`;
-    bubble.appendChild(el);
   }
 }
 
