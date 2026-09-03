@@ -81,5 +81,25 @@ def test_real_chrome_exposes_one_main_per_qualified_page(tmp_path: Path) -> None
     )
     evidence = json.loads((tmp_path / "accessibility-landmark-matrix.json").read_text())
     assert evidence["result"] == "PASS"
-    assert len(evidence["matrix"]) == 7
+    assert len(evidence["matrix"]) == 35
+    assert {row["layout"] for row in evidence["matrix"]} == {
+        "mobile",
+        "tablet",
+        "desktop",
+        "zoom-200",
+        "reduced-motion",
+    }
     assert all(row["mainLandmarks"] == row["axMain"] == 1 for row in evidence["matrix"])
+    assert all(row["navigationLandmarks"] >= row["axNavigation"] == 1 for row in evidence["matrix"])
+    assert all(row["focusVisible"] and not row["unnamed"] for row in evidence["matrix"])
+    assert all(not row["horizontalPageOverflow"] for row in evidence["matrix"])
+    assert all(
+        not row["reducedMotionAnimations"]
+        for row in evidence["matrix"]
+        if row["layout"] == "reduced-motion"
+    )
+    assert evidence["tasks"][0]["interactions"] <= 2
+    assert evidence["tasks"][1]["interactions"] == 1
+    manifest = json.loads((tmp_path / "screenshot-manifest.json").read_text())
+    assert len(manifest) == 35
+    assert all(len(item["sha256"]) == 64 for item in manifest)
