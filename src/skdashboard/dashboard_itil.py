@@ -125,9 +125,14 @@ class ReliabilityProjectionProvider:
     def read(self, context, query, home, *, currentness_verifier):
         if currentness_verifier.check_before_owner_read(context).value != "allow":
             raise PermissionError("control-plane decision is not current")
-        projection = get_reliability_projection(home, query)
+        try:
+            projection = get_reliability_projection(home, query)
+        except Exception as exc:
+            raise PermissionError("governed reliability source evidence is unavailable") from exc
         if currentness_verifier.check_after_owner_read(context).value != "allow":
             raise PermissionError("control-plane decision expired during owner read")
+        if projection.get("truth_state") != "current":
+            raise PermissionError("governed reliability source evidence is unavailable")
         return projection
 
 

@@ -186,6 +186,7 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
                 invocation_factory="invocation-factory",
                 project_provider="durable-provider",
                 schedule_provider="schedule-provider",
+                reliability_provider="reliability-provider",
                 session_authorizer="in-process-authorizer",
                 legacy_board_url="https://legacy.example/board",
             )
@@ -332,6 +333,7 @@ def test_launcher_composes_authenticated_file_backed_runtime(tmp_path: Path, mon
         "/api/v1/board/summary",
         "/api/v1/fleet/summary",
         "/api/v1/economy/summary",
+        "/api/v1/gateway/summary",
         "/api/v1/events",
     } <= routes
     assert observed["app"].routes
@@ -635,6 +637,7 @@ def test_owner_policy_selection_accepts_casey_fingerprint(tmp_path: Path, monkey
                 invocation_factory="invocation-factory",
                 project_provider="durable-provider",
                 schedule_provider="schedule-provider",
+                reliability_provider="reliability-provider",
                 session_authorizer="in-process-authorizer",
                 legacy_board_url="https://legacy.example/board",
             )
@@ -672,6 +675,7 @@ def test_owner_policy_selection_authorizes_all_active_human_principals(
                 invocation_factory="invocation-factory",
                 project_provider="durable-provider",
                 schedule_provider="schedule-provider",
+                reliability_provider="reliability-provider",
                 session_authorizer="in-process-authorizer",
                 legacy_board_url="https://legacy.example/board",
             )

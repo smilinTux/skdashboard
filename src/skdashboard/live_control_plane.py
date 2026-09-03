@@ -40,6 +40,7 @@ from skcoord.authorized_card_policy import (
 )
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
+from .dashboard_itil import ReliabilityProjectionProvider
 from .dashboard_schedule import DATE_FIELDS, ScheduleProjectionProvider, ScheduleSourceRequest
 
 NODE_ID = "chiap08"
@@ -49,13 +50,18 @@ CAPABILITY = "skdashboard.read"
 EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
+GATEWAY_TARGET = "/api/v1/gateway/summary"
+RELIABILITY_TARGET = "/api/v1/reliability/projection"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
 FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
+SESSION_STATUS_TARGET = "/auth/session"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
+        (CAPABILITY, GATEWAY_TARGET),
+        (CAPABILITY, RELIABILITY_TARGET),
         (CAPABILITY, BOARD_TARGET),
         (CAPABILITY, FLEET_CHAT_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
@@ -127,6 +133,7 @@ class LiveControlPlaneComposition:
     invocation_factory: object
     project_provider: AuthorizedCardPolicyProvider
     schedule_provider: ScheduleProjectionProvider
+    reliability_provider: ReliabilityProjectionProvider
     session_authorizer: object | None
     legacy_board_url: str
 
@@ -274,7 +281,7 @@ class InProcessOperatorBridge:
         self._proofs[handle] = proofs
         return handle
 
-    def request(self, handle: str, request) -> InProcessIssuerRequest:
+    def request(self, handle: str, request) -> InProcessIssuerRequest | None:
         from .session_adapter import SessionReauthenticationRequired
 
         if not isinstance(handle, str) or not handle.isascii():
@@ -292,6 +299,8 @@ class InProcessOperatorBridge:
             raise SessionReauthenticationRequired(
                 "process-local operator proof is no longer available"
             )
+        if request.url.path == SESSION_STATUS_TARGET:
+            return None
         if capability is None or capability not in proofs:
             raise PermissionError("operator session material is unavailable")
         cookie, csrf, device, owner_revision = proofs[capability]
@@ -753,6 +762,7 @@ def compose_live_control_plane(
         invocation_factory=invocation_factory,
         project_provider=provider,
         schedule_provider=schedule_provider,
+        reliability_provider=ReliabilityProjectionProvider(),
         session_authorizer=session_authorizer,
         legacy_board_url=config.legacy_board_url,
     )
@@ -774,7 +784,9 @@ __all__ = [
     "NODE_ID",
     "PURPOSE",
     "RESOURCE_TYPE",
+    "RELIABILITY_TARGET",
     "SCHEDULE_TARGET",
+    "GATEWAY_TARGET",
     "TARGET",
     "compose_file_backed_live_control_plane",
     "compose_live_control_plane",

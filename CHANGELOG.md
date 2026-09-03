@@ -19,8 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+\n- Compose the governed Economy provider into the authenticated read-only runtime.
 
 - Compose governed aggregate AI outcomes with exact source freshness and a strictly read-only, provider-neutral assistant path through SKGateway.
+- Validate the live authorization proof before reporting an encrypted browser
+  session as authenticated, and clear stale post-restart sessions for one clean sign-in.
+- Expose authenticated read-only SKGateway request, token, throughput,
+  latency, cache, model, lane, and error aggregates without payload content.
+- Compose the existing governed Reliability provider into the authenticated
+  read-only runtime and fail closed when source evidence is unavailable.
 - Keep the DCE38 dashboard service signer fixed while authorizing each active
   browser principal with its own current owner-policy revision, without restart.
 - Bind Fleet Chat to the same in-process `skdashboard.read` session capability

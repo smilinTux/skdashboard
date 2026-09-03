@@ -6,6 +6,7 @@ from starlette.testclient import TestClient
 from test_control_plane_decision_context import ORIGIN, Rig
 
 from skdashboard.dashboard import create_app
+from skdashboard.dashboard_itil import ReliabilityProjectionProvider
 
 PATH = "/api/v1/reliability/projection?role=operator&scope=estate&window=latest&baseline=none&service=all"
 
@@ -58,6 +59,62 @@ def test_reliability_provider_receives_exact_context_scope_and_verifier(tmp_path
         }
     ]
     assert response.headers["etag"]
+
+
+def test_reliability_provider_fails_closed_when_governed_source_is_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rig = Rig(target="/api/v1/reliability/projection")
+    monkeypatch.setattr(
+        "skdashboard.dashboard_itil.get_reliability_projection",
+        lambda _home, query: {**projection(query), "truth_state": "unknown"},
+    )
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=rig.factory,
+        control_plane_reliability_provider=ReliabilityProjectionProvider(),
+    )
+
+    response = TestClient(app).get(
+        PATH,
+        headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "code": "RELIABILITY_UNAVAILABLE",
+        "message": "the authorized reliability projection is unavailable: PermissionError",
+        "request_id": response.json()["request_id"],
+        "retryable": True,
+    }
+
+
+def test_reliability_provider_fails_closed_when_source_read_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rig = Rig(target="/api/v1/reliability/projection")
+
+    def unavailable(_home, _query):
+        raise OSError("protected source details")
+
+    monkeypatch.setattr("skdashboard.dashboard_itil.get_reliability_projection", unavailable)
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=rig.factory,
+        control_plane_reliability_provider=ReliabilityProjectionProvider(),
+    )
+
+    response = TestClient(app).get(
+        PATH,
+        headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "RELIABILITY_UNAVAILABLE"
+    assert response.json()["message"].endswith(": PermissionError")
+    assert "protected source details" not in response.text
 
 
 def test_reliability_scope_rejects_unknown_duplicate_and_protected_values(tmp_path: Path) -> None:
