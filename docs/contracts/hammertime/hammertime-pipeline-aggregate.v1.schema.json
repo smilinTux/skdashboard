@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skdashboard.local/contracts/hammertime-pipeline-aggregate.v1.schema.json",
+  "title": "HammerTime metadata-only pipeline aggregate source contract",
+  "description": "Pinned public-synthetic development contract. This contract permits one metadata-only aggregate row and does not authorize corpus or artifact access.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy",
+    "source_revision",
+    "observed_at",
+    "source_truth_state",
+    "aggregate",
+    "evidence_target"
+  ],
+  "properties": {
+    "schema_version": {"const": "hammertime.pipeline.aggregate.v1"},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "policy_ref", "target", "audience", "purpose"],
+      "properties": {
+        "decision": {"const": "allow"},
+        "policy_ref": {"const": "policy:hammertime-approved-aggregate-v1"},
+        "target": {"const": "skdashboard.now.hammertime.pipeline.aggregate"},
+        "audience": {"const": "skdashboard.now"},
+        "purpose": {"const": "pipeline_health_reporting"}
+      }
+    },
+    "source_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_truth_state": {"const": "current"},
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved_releases", "pipeline_failures"],
+      "properties": {
+        "approved_releases": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "pipeline_failures": {"type": "integer", "minimum": 0, "maximum": 1000000000}
+      }
+    },
+    "evidence_target": {"const": "urn:skdashboard:evidence:hammertime-pipeline-aggregate-v1"}
+  },
+  "x-policy-target": "skdashboard.now.hammertime.pipeline.aggregate",
+  "x-audience": "skdashboard.now",
+  "x-purpose": "pipeline_health_reporting",
+  "x-freshness-seconds": 60,
+  "x-max-rows": 1,
+  "x-max-source-bytes": 2048,
+  "x-timeout-ms": 250,
+  "x-evidence-target": "urn:skdashboard:evidence:hammertime-pipeline-aggregate-v1"
+}
