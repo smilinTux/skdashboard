@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
+import threading
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +26,28 @@ AUTHORIZATION_CAPABILITY = "skdashboard.read"
 MAX_ITEMS = 10_000
 MAX_DEPENDENCIES = 20_000
 MAX_OVERLAYS = 5_000
+MIN_TIMEOUT_SECONDS = 0.01
+MAX_TIMEOUT_SECONDS = 30.0
+
+
+def _bounded_call(call, timeout_seconds: float):
+    result = queue.Queue(maxsize=1)
+
+    def run() -> None:
+        try:
+            result.put((True, call()))
+        except BaseException as exc:
+            result.put((False, exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    try:
+        ok, value = result.get(timeout=timeout_seconds)
+    except queue.Empty as exc:
+        raise TimeoutError from exc
+    if not ok:
+        raise value
+    return value
+
 
 DATE_FIELDS = (
     "baseline_start",
@@ -36,10 +60,26 @@ DATE_FIELDS = (
     "forecast_target",
 )
 DATE_STATES = frozenset(
-    {"known", "unknown", "stale", "partial", "unavailable", "policy_filtered", "not_applicable"}
+    {
+        "known",
+        "unknown",
+        "stale",
+        "partial",
+        "unavailable",
+        "policy_filtered",
+        "not_applicable",
+    }
 )
 TRUTH_STATES = frozenset(
-    {"current", "stale", "partial", "unavailable", "unreachable", "unknown", "not_applicable"}
+    {
+        "current",
+        "stale",
+        "partial",
+        "unavailable",
+        "unreachable",
+        "unknown",
+        "not_applicable",
+    }
 )
 ITEM_TYPES = frozenset(
     {
@@ -109,7 +149,9 @@ class CanonicalScheduleSource(Protocol):
     ``None`` means unavailable. It must not return records from another tenant.
     """
 
-    def read(self, context, request: "ScheduleSourceRequest", home: Path) -> Mapping | None: ...
+    def read(
+        self, context, request: "ScheduleSourceRequest", home: Path
+    ) -> Mapping | None: ...
 
 
 @dataclass(frozen=True)
@@ -140,20 +182,45 @@ class ScheduleProjectionProvider:
         tenant_id: str,
         clock=lambda: datetime.now(timezone.utc),
         max_source_age_seconds: int = 300,
+        owner_read_timeout_seconds: float = 2.0,
+        request_timeout_seconds: float = 5.0,
     ) -> None:
-        if not _identifier(tenant_id) or not 1 <= max_source_age_seconds <= 86_400:
+        if (
+            not _identifier(tenant_id)
+            or not 1 <= max_source_age_seconds <= 86_400
+            or not MIN_TIMEOUT_SECONDS
+            <= owner_read_timeout_seconds
+            <= MAX_TIMEOUT_SECONDS
+            or not owner_read_timeout_seconds
+            <= request_timeout_seconds
+            <= MAX_TIMEOUT_SECONDS
+        ):
             raise ValueError("invalid Schedule provider configuration")
         self._source = source
         self._tenant_id = tenant_id
         self._clock = clock
         self._max_source_age_seconds = max_source_age_seconds
+        self._owner_read_timeout_seconds = owner_read_timeout_seconds
+        self._request_timeout_seconds = request_timeout_seconds
 
     def read(self, context, query, home, *, currentness_verifier):
+        try:
+            return _bounded_call(
+                lambda: self._read(context, query, home, currentness_verifier),
+                self._request_timeout_seconds,
+            )
+        except Exception as exc:
+            raise PermissionError("authorized schedule projection unavailable") from exc
+
+    def _read(self, context, query, home, currentness_verifier):
         try:
             request = self._request(context, query)
             if currentness_verifier.check_before_owner_read(context).value != "allow":
                 raise PermissionError
-            snapshot = self._source.read(context, request, Path(home))
+            snapshot = _bounded_call(
+                lambda: self._source.read(context, request, Path(home)),
+                self._owner_read_timeout_seconds,
+            )
             projection = self._project(snapshot, request, query)
             # The verifier is single use: one check before the owner read and
             # one check after projection, immediately before release.
@@ -172,7 +239,11 @@ class ScheduleProjectionProvider:
         ):
             raise PermissionError
         role = ROLE_MAP.get(query.get("role"))
-        if role is None or query.get("scope") != "estate" or query.get("service") != "all":
+        if (
+            role is None
+            or query.get("scope") != "estate"
+            or query.get("service") != "all"
+        ):
             raise PermissionError
         return ScheduleSourceRequest(
             tenant_id=self._tenant_id,
@@ -216,7 +287,12 @@ class ScheduleProjectionProvider:
         projected = _instant(snapshot["projected_at"])
         revision = _bounded(snapshot["snapshot_revision"], 128)
         now = self._now()
-        if observed is None or projected is None or revision is None or projected < observed:
+        if (
+            observed is None
+            or projected is None
+            or revision is None
+            or projected < observed
+        ):
             raise ValueError
         age = (now - observed).total_seconds()
         if (
@@ -277,7 +353,8 @@ class ScheduleProjectionProvider:
                 "state": "cycles_detected" if cycles else "acyclic",
                 "cycle_item_ids": sorted(cycles),
                 "evidence_refs": [
-                    f"schedule://dependency-cycle/{item_id}" for item_id in sorted(cycles)
+                    f"schedule://dependency-cycle/{item_id}"
+                    for item_id in sorted(cycles)
                 ],
             },
             "critical_path": {
@@ -292,7 +369,10 @@ class ScheduleProjectionProvider:
         return projection
 
     def _item(self, value, request: ScheduleSourceRequest) -> dict:
-        if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
+        if (
+            not isinstance(value, Mapping)
+            or value.get("tenant_id") != request.tenant_id
+        ):
             raise PermissionError
         required = {
             "tenant_id",
@@ -325,7 +405,9 @@ class ScheduleProjectionProvider:
             or not 0 <= progress <= 1
         ):
             raise ValueError
-        variance = _variance(projected_dates["baseline_target"], projected_dates["planned_target"])
+        variance = _variance(
+            projected_dates["baseline_target"], projected_dates["planned_target"]
+        )
         item_id = _bounded(value["record_id"], 128)
         title = _bounded(value["display_title"], 500)
         owner = _bounded(value["owner_service_id"], 128)
@@ -345,9 +427,11 @@ class ScheduleProjectionProvider:
             "dates": projected_dates,
             "baseline_variance": variance,
             "progress": progress,
-            "progress_basis": "canonical explicit_progress; no value inferred"
-            if progress is None
-            else "canonical explicit_progress",
+            "progress_basis": (
+                "canonical explicit_progress; no value inferred"
+                if progress is None
+                else "canonical explicit_progress"
+            ),
             "rollup": {
                 "state": "not_applicable",
                 "eligible_children": 0,
@@ -375,7 +459,10 @@ class ScheduleProjectionProvider:
         }
 
     def _dependency(self, value, request: ScheduleSourceRequest, ids: set[str]) -> dict:
-        if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
+        if (
+            not isinstance(value, Mapping)
+            or value.get("tenant_id") != request.tenant_id
+        ):
             raise PermissionError
         required = {
             "tenant_id",
@@ -399,7 +486,9 @@ class ScheduleProjectionProvider:
         if source not in ids or (target is not None and target not in ids):
             # A hidden required node must be represented as target=None, never by ID.
             raise PermissionError
-        if direction not in {"known", "unknown"} or (direction == "known" and target is None):
+        if direction not in {"known", "unknown"} or (
+            direction == "known" and target is None
+        ):
             raise ValueError
         edge = {
             "dependency_id": _bounded(value["dependency_id"], 128),
@@ -435,10 +524,15 @@ class ScheduleProjectionProvider:
             )
         ):
             raise ValueError
+        if edge["source_item_id"] == edge["target_item_id"]:
+            raise ValueError
         return edge
 
     def _overlay(self, value, request: ScheduleSourceRequest) -> dict:
-        if not isinstance(value, Mapping) or value.get("tenant_id") != request.tenant_id:
+        if (
+            not isinstance(value, Mapping)
+            or value.get("tenant_id") != request.tenant_id
+        ):
             raise PermissionError
         required = {
             "tenant_id",
@@ -465,7 +559,9 @@ class ScheduleProjectionProvider:
             )
         }
         if (
-            not all(_bounded(result[key], 128) for key in ("overlay_id", "owner_service_id"))
+            not all(
+                _bounded(result[key], 128) for key in ("overlay_id", "owner_service_id")
+            )
             or result["overlay_type"]
             not in {
                 "itil_change_window",
@@ -519,7 +615,9 @@ def _date(value) -> dict:
 def _variance(baseline: dict, planned: dict) -> dict:
     if baseline["state"] == planned["state"] == "known":
         seconds = int(
-            (_instant(planned["instant"]) - _instant(baseline["instant"])).total_seconds()
+            (
+                _instant(planned["instant"]) - _instant(baseline["instant"])
+            ).total_seconds()
         )
         return {"state": "known", "seconds": seconds}
     states = {baseline["state"], planned["state"]}
@@ -633,7 +731,8 @@ def _critical_path_reasons(items, edges, overlays, cycles) -> list[str]:
     ):
         reasons.append("missing_required_dates")
     if any(
-        overlay["overlay_type"] == "blackout" and overlay["conflict_state"] == "conflict"
+        overlay["overlay_type"] == "blackout"
+        and overlay["conflict_state"] == "conflict"
         for overlay in overlays
     ):
         reasons.append("conflicting_blackout")
@@ -678,7 +777,9 @@ def _bounded(value, maximum: int) -> str | None:
 
 
 def _identifier(value) -> bool:
-    return bool(_bounded(value, 256)) and all(char.isalnum() or char in "._:@/-" for char in value)
+    return bool(_bounded(value, 256)) and all(
+        char.isalnum() or char in "._:@/-" for char in value
+    )
 
 
 def _hash(value) -> str:

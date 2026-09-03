@@ -41,7 +41,11 @@ from skcoord.authorized_card_policy import (
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .dashboard_itil import ReliabilityProjectionProvider
-from .dashboard_schedule import DATE_FIELDS, ScheduleProjectionProvider, ScheduleSourceRequest
+from .dashboard_schedule import (
+    DATE_FIELDS,
+    ScheduleProjectionProvider,
+    ScheduleSourceRequest,
+)
 
 NODE_ID = "chiap08"
 PURPOSE = "project-management-reporting"
@@ -67,7 +71,9 @@ AUTHENTICATED_BINDINGS = frozenset(
         (EVENTS_CAPABILITY, EVENTS_TARGET),
     }
 )
-AUTHENTICATED_TARGETS = frozenset(target for _capability, target in AUTHENTICATED_BINDINGS)
+AUTHENTICATED_TARGETS = frozenset(
+    target for _capability, target in AUTHENTICATED_BINDINGS
+)
 RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
 EVENTS_RESOURCE_TYPE = "tenant"
 MAX_OPERATOR_PROOFS = 1024
@@ -93,6 +99,8 @@ class LiveControlPlaneConfig:
     owner_policy_revision: str
     tenant_id: str
     capability_ttl_seconds: int = 300
+    schedule_owner_read_timeout_seconds: float = 2.0
+    schedule_request_timeout_seconds: float = 5.0
     node_id: str = NODE_ID
 
     def __post_init__(self) -> None:
@@ -105,24 +113,39 @@ class LiveControlPlaneConfig:
             or board.query
             or board.fragment
         ):
-            raise ValueError("legacy board URL must be a credential-free exact HTTPS URL")
+            raise ValueError(
+                "legacy board URL must be a credential-free exact HTTPS URL"
+            )
         if not self.resource_id.startswith("authorized-card-set:sha256:"):
             raise ValueError("an exact authorized-card resource binding is required")
         if len(self.owner_policy_revision) != 64 or any(
-            character not in "0123456789abcdef" for character in self.owner_policy_revision
+            character not in "0123456789abcdef"
+            for character in self.owner_policy_revision
         ):
             raise ValueError("an exact owner policy revision is required")
         if (
             not isinstance(self.tenant_id, str)
             or not 1 <= len(self.tenant_id) <= 128
             or not self.tenant_id.isascii()
-            or any(not (character.isalnum() or character in "._-") for character in self.tenant_id)
+            or any(
+                not (character.isalnum() or character in "._-")
+                for character in self.tenant_id
+            )
         ):
             raise ValueError("an exact tenant identifier is required")
         if self.node_id not in {"chiap04", "chiap08"}:
             raise ValueError("an exact approved node identifier is required")
         if not 1 <= self.capability_ttl_seconds <= 300:
             raise ValueError("capability TTL must be between 1 and 300 seconds")
+        if not (
+            0.01
+            <= self.schedule_owner_read_timeout_seconds
+            <= self.schedule_request_timeout_seconds
+            <= 30.0
+        ):
+            raise ValueError(
+                "schedule timeouts must be ordered between 0.01 and 30 seconds"
+            )
 
 
 @dataclass(frozen=True)
@@ -215,7 +238,9 @@ class InProcessOperatorBridge:
                     operation="read",
                     target=target,
                     resource_type=(
-                        EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+                        EVENTS_RESOURCE_TYPE
+                        if capability == EVENTS_CAPABILITY
+                        else RESOURCE_TYPE
                     ),
                     resource_id=(
                         self._config.tenant_id
@@ -475,7 +500,9 @@ class AuthorizedCardScheduleSource:
     @staticmethod
     def _fold(store, card_ids):
         cards = [store.fold(card_id) for card_id in card_ids]
-        if any(card is None or card.id != card_id for card_id, card in zip(card_ids, cards)):
+        if any(
+            card is None or card.id != card_id for card_id, card in zip(card_ids, cards)
+        ):
             raise PermissionError("authorized schedule source is unavailable")
         return cards
 
@@ -554,7 +581,9 @@ class AuthorizedCardScheduleSource:
         )
         return {
             **item,
-            "source_watermarks": [{"source": "skcoord.card_store", "value": card_revision}],
+            "source_watermarks": [
+                {"source": "skcoord.card_store", "value": card_revision}
+            ],
             "evidence_refs": [f"skcoord.card_store:{card.id}"],
         }
 
@@ -582,7 +611,9 @@ class AuthorizedCardScheduleSource:
                             "authorization": "authorized",
                         },
                         "blocker_state": (
-                            "not_blocking" if status_by_id[target] == "done" else "blocking"
+                            "not_blocking"
+                            if status_by_id[target] == "done"
+                            else "blocking"
                         ),
                         "evidence_refs": [f"skcoord.card_store:{card.id}#dependency"],
                     }
@@ -708,7 +739,11 @@ def compose_live_control_plane(
     if clock is not None:
         authorizer_options["clock"] = clock
     authorizer = ControlPlaneDecisionAuthorizer(**authorizer_options)
-    schedule_options = {"tenant_id": config.tenant_id}
+    schedule_options = {
+        "tenant_id": config.tenant_id,
+        "owner_read_timeout_seconds": config.schedule_owner_read_timeout_seconds,
+        "request_timeout_seconds": config.schedule_request_timeout_seconds,
+    }
     if clock is not None:
         schedule_options["clock"] = clock
     schedule_provider = ScheduleProjectionProvider(
@@ -721,9 +756,16 @@ def compose_live_control_plane(
         **schedule_options,
     )
 
-    def invocation_factory(request, capability: str, target: str) -> ControlPlaneInvocationV1:
-        if (capability, target) not in AUTHENTICATED_BINDINGS or request.url.path != target:
-            raise PermissionError("control-plane invocation is outside the exact binding")
+    def invocation_factory(
+        request, capability: str, target: str
+    ) -> ControlPlaneInvocationV1:
+        if (
+            capability,
+            target,
+        ) not in AUTHENTICATED_BINDINGS or request.url.path != target:
+            raise PermissionError(
+                "control-plane invocation is outside the exact binding"
+            )
         origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
             node_id=config.node_id,
@@ -732,11 +774,15 @@ def compose_live_control_plane(
             capability=capability,
             target=target,
             resource_type=(
-                EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
+                EVENTS_RESOURCE_TYPE
+                if capability == EVENTS_CAPABILITY
+                else RESOURCE_TYPE
             ),
-            resource_id=config.tenant_id
-            if capability == EVENTS_CAPABILITY
-            else config.resource_id,
+            resource_id=(
+                config.tenant_id
+                if capability == EVENTS_CAPABILITY
+                else config.resource_id
+            ),
             correlation_id=request.headers.get("x-request-id", "")[:128] or uuid4().hex,
             boundary=RequestBoundary(client_kind=ClientKind.BROWSER, origin=origin),
         )
@@ -745,7 +791,9 @@ def compose_live_control_plane(
     if any(value is not None for value in in_process_values) and not all(
         value is not None for value in in_process_values
     ):
-        raise ValueError("in-process authorization components must be supplied together")
+        raise ValueError(
+            "in-process authorization components must be supplied together"
+        )
     session_authorizer = _UnavailableSessionAuthorizer()
     if all(value is not None for value in in_process_values):
         session_authorizer = InProcessOperatorBridge(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +23,9 @@ TENANT = "public-synthetic"
 
 
 class Context:
-    def __init__(self, *, target=AUTHORIZATION_TARGET, capability="skdashboard.read", allow=True):
+    def __init__(
+        self, *, target=AUTHORIZATION_TARGET, capability="skdashboard.read", allow=True
+    ):
         self.binding = Mock(target=target, capability=capability)
         self.joined_decision = Mock(allow=allow)
 
@@ -46,6 +49,18 @@ class Source:
     def read(self, context, request, home):
         self.calls.append((context, request, home))
         return deepcopy(self.snapshot)
+
+
+class SlowSource(Source):
+    def read(self, context, request, home):
+        time.sleep(0.1)
+        return super().read(context, request, home)
+
+
+class SlowProjectionProvider(ScheduleProjectionProvider):
+    def _project(self, raw, request, query):
+        time.sleep(0.1)
+        return super()._project(raw, request, query)
 
 
 def _date(state="known", instant="2026-08-29T11:00:00Z", reason=None):
@@ -72,7 +87,9 @@ def _item(item_id="release-1", semantic_type="release", *, truth_state="current"
         "visibility": {"state": "visible", "authorization": "authorized"},
         "dates": dates,
         "explicit_progress": None,
-        "source_watermarks": [{"source": "synthetic.coordination", "value": "revision-7"}],
+        "source_watermarks": [
+            {"source": "synthetic.coordination", "value": "revision-7"}
+        ],
         "evidence_refs": [f"evidence://synthetic/{item_id}"],
     }
 
@@ -166,9 +183,9 @@ def test_maps_pinned_canonical_sources_and_validates_contract() -> None:
         / "docs/contracts/schedule/v1.0.0/control-plane-schedule-projection.v1.0.0.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(
-        result
-    )
+    Draft202012Validator(
+        schema, format_checker=Draft202012Validator.FORMAT_CHECKER
+    ).validate(result)
 
     assert result["schema_version"] == SCHEMA_VERSION
     assert result["scope"] == {"role": "project_manager", "tenant_id": TENANT}
@@ -194,7 +211,9 @@ def test_roadmap_gantt_and_flow_receive_identical_projection() -> None:
 def test_truth_states_remain_distinct_and_nothing_is_invented_from_text() -> None:
     snapshot = _snapshot()
     item = snapshot["items"][0]
-    item["display_title"] = "Finish tomorrow, 99% done, owned by Alice, depends on secret"
+    item["display_title"] = (
+        "Finish tomorrow, 99% done, owned by Alice, depends on secret"
+    )
     item["dates"]["planned_start"] = _date("unknown")
     item["dates"]["planned_target"] = _date("stale")
     item["dates"]["actual_start"] = _date("policy_filtered")
@@ -224,14 +243,26 @@ def test_truth_states_remain_distinct_and_nothing_is_invented_from_text() -> Non
     ("mutate", "context", "query"),
     [
         (lambda value: value.update(tenant_id="other-tenant"), Context(), _query()),
-        (lambda value: value["authorization"].update(role="architect"), Context(), _query()),
-        (lambda value: value["authorization"].update(scope="team"), Context(), _query()),
+        (
+            lambda value: value["authorization"].update(role="architect"),
+            Context(),
+            _query(),
+        ),
+        (
+            lambda value: value["authorization"].update(scope="team"),
+            Context(),
+            _query(),
+        ),
         (
             lambda value: value["authorization"].update(target="/api/v1/overview"),
             Context(),
             _query(),
         ),
-        (lambda value: value["items"][0].update(tenant_id="other-tenant"), Context(), _query()),
+        (
+            lambda value: value["items"][0].update(tenant_id="other-tenant"),
+            Context(),
+            _query(),
+        ),
         (lambda value: None, Context(target="/api/v1/overview"), _query()),
         (lambda value: None, Context(capability="other.read"), _query()),
         (lambda value: None, Context(allow=False), _query()),
@@ -242,9 +273,15 @@ def test_tenant_role_scope_owner_and_authorization_mismatch_fail_closed(
 ) -> None:
     snapshot = _snapshot()
     mutate(snapshot)
-    provider = ScheduleProjectionProvider(Source(snapshot), tenant_id=TENANT, clock=lambda: NOW)
-    with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
-        provider.read(context, query, Path("/synthetic"), currentness_verifier=Verifier())
+    provider = ScheduleProjectionProvider(
+        Source(snapshot), tenant_id=TENANT, clock=lambda: NOW
+    )
+    with pytest.raises(
+        PermissionError, match="authorized schedule projection unavailable"
+    ):
+        provider.read(
+            context, query, Path("/synthetic"), currentness_verifier=Verifier()
+        )
 
 
 def test_currentness_before_and_during_read_fail_closed() -> None:
@@ -252,10 +289,61 @@ def test_currentness_before_and_during_read_fail_closed() -> None:
         provider = ScheduleProjectionProvider(
             Source(_snapshot()), tenant_id=TENANT, clock=lambda: NOW
         )
-        with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
+        with pytest.raises(
+            PermissionError, match="authorized schedule projection unavailable"
+        ):
             provider.read(
-                Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier(*states)
+                Context(),
+                _query(),
+                Path("/synthetic"),
+                currentness_verifier=Verifier(*states),
             )
+
+
+def test_owner_read_timeout_fails_closed() -> None:
+    provider = ScheduleProjectionProvider(
+        SlowSource(_snapshot()),
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        owner_read_timeout_seconds=0.01,
+        request_timeout_seconds=0.05,
+    )
+    with pytest.raises(
+        PermissionError, match="authorized schedule projection unavailable"
+    ):
+        provider.read(
+            Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier()
+        )
+
+
+def test_end_to_end_timeout_fails_closed() -> None:
+    provider = SlowProjectionProvider(
+        Source(_snapshot()),
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        owner_read_timeout_seconds=0.01,
+        request_timeout_seconds=0.02,
+    )
+    with pytest.raises(
+        PermissionError, match="authorized schedule projection unavailable"
+    ):
+        provider.read(
+            Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier()
+        )
+
+
+def test_duplicate_items_and_self_reference_fail_in_production_provider() -> None:
+    duplicate = _snapshot()
+    duplicate["items"] = [_item("release-1"), _item("release-1")]
+    self_reference = _snapshot()
+    self_reference["dependencies"] = [
+        _dependency("dependency-self", "release-1", "release-1")
+    ]
+    for snapshot in (duplicate, self_reference):
+        with pytest.raises(
+            PermissionError, match="authorized schedule projection unavailable"
+        ):
+            _read(snapshot)
 
 
 def test_stale_and_unavailable_sources_fail_closed_without_record_detail() -> None:
@@ -267,7 +355,9 @@ def test_stale_and_unavailable_sources_fail_closed_without_record_detail() -> No
     )
     for provider in providers:
         with pytest.raises(PermissionError) as error:
-            provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
+            provider.read(
+                Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier()
+            )
         assert "release-1" not in str(error.value)
         assert "other-tenant" not in str(error.value)
 
@@ -287,14 +377,18 @@ def test_policy_filtered_record_or_hidden_dependency_id_is_never_released() -> N
             Source(snapshot), tenant_id=TENANT, clock=lambda: NOW
         )
         with pytest.raises(PermissionError) as error:
-            provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
+            provider.read(
+                Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier()
+            )
         assert "protected-record-id" not in str(error.value)
         assert "milestone-1" not in str(error.value)
 
 
 def test_projection_is_bounded_and_linear_enough_for_large_synthetic_input() -> None:
     snapshot = _snapshot()
-    snapshot["items"] = [_item(f"work-{index:05d}", "work_package") for index in range(2_000)]
+    snapshot["items"] = [
+        _item(f"work-{index:05d}", "work_package") for index in range(2_000)
+    ]
     snapshot["dependencies"] = []
     snapshot["overlays"] = []
     result, _ = _read(snapshot)
@@ -321,9 +415,13 @@ def test_malformed_revision_lag_and_future_projection_fail_closed(mutate) -> Non
 
 def test_long_dependency_chains_are_iterative_and_cycles_remain_explicit() -> None:
     snapshot = _snapshot()
-    snapshot["items"] = [_item(f"work-{index:05d}", "work_package") for index in range(1_200)]
+    snapshot["items"] = [
+        _item(f"work-{index:05d}", "work_package") for index in range(1_200)
+    ]
     snapshot["dependencies"] = [
-        _dependency(f"dependency-{index:05d}", f"work-{index:05d}", f"work-{index + 1:05d}")
+        _dependency(
+            f"dependency-{index:05d}", f"work-{index:05d}", f"work-{index + 1:05d}"
+        )
         for index in range(1_199)
     ]
     snapshot["overlays"] = []
@@ -336,7 +434,9 @@ def test_long_dependency_chains_are_iterative_and_cycles_remain_explicit() -> No
         "evidence_refs": [],
     }
 
-    snapshot["dependencies"].append(_dependency("dependency-cycle", "work-01199", "work-00000"))
+    snapshot["dependencies"].append(
+        _dependency("dependency-cycle", "work-01199", "work-00000")
+    )
     result, _ = _read(snapshot)
     assert result["cycle_analysis"]["state"] == "cycles_detected"
     assert len(result["cycle_analysis"]["cycle_item_ids"]) == 1_200
