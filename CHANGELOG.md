@@ -19,7 +19,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-\n- Compose the governed Economy provider into the authenticated read-only runtime.
+
+- Define the governed schedule and forecast provider contract (card 2a4bb204
+  R2) at `docs/contracts/schedule/v1.0.0/providers/schedule-provider-contract.v1.0.0.md`,
+  pinning the canonical snapshot owner reader and the aggregate throughput
+  history source, schema-aligned vocabulary, fail-closed bounds instead of
+  truncation, freshness, currentness, and the schedule.read alias resolution,
+  with contract tests in `tests/contracts/schedule/v1.0.0/` that bind the
+  frozen JSON schema and the implemented provider and forecast semantics.
+  PROPOSED: independent review required before any new production source is
+  composed. No runtime behavior is changed by this change.\n- Compose the governed Economy provider into the authenticated read-only runtime.
 
 - Compose governed aggregate AI outcomes with exact source freshness and a strictly read-only, provider-neutral assistant path through SKGateway.
 - Validate the live authorization proof before reporting an encrypted browser

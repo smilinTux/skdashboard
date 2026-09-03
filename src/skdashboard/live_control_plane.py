@@ -41,7 +41,11 @@ from skcoord.authorized_card_policy import (
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .dashboard_itil import ReliabilityProjectionProvider
-from .dashboard_schedule import DATE_FIELDS, ScheduleProjectionProvider, ScheduleSourceRequest
+from .dashboard_schedule import (
+    DATE_FIELDS,
+    ScheduleProjectionProvider,
+    ScheduleSourceRequest,
+)
 
 NODE_ID = "chiap08"
 PURPOSE = "project-management-reporting"
@@ -93,6 +97,8 @@ class LiveControlPlaneConfig:
     owner_policy_revision: str
     tenant_id: str
     capability_ttl_seconds: int = 300
+    schedule_owner_read_timeout_seconds: float = 2.0
+    schedule_request_timeout_seconds: float = 5.0
     node_id: str = NODE_ID
 
     def __post_init__(self) -> None:
@@ -123,6 +129,13 @@ class LiveControlPlaneConfig:
             raise ValueError("an exact approved node identifier is required")
         if not 1 <= self.capability_ttl_seconds <= 300:
             raise ValueError("capability TTL must be between 1 and 300 seconds")
+        if not (
+            0.01
+            <= self.schedule_owner_read_timeout_seconds
+            <= self.schedule_request_timeout_seconds
+            <= 30.0
+        ):
+            raise ValueError("schedule timeouts must be ordered between 0.01 and 30 seconds")
 
 
 @dataclass(frozen=True)
@@ -708,7 +721,11 @@ def compose_live_control_plane(
     if clock is not None:
         authorizer_options["clock"] = clock
     authorizer = ControlPlaneDecisionAuthorizer(**authorizer_options)
-    schedule_options = {"tenant_id": config.tenant_id}
+    schedule_options = {
+        "tenant_id": config.tenant_id,
+        "owner_read_timeout_seconds": config.schedule_owner_read_timeout_seconds,
+        "request_timeout_seconds": config.schedule_request_timeout_seconds,
+    }
     if clock is not None:
         schedule_options["clock"] = clock
     schedule_provider = ScheduleProjectionProvider(
@@ -722,7 +739,10 @@ def compose_live_control_plane(
     )
 
     def invocation_factory(request, capability: str, target: str) -> ControlPlaneInvocationV1:
-        if (capability, target) not in AUTHENTICATED_BINDINGS or request.url.path != target:
+        if (
+            capability,
+            target,
+        ) not in AUTHENTICATED_BINDINGS or request.url.path != target:
             raise PermissionError("control-plane invocation is outside the exact binding")
         origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
@@ -734,9 +754,9 @@ def compose_live_control_plane(
             resource_type=(
                 EVENTS_RESOURCE_TYPE if capability == EVENTS_CAPABILITY else RESOURCE_TYPE
             ),
-            resource_id=config.tenant_id
-            if capability == EVENTS_CAPABILITY
-            else config.resource_id,
+            resource_id=(
+                config.tenant_id if capability == EVENTS_CAPABILITY else config.resource_id
+            ),
             correlation_id=request.headers.get("x-request-id", "")[:128] or uuid4().hex,
             boundary=RequestBoundary(client_kind=ClientKind.BROWSER, origin=origin),
         )
