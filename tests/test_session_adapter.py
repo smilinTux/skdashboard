@@ -349,7 +349,8 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
     assert response.json()["error"] == "authentication_unavailable"
 
 
-def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
+@pytest.mark.parametrize("path", ["/api/v1/overview", "/auth/session"])
+def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path, path):
     from types import SimpleNamespace
 
     from capauth import CurrentPolicyRevisions
@@ -404,16 +405,68 @@ def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path):
     after_restart = TestClient(app, base_url=ORIGIN)
     after_restart.cookies.update(client.cookies)
 
-    response = after_restart.get("/api/v1/overview", headers={"Origin": ORIGIN})
+    response = after_restart.get(path, headers={"Origin": ORIGIN})
 
     assert response.status_code == 401
-    assert response.json()["message"] == "browser reauthentication is required"
+    if path == "/api/v1/overview":
+        assert response.json()["message"] == "browser reauthentication is required"
+    else:
+        assert response.json() == {"authenticated": False}
     assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
     assert "Max-Age=0" in response.headers["set-cookie"]
     assert COOKIE_NAME not in after_restart.cookies
     assert after_restart.get("/auth/session").status_code == 401
     with restarted._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_live_production_bridge_keeps_session_status_current(tmp_path):
+    from types import SimpleNamespace
+
+    from capauth import CurrentPolicyRevisions
+    from test_control_plane_decision_context import Signer
+
+    from skdashboard.live_control_plane import InProcessOperatorBridge, LiveControlPlaneConfig
+
+    class OperatorSessions:
+        def create(self, **_values):
+            return SimpleNamespace(take=lambda: ("operator-cookie", "operator-csrf"))
+
+    bridge = InProcessOperatorBridge(
+        config=LiveControlPlaneConfig(
+            legacy_board_url="https://legacy.example/board",
+            resource_id="authorized-card-set:sha256:" + "a" * 64,
+            owner_policy_revision="b" * 64,
+            tenant_id="platform",
+        ),
+        sessions=OperatorSessions(),
+        revisions=CurrentPolicyRevisions(
+            issuer="1" * 64,
+            principal="2" * 64,
+            acting_principal="3" * 64,
+            revocation="4" * 64,
+            owner="b" * 64,
+        ),
+        signer=Signer(),
+    )
+    session = adapter(tmp_path, tokens=SubjectTokens())
+    session.control_plane_bridge = bridge
+    client = TestClient(
+        create_read_only_app(
+            tmp_path,
+            session_adapter=session,
+            session_authorizer=bridge,
+        ),
+        base_url=ORIGIN,
+    )
+
+    login(client)
+    response = client.get("/auth/session", headers={"Origin": ORIGIN})
+
+    assert response.status_code == 200
+    assert response.json()["authenticated"] is True
+    assert response.json()["subject"] == "operator@example.test"
+    assert response.json()["csrf_token"]
 
 
 def test_legacy_refresh_reservation_without_timestamp_is_recovered(tmp_path):

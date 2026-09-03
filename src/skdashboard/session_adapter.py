@@ -618,6 +618,18 @@ class EncryptedSessionAdapter:
         )
 
     async def session(self, request: Request) -> Response:
+        resolution = await self.resolve(request)
+        if resolution.state != "authenticated":
+            response = JSONResponse(
+                {"authenticated": False},
+                status_code=503 if resolution.state == "unavailable" else 401,
+                headers={"Cache-Control": "no-store"},
+            )
+            if resolution.state == "reauth_required":
+                response.delete_cookie(
+                    COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict"
+                )
+            return response
         loaded = self._load(request)
         if loaded is None:
             return JSONResponse(
