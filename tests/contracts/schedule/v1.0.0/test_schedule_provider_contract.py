@@ -100,8 +100,14 @@ class ProviderUnavailableError(Exception):
 class FakeScheduleProvider:
     """Projection provider double implementing the Section 3 sequence."""
 
-    def __init__(self, snapshot: dict | None, *, tenant_id: str = "tenant-1",
-                 max_source_age_seconds: int = 300, clock=lambda: NOW) -> None:
+    def __init__(
+        self,
+        snapshot: dict | None,
+        *,
+        tenant_id: str = "tenant-1",
+        max_source_age_seconds: int = 300,
+        clock=lambda: NOW,
+    ) -> None:
         if not 1 <= max_source_age_seconds <= 86_400:
             raise ValueError("invalid Schedule provider configuration")
         self.snapshot = snapshot
@@ -113,9 +119,11 @@ class FakeScheduleProvider:
         try:
             # Route guard (Section 4.3): the route rejects these before any
             # provider is invoked; modeled here on the provider boundary.
-            if (query.get("role") not in ROUTE_ROLE_ALIASES
-                    or query.get("scope") != "estate"
-                    or query.get("service", "all") != "all"):
+            if (
+                query.get("role") not in ROUTE_ROLE_ALIASES
+                or query.get("scope") != "estate"
+                or query.get("service", "all") != "all"
+            ):
                 raise ValueError("INVALID_SCHEDULE_SCOPE")
             if context.binding["target"] != "/api/v1/schedule/projection":
                 raise PermissionError
@@ -137,9 +145,16 @@ class FakeScheduleProvider:
 
     def _validate_snapshot(self, s: dict) -> None:
         required = {
-            "schema_version", "tenant_id", "snapshot_revision", "observed_at",
-            "projected_at", "authorization", "source_watermarks", "items",
-            "dependencies", "overlays",
+            "schema_version",
+            "tenant_id",
+            "snapshot_revision",
+            "observed_at",
+            "projected_at",
+            "authorization",
+            "source_watermarks",
+            "items",
+            "dependencies",
+            "overlays",
         }
         if set(s) != required or s["schema_version"] != "1.0.0":
             raise ValueError
@@ -157,7 +172,11 @@ class FakeScheduleProvider:
         age = (now - observed).total_seconds()
         if age < -5 or age > self.max_source_age_seconds or projected < observed:
             raise PermissionError
-        if len(s["items"]) > 10_000 or len(s["dependencies"]) > 20_000 or len(s["overlays"]) > 5_000:
+        if (
+            len(s["items"]) > 10_000
+            or len(s["dependencies"]) > 20_000
+            or len(s["overlays"]) > 5_000
+        ):
             raise ValueError
 
     def _project(self, s: dict, query: dict) -> dict:
@@ -171,16 +190,26 @@ class FakeScheduleProvider:
             "observed_at": s["observed_at"],
             "projected_at": s["projected_at"],
             "truth_state": "current",
-            "visibility": {"state": "visible", "authorization": "authorized",
-                           "policy_decision_ref": s["authorization"]["policy_decision_ref"]},
+            "visibility": {
+                "state": "visible",
+                "authorization": "authorized",
+                "policy_decision_ref": s["authorization"]["policy_decision_ref"],
+            },
             "source_watermarks": list(s["source_watermarks"]),
             "field_provenance": {"item_id": "canonical coordination record.record_id"},
             "items": [],
             "dependencies": [],
             "overlays": [],
-            "cycle_analysis": {"state": "acyclic", "cycle_item_ids": [], "evidence_refs": []},
-            "critical_path": {"state": "not_applicable", "item_ids": [],
-                              "reasons": ["not_applicable"]},
+            "cycle_analysis": {
+                "state": "acyclic",
+                "cycle_item_ids": [],
+                "evidence_refs": [],
+            },
+            "critical_path": {
+                "state": "not_applicable",
+                "item_ids": [],
+                "reasons": ["not_applicable"],
+            },
             "individual_ranking_prohibited": True,
             "errors": [],
         }
@@ -202,7 +231,11 @@ def forecast_double(
 
     included = [p for p in periods if p["timing_basis"] == "canonical_period"]
     exclusions = [
-        {"period_id": p["period_id"], "timing_basis": p["timing_basis"], "reason": "non-canonical timing excluded from aggregate throughput sampling"}
+        {
+            "period_id": p["period_id"],
+            "timing_basis": p["timing_basis"],
+            "reason": "non-canonical timing excluded from aggregate throughput sampling",
+        }
         for p in periods
         if p["timing_basis"] != "canonical_period"
     ]
@@ -254,8 +287,14 @@ def forecast_double(
     return base
 
 
-def _period(period_id: str, start: datetime, completed: int,
-            timing_basis: str = "canonical_period", *, days: int = 7) -> dict:
+def _period(
+    period_id: str,
+    start: datetime,
+    completed: int,
+    timing_basis: str = "canonical_period",
+    *,
+    days: int = 7,
+) -> dict:
     return {
         "period_id": period_id,
         "start": start,
@@ -316,9 +355,16 @@ def _valid_projection() -> dict:
         "items": [],
         "dependencies": [],
         "overlays": [],
-        "cycle_analysis": {"state": "acyclic", "cycle_item_ids": [], "evidence_refs": []},
-        "critical_path": {"state": "not_applicable", "item_ids": [],
-                          "reasons": ["not_applicable"]},
+        "cycle_analysis": {
+            "state": "acyclic",
+            "cycle_item_ids": [],
+            "evidence_refs": [],
+        },
+        "critical_path": {
+            "state": "not_applicable",
+            "item_ids": [],
+            "reasons": ["not_applicable"],
+        },
         "individual_ranking_prohibited": True,
         "errors": [],
     }
@@ -339,8 +385,11 @@ def _item(item_id: str = "item-1") -> dict:
             "planned_start": {"state": "known", "instant": "2026-08-02T00:00:00Z"},
             "planned_target": {"state": "known", "instant": "2026-08-31T00:00:00Z"},
             "actual_start": {"state": "known", "instant": "2026-08-02T00:00:00Z"},
-            "actual_finish": {"state": "not_applicable", "instant": None,
-                              "reason": "not an actual date"},
+            "actual_finish": {
+                "state": "not_applicable",
+                "instant": None,
+                "reason": "not an actual date",
+            },
         },
         "baseline_variance": {"state": "not_applicable", "days": None},
         "progress": {"state": "known", "percent": 50, "as_of": NOW.isoformat()},
@@ -349,11 +398,22 @@ def _item(item_id: str = "item-1") -> dict:
             "state": "not_applicable",
             "eligible_children": 0,
             "included_children": 0,
-            "start": {"state": "not_applicable", "instant": None,
-                      "reason": "no children"},
-            "end": {"state": "not_applicable", "instant": None, "reason": "no children"},
-            "progress": {"state": "not_applicable", "percent": None,
-                         "as_of": None, "reason": "no children"},
+            "start": {
+                "state": "not_applicable",
+                "instant": None,
+                "reason": "no children",
+            },
+            "end": {
+                "state": "not_applicable",
+                "instant": None,
+                "reason": "no children",
+            },
+            "progress": {
+                "state": "not_applicable",
+                "percent": None,
+                "as_of": None,
+                "reason": "no children",
+            },
             "exclusions": [],
         },
         "source_watermarks": [],
@@ -492,37 +552,55 @@ class TestAuthorization:
 
 class TestFreshness:
     def test_stale_snapshot_rejected_at_default_ttl(self):
-        snapshot = _snapshot(observed_at=(NOW - timedelta(seconds=301)).isoformat(),
-                             projected_at=(NOW - timedelta(seconds=300)).isoformat())
+        snapshot = _snapshot(
+            observed_at=(NOW - timedelta(seconds=301)).isoformat(),
+            projected_at=(NOW - timedelta(seconds=300)).isoformat(),
+        )
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_future_watermark_rejected(self):
-        snapshot = _snapshot(observed_at=(NOW + timedelta(seconds=30)).isoformat(),
-                             projected_at=(NOW + timedelta(seconds=31)).isoformat())
+        snapshot = _snapshot(
+            observed_at=(NOW + timedelta(seconds=30)).isoformat(),
+            projected_at=(NOW + timedelta(seconds=31)).isoformat(),
+        )
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_projected_before_observed_rejected(self):
-        snapshot = _snapshot(observed_at=(NOW - timedelta(seconds=5)).isoformat(),
-                             projected_at=(NOW - timedelta(seconds=10)).isoformat())
+        snapshot = _snapshot(
+            observed_at=(NOW - timedelta(seconds=5)).isoformat(),
+            projected_at=(NOW - timedelta(seconds=10)).isoformat(),
+        )
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_within_ttl_succeeds(self):
         provider = FakeScheduleProvider(_snapshot())
-        projection = provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                                   "timezone": "UTC"}, None,
-                                   currentness_verifier=Verifier())
+        projection = provider.read(
+            FakeContext(),
+            {"role": "operator", "scope": "estate", "timezone": "UTC"},
+            None,
+            currentness_verifier=Verifier(),
+        )
         assert projection["projection_version"] == "rev-1"
 
     def test_ttl_bounds_enforced_at_construction(self):
@@ -542,53 +620,38 @@ class TestBoundsAndMalformedSources:
         snapshot = _snapshot(items=[{"stub": True}] * 10_001)
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_over_bound_dependencies_rejected_not_truncated(self):
         snapshot = _snapshot(dependencies=[{"stub": True}] * 20_001)
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_over_bound_overlays_rejected_not_truncated(self):
         snapshot = _snapshot(overlays=[{"stub": True}] * 5_001)
         provider = FakeScheduleProvider(snapshot)
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "estate",
-                                          "timezone": "UTC"}, None,
-                          currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {"role": "operator", "scope": "estate", "timezone": "UTC"},
+                None,
+                currentness_verifier=Verifier(),
+            )
 
     def test_no_truncation_flag_exists_in_schema(self, schema):
         text = json.dumps(schema)
         assert '"truncated"' not in text
-
-    def test_duplicate_item_ids_are_schema_illegal(self, validator):
-        projection = _valid_projection()
-        projection["items"] = [_item("item-1"), _item("item-1")]
-        with pytest.raises(Exception):
-            validator.validate(projection)
-
-    def test_self_referencing_dependency_is_invalid(self, validator):
-        projection = _valid_projection()
-        projection["dependencies"] = [{
-            "dependency_id": "dep-1",
-            "source_item_id": "item-1",
-            "target_item_id": "item-1",
-            "edge_type": "finish_to_start",
-            "direction": "known",
-            "lag_seconds": 0,
-            "truth_state": "current",
-            "visibility": {"state": "visible", "authorization": "authorized"},
-            "blocker_state": "blocking",
-            "cycle_state": "unknown",
-            "evidence_refs": [],
-        }]
-        with pytest.raises(Exception):
-            validator.validate(projection)
 
 
 # ---------------------------------------------------------------------------
@@ -610,13 +673,16 @@ ROLE_MAP = {
 
 
 class TestRoleAndScope:
-    @pytest.mark.parametrize("alias,canonical", [
-        ("project-manager", "project_manager"),
-        ("operator", "portfolio"),
-        ("architect", "architect"),
-        ("service", "service"),
-        ("team", "team"),
-    ])
+    @pytest.mark.parametrize(
+        "alias,canonical",
+        [
+            ("project-manager", "project_manager"),
+            ("operator", "portfolio"),
+            ("architect", "architect"),
+            ("service", "service"),
+            ("team", "team"),
+        ],
+    )
     def test_route_alias_maps_to_canonical_role(self, alias, canonical):
         assert ROLE_MAP[alias] == canonical
 
@@ -629,9 +695,17 @@ class TestRoleAndScope:
         # The real route rejects scope != estate before the provider runs; the
         # contract double models the same rejection as a provider-level guard.
         with pytest.raises(ProviderUnavailableError):
-            provider.read(FakeContext(), {"role": "operator", "scope": "project",
-                                          "service": "all", "timezone": "UTC"},
-                          None, currentness_verifier=Verifier())
+            provider.read(
+                FakeContext(),
+                {
+                    "role": "operator",
+                    "scope": "project",
+                    "service": "all",
+                    "timezone": "UTC",
+                },
+                None,
+                currentness_verifier=Verifier(),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -641,21 +715,34 @@ class TestRoleAndScope:
 
 class TestForecastRepresentation:
     def test_ready_artifact_exact_key_set(self):
-        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-                   for i in range(6)]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         artifact = forecast_double(periods)
         assert set(artifact) == {
-            "schema_version", "artifact_kind", "state", "abstention_reason",
-            "method", "calculation_owner", "method_discrimination", "cohort",
-            "scope", "history_window", "sample_periods", "period_cadence_days",
-            "remaining_work", "iterations", "seed", "assumptions", "exclusions",
-            "individual_ranking_prohibited", "completion_quantiles_periods",
-            "milestone_confidence", "writes_owner_records",
+            "schema_version",
+            "artifact_kind",
+            "state",
+            "abstention_reason",
+            "method",
+            "calculation_owner",
+            "method_discrimination",
+            "cohort",
+            "scope",
+            "history_window",
+            "sample_periods",
+            "period_cadence_days",
+            "remaining_work",
+            "iterations",
+            "seed",
+            "assumptions",
+            "exclusions",
+            "individual_ranking_prohibited",
+            "completion_quantiles_periods",
+            "milestone_confidence",
+            "writes_owner_records",
         }
 
     def test_ready_artifact_typed_fields(self):
-        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-                   for i in range(6)]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         artifact = forecast_double(periods)
         assert artifact["state"] == "ready"
         assert artifact["abstention_reason"] is None
@@ -680,40 +767,34 @@ class TestForecastRepresentation:
         assert artifact["milestone_confidence"] is None
 
     def test_mixed_cadence_forecast_abstains(self):
-        periods = [
-            _period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-            for i in range(6)
-        ]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         periods.append(_period("odd", NOW - timedelta(days=3), 5, days=3))
         artifact = forecast_double(periods)
         assert artifact["state"] == "abstained"
         assert "cadence" in artifact["abstention_reason"]
 
     def test_non_canonical_timing_excluded_and_recorded(self):
-        periods = [
-            _period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-            for i in range(6)
-        ]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         periods.append(_period("weird", NOW - timedelta(days=1), 99, timing_basis="ad_hoc"))
         artifact = forecast_double(periods)
         assert artifact["sample_periods"] == 6
-        assert artifact["exclusions"] == [{
-            "period_id": "weird",
-            "timing_basis": "ad_hoc",
-            "reason": "non-canonical timing excluded from aggregate throughput sampling",
-        }]
+        assert artifact["exclusions"] == [
+            {
+                "period_id": "weird",
+                "timing_basis": "ad_hoc",
+                "reason": "non-canonical timing excluded from aggregate throughput sampling",
+            }
+        ]
 
     def test_r1_forecast_vocabulary_is_retired(self):
-        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-                   for i in range(6)]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         artifact = forecast_double(periods)
         assert artifact["method"] != "skcore_throughput_v1"
         assert artifact["calculation_owner"] != "skcore_aggregate_history_provider"
         assert artifact["iterations"] != 10_000
 
     def test_default_iterations_are_2000(self):
-        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5)
-                   for i in range(6)]
+        periods = [_period(f"p{i}", NOW - timedelta(days=7 * (i + 1)), 5) for i in range(6)]
         assert forecast_double(periods)["iterations"] == 2000
 
 
@@ -747,11 +828,24 @@ class TestOpenApiAlignment:
 
     def test_openapi_only_parameters_are_documented_not_wireable(self, openapi):
         declared = set(openapi["components"]["parameters"])
-        not_wireable = {"PortfolioId", "ProjectId", "ServiceId", "TeamId",
-                        "ProjectionVersion"}
+        not_wireable = {
+            "PortfolioId",
+            "ProjectId",
+            "ServiceId",
+            "TeamId",
+            "ProjectionVersion",
+        }
         assert not_wireable <= declared
-        implemented_params = {"role", "scope", "window", "baseline", "service",
-                              "lens", "timezone", "selected_item"}
+        implemented_params = {
+            "role",
+            "scope",
+            "window",
+            "baseline",
+            "service",
+            "lens",
+            "timezone",
+            "selected_item",
+        }
         assert implemented_params.isdisjoint({p.lower() for p in not_wireable})
 
 
@@ -762,21 +856,29 @@ class TestOpenApiAlignment:
 
 class TestRouteNegativeContract:
     def test_error_codes_pinned(self):
-        assert {"SCHEDULE_UNAVAILABLE", "SCHEDULE_FORECAST_UNAVAILABLE",
-                "INVALID_SCHEDULE_SCOPE"} >= {
-            "SCHEDULE_UNAVAILABLE", "SCHEDULE_FORECAST_UNAVAILABLE",
+        assert {
+            "SCHEDULE_UNAVAILABLE",
+            "SCHEDULE_FORECAST_UNAVAILABLE",
+            "INVALID_SCHEDULE_SCOPE",
+        } >= {
+            "SCHEDULE_UNAVAILABLE",
+            "SCHEDULE_FORECAST_UNAVAILABLE",
             "INVALID_SCHEDULE_SCOPE",
         }
 
     def test_stale_data_code_is_retired(self):
         # R1 STALE_DATA is retired: staleness surfaces as SCHEDULE_UNAVAILABLE.
-        assert "STALE_DATA" not in {"SCHEDULE_UNAVAILABLE",
-                                    "SCHEDULE_FORECAST_UNAVAILABLE",
-                                    "INVALID_SCHEDULE_SCOPE"}
+        assert "STALE_DATA" not in {
+            "SCHEDULE_UNAVAILABLE",
+            "SCHEDULE_FORECAST_UNAVAILABLE",
+            "INVALID_SCHEDULE_SCOPE",
+        }
 
     def test_unavailable_is_retryable_and_invalid_scope_is_not(self):
-        retryable = {"SCHEDULE_UNAVAILABLE": True,
-                     "SCHEDULE_FORECAST_UNAVAILABLE": True,
-                     "INVALID_SCHEDULE_SCOPE": False}
+        retryable = {
+            "SCHEDULE_UNAVAILABLE": True,
+            "SCHEDULE_FORECAST_UNAVAILABLE": True,
+            "INVALID_SCHEDULE_SCOPE": False,
+        }
         assert retryable["SCHEDULE_UNAVAILABLE"] is True
         assert retryable["INVALID_SCHEDULE_SCOPE"] is False

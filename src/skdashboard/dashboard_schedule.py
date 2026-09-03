@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
+import threading
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +26,42 @@ AUTHORIZATION_CAPABILITY = "skdashboard.read"
 MAX_ITEMS = 10_000
 MAX_DEPENDENCIES = 20_000
 MAX_OVERLAYS = 5_000
+MIN_TIMEOUT_SECONDS = 0.01
+MAX_TIMEOUT_SECONDS = 30.0
+
+
+class _BoundedExecutor:
+    def __init__(self, workers: int) -> None:
+        self._jobs = queue.Queue(maxsize=workers)
+        for _ in range(workers):
+            threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        while True:
+            call, result = self._jobs.get()
+            try:
+                result.put((True, call()))
+            except BaseException as exc:
+                result.put((False, exc))
+
+    def call(self, call, timeout_seconds: float):
+        result = queue.Queue(maxsize=1)
+        try:
+            self._jobs.put_nowait((call, result))
+        except queue.Full as exc:
+            raise TimeoutError from exc
+        try:
+            ok, value = result.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            raise TimeoutError from exc
+        if not ok:
+            raise value
+        return value
+
+
+_REQUEST_EXECUTOR = _BoundedExecutor(4)
+_OWNER_READ_EXECUTOR = _BoundedExecutor(4)
+
 
 DATE_FIELDS = (
     "baseline_start",
@@ -36,10 +74,26 @@ DATE_FIELDS = (
     "forecast_target",
 )
 DATE_STATES = frozenset(
-    {"known", "unknown", "stale", "partial", "unavailable", "policy_filtered", "not_applicable"}
+    {
+        "known",
+        "unknown",
+        "stale",
+        "partial",
+        "unavailable",
+        "policy_filtered",
+        "not_applicable",
+    }
 )
 TRUTH_STATES = frozenset(
-    {"current", "stale", "partial", "unavailable", "unreachable", "unknown", "not_applicable"}
+    {
+        "current",
+        "stale",
+        "partial",
+        "unavailable",
+        "unreachable",
+        "unknown",
+        "not_applicable",
+    }
 )
 ITEM_TYPES = frozenset(
     {
@@ -140,20 +194,41 @@ class ScheduleProjectionProvider:
         tenant_id: str,
         clock=lambda: datetime.now(timezone.utc),
         max_source_age_seconds: int = 300,
+        owner_read_timeout_seconds: float = 2.0,
+        request_timeout_seconds: float = 5.0,
     ) -> None:
-        if not _identifier(tenant_id) or not 1 <= max_source_age_seconds <= 86_400:
+        if (
+            not _identifier(tenant_id)
+            or not 1 <= max_source_age_seconds <= 86_400
+            or not MIN_TIMEOUT_SECONDS <= owner_read_timeout_seconds <= MAX_TIMEOUT_SECONDS
+            or not owner_read_timeout_seconds <= request_timeout_seconds <= MAX_TIMEOUT_SECONDS
+        ):
             raise ValueError("invalid Schedule provider configuration")
         self._source = source
         self._tenant_id = tenant_id
         self._clock = clock
         self._max_source_age_seconds = max_source_age_seconds
+        self._owner_read_timeout_seconds = owner_read_timeout_seconds
+        self._request_timeout_seconds = request_timeout_seconds
 
     def read(self, context, query, home, *, currentness_verifier):
+        try:
+            return _REQUEST_EXECUTOR.call(
+                lambda: self._read(context, query, home, currentness_verifier),
+                self._request_timeout_seconds,
+            )
+        except Exception as exc:
+            raise PermissionError("authorized schedule projection unavailable") from exc
+
+    def _read(self, context, query, home, currentness_verifier):
         try:
             request = self._request(context, query)
             if currentness_verifier.check_before_owner_read(context).value != "allow":
                 raise PermissionError
-            snapshot = self._source.read(context, request, Path(home))
+            snapshot = _OWNER_READ_EXECUTOR.call(
+                lambda: self._source.read(context, request, Path(home)),
+                self._owner_read_timeout_seconds,
+            )
             projection = self._project(snapshot, request, query)
             # The verifier is single use: one check before the owner read and
             # one check after projection, immediately before release.
@@ -345,9 +420,11 @@ class ScheduleProjectionProvider:
             "dates": projected_dates,
             "baseline_variance": variance,
             "progress": progress,
-            "progress_basis": "canonical explicit_progress; no value inferred"
-            if progress is None
-            else "canonical explicit_progress",
+            "progress_basis": (
+                "canonical explicit_progress; no value inferred"
+                if progress is None
+                else "canonical explicit_progress"
+            ),
             "rollup": {
                 "state": "not_applicable",
                 "eligible_children": 0,
@@ -434,6 +511,8 @@ class ScheduleProjectionProvider:
                 )
             )
         ):
+            raise ValueError
+        if edge["source_item_id"] == edge["target_item_id"]:
             raise ValueError
         return edge
 

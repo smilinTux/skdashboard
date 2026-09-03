@@ -101,15 +101,12 @@ as the `CanonicalScheduleSource` protocol:
 
 ```python
 class CanonicalScheduleSource(Protocol):
-    def read(
-        self, context, request: "ScheduleSourceRequest", home: Path
-    ) -> Mapping | None: ...
+    def read(self, context, request: "ScheduleSourceRequest", home: Path) -> Mapping | None: ...
 ```
 
-Its production implementation is the file-backed canonical snapshot source
-composed behind `ScheduleProjectionProvider` in
-`src/skdashboard/dashboard_schedule.py` (live composition path:
-`compose_file_backed_live_control_plane` in `read_only.py`). `read` MUST:
+Its production implementation is `AuthorizedCardScheduleSource`, which folds
+canonical records from CardStore. `compose_file_backed_live_control_plane`
+uses a file-backed backend only for owner-policy configuration. `read` MUST:
 
 - Select owner policy by the authorization target BEFORE enumerating records.
 - Return records for the request tenant only, never another tenant.
@@ -229,11 +226,9 @@ The provider MUST implement this exact sequence (as implemented in
 Classification enforcement is source-side and happens BEFORE the snapshot
 reaches the provider: the canonical source must apply the owner policy
 (selection, filtering, redaction) for the exact tenant, role, and scope, and
-stamp each field's `visibility` (`visible`, `policy_filtered`,
-`unauthorized`, `redacted`, `unknown`) and `authorization`
-(`authorized`, `denied`, `unknown`). Filtered fields are represented as
-`policy_filtered` with a reason; they are never dropped silently and never
-replaced by invented values. The provider re-verifies the snapshot's
+stamp every released field's `visibility` and `authorization`. Owner-policy
+filtered records, fields, and dependency edges are omitted before the snapshot
+is released; they are never replaced by invented values. The provider re-verifies the snapshot's
 authorization block matches the request exactly and raises on any mismatch.
 
 ### 3.3 Tenant Filtering
@@ -285,10 +280,11 @@ snapshot carries one watermark age for the whole projection.
 
 | Operation | Timeout | On exceed |
 |-----------|---------|-----------|
-| Owner source read | bounded by deployment config | raise, 503 SCHEDULE_UNAVAILABLE |
-| Full request (end-to-end) | bounded by deployment config | raise, 503 SCHEDULE_UNAVAILABLE |
+| Owner source read | `schedule_owner_read_timeout_seconds`, default 2 s | raise, 503 SCHEDULE_UNAVAILABLE |
+| Full request (end-to-end) | `schedule_request_timeout_seconds`, default 5 s | raise, 503 SCHEDULE_UNAVAILABLE |
 
-Timeouts are fail-closed; partial results are prohibited. The projection
+Both deployment values are bounded from 0.01 through 30 seconds and the owner
+read timeout cannot exceed the full request timeout. Timeouts are fail-closed; partial results are prohibited. The projection
 transformation itself is synchronous and bounded by the snapshot bounds in
 Section 4.4. R1's millisecond-level table is superseded as unspecified here;
 the route and provider convert all failures to the same constant 503.

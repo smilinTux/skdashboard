@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,18 @@ class Source:
     def read(self, context, request, home):
         self.calls.append((context, request, home))
         return deepcopy(self.snapshot)
+
+
+class SlowSource(Source):
+    def read(self, context, request, home):
+        time.sleep(0.1)
+        return super().read(context, request, home)
+
+
+class SlowProjectionProvider(ScheduleProjectionProvider):
+    def _project(self, raw, request, query):
+        time.sleep(0.1)
+        return super()._project(raw, request, query)
 
 
 def _date(state="known", instant="2026-08-29T11:00:00Z", reason=None):
@@ -224,14 +238,26 @@ def test_truth_states_remain_distinct_and_nothing_is_invented_from_text() -> Non
     ("mutate", "context", "query"),
     [
         (lambda value: value.update(tenant_id="other-tenant"), Context(), _query()),
-        (lambda value: value["authorization"].update(role="architect"), Context(), _query()),
-        (lambda value: value["authorization"].update(scope="team"), Context(), _query()),
+        (
+            lambda value: value["authorization"].update(role="architect"),
+            Context(),
+            _query(),
+        ),
+        (
+            lambda value: value["authorization"].update(scope="team"),
+            Context(),
+            _query(),
+        ),
         (
             lambda value: value["authorization"].update(target="/api/v1/overview"),
             Context(),
             _query(),
         ),
-        (lambda value: value["items"][0].update(tenant_id="other-tenant"), Context(), _query()),
+        (
+            lambda value: value["items"][0].update(tenant_id="other-tenant"),
+            Context(),
+            _query(),
+        ),
         (lambda value: None, Context(target="/api/v1/overview"), _query()),
         (lambda value: None, Context(capability="other.read"), _query()),
         (lambda value: None, Context(allow=False), _query()),
@@ -254,8 +280,67 @@ def test_currentness_before_and_during_read_fail_closed() -> None:
         )
         with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
             provider.read(
-                Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier(*states)
+                Context(),
+                _query(),
+                Path("/synthetic"),
+                currentness_verifier=Verifier(*states),
             )
+
+
+def test_owner_read_timeout_fails_closed() -> None:
+    provider = ScheduleProjectionProvider(
+        SlowSource(_snapshot()),
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        owner_read_timeout_seconds=0.01,
+        request_timeout_seconds=0.05,
+    )
+    with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
+        provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
+
+
+def test_repeated_hung_reads_have_bounded_threads() -> None:
+    before = threading.active_count()
+    gate = threading.Event()
+
+    class HungSource(Source):
+        def read(self, context, request, home):
+            gate.wait()
+
+    provider = ScheduleProjectionProvider(
+        HungSource(_snapshot()),
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        owner_read_timeout_seconds=0.01,
+        request_timeout_seconds=0.02,
+    )
+    for _ in range(20):
+        with pytest.raises(PermissionError):
+            provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
+    assert threading.active_count() <= before + 8
+    gate.set()
+
+
+def test_end_to_end_timeout_fails_closed() -> None:
+    provider = SlowProjectionProvider(
+        Source(_snapshot()),
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        owner_read_timeout_seconds=0.01,
+        request_timeout_seconds=0.02,
+    )
+    with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
+        provider.read(Context(), _query(), Path("/synthetic"), currentness_verifier=Verifier())
+
+
+def test_duplicate_items_and_self_reference_fail_in_production_provider() -> None:
+    duplicate = _snapshot()
+    duplicate["items"] = [_item("release-1"), _item("release-1")]
+    self_reference = _snapshot()
+    self_reference["dependencies"] = [_dependency("dependency-self", "release-1", "release-1")]
+    for snapshot in (duplicate, self_reference):
+        with pytest.raises(PermissionError, match="authorized schedule projection unavailable"):
+            _read(snapshot)
 
 
 def test_stale_and_unavailable_sources_fail_closed_without_record_detail() -> None:

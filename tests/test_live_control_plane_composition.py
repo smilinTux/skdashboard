@@ -146,6 +146,26 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     assert isinstance(composition.schedule_provider, ScheduleProjectionProvider)
 
 
+def test_composition_applies_deployment_schedule_timeouts(tmp_path) -> None:
+    configured = config(tmp_path)
+    configured = LiveControlPlaneConfig(
+        **{
+            **configured.__dict__,
+            "schedule_owner_read_timeout_seconds": 0.25,
+            "schedule_request_timeout_seconds": 0.75,
+        }
+    )
+    composition = compose_live_control_plane(
+        config=configured,
+        capability_authorizer=Mock(),
+        owner_policy_backend=Mock(),
+        store_factory=Mock(),
+    )
+
+    assert composition.schedule_provider._owner_read_timeout_seconds == 0.25
+    assert composition.schedule_provider._request_timeout_seconds == 0.75
+
+
 @pytest.mark.parametrize(
     ("capability", "target", "resource_type", "resource_id"),
     [
