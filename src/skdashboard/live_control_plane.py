@@ -55,6 +55,7 @@ RELIABILITY_TARGET = "/api/v1/reliability/projection"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
 FLEET_CHAT_TARGET = "/api/v1/fleet-chat"
+SESSION_STATUS_TARGET = "/auth/session"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
@@ -280,7 +281,7 @@ class InProcessOperatorBridge:
         self._proofs[handle] = proofs
         return handle
 
-    def request(self, handle: str, request) -> InProcessIssuerRequest:
+    def request(self, handle: str, request) -> InProcessIssuerRequest | None:
         from .session_adapter import SessionReauthenticationRequired
 
         if not isinstance(handle, str) or not handle.isascii():
@@ -298,6 +299,8 @@ class InProcessOperatorBridge:
             raise SessionReauthenticationRequired(
                 "process-local operator proof is no longer available"
             )
+        if request.url.path == SESSION_STATUS_TARGET:
+            return None
         if capability is None or capability not in proofs:
             raise PermissionError("operator session material is unavailable")
         cookie, csrf, device, owner_revision = proofs[capability]

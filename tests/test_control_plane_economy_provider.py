@@ -15,7 +15,7 @@ from skdashboard.dashboard_economy_provider import (
 )
 
 UTC = timezone.utc
-NOW = datetime(2026, 9, 2, tzinfo=UTC)
+NOW = datetime.now(tz=UTC)
 
 
 def _authorizer(bearer: str, capability: str, _target: str) -> bool:
