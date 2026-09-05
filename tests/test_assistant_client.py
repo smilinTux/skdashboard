@@ -6,7 +6,7 @@ Card: 5c38b715 (SKDASH-AI-ASSISTANT-01)
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -36,7 +36,7 @@ def test_assistant_request_context_valid():
         surface="dashboard",
         actor="operator",
         card_id="5c38b715",
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
     assert ctx.surface == "dashboard"
     assert ctx.actor == "operator"
@@ -58,7 +58,7 @@ def test_assistant_request_message_valid():
     msg = AssistantRequestMessage(
         role="user",
         content="Hello, assistant!",
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
     assert msg.role == "user"
     assert msg.content == "Hello, assistant!"
@@ -187,7 +187,7 @@ def test_assistant_provenance_valid():
         model_served="qwen3.8-27b-huihui-abliterated-q4_k_m",
         backend_id="chiap08-qwen38",
         route_used="sk-dashboard-assistant",
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
     assert prov.model_served.startswith("qwen3.8")
     assert prov.backend_id == "chiap08-qwen38"
@@ -212,7 +212,7 @@ def test_assistant_response_valid():
             model_served="qwen3.8-27b",
             backend_id="chiap08-qwen38",
             route_used="sk-dashboard-assistant",
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         ),
     )
     assert resp.id == "resp-123"
@@ -232,7 +232,7 @@ def test_assistant_response_rejects_empty_choices():
             choices=[],
             provenance=AssistantProvenance(
                 model_served="qwen3.8", backend_id="test", route_used="sk-dashboard-assistant",
-                egress_profile="local-only", timestamp=datetime.now(UTC).isoformat(),
+                egress_profile="local-only", timestamp=datetime.now(timezone.utc).isoformat(),
             ),
         )
 
@@ -417,7 +417,7 @@ def test_client_route_drift_logging(mocker, caplog):
             model_served="unexpected-model",
             backend_id="unexpected-backend",
             route_used="sk-dashboard-assistant",
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         ),
     )
 
