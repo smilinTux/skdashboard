@@ -1,6 +1,6 @@
-// Read-only assistant console: send one bounded question and render the
-// SKGateway-mediated SSE answer. No capability or action protocol is used.
-import { esc, toast } from "./api.js";
+// Assistant console: POST a prompt, stream the answer over SSE (read from the
+// fetch body) and render tokens live.
+import { esc, toast, authHeaders } from "./api.js";
 
 const chat = document.getElementById("chat");
 const form = document.getElementById("ask-form");
@@ -30,7 +30,7 @@ async function ask(prompt) {
   try {
     const resp = await fetch("/api/assistant", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      headers: await authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ prompt }),
     });
     if (!resp.ok || !resp.body) throw new Error("assistant unavailable");
@@ -50,7 +50,9 @@ async function ask(prompt) {
     if (!text) bubble.textContent = "Sorry, I could not reach the model.";
   } finally {
     bubble.classList.remove("cursor-blink");
-    if (!text.trim()) bubble.textContent = bubble.textContent || "(no response)";
+    if (!text.trim()) {
+      bubble.textContent = bubble.textContent || "(no response)";
+    }
     busy = false;
     input.focus();
   }
@@ -62,16 +64,14 @@ function handleFrame(frame, bubble, onText) {
     if (line.startsWith("event:")) ev = line.slice(6).trim();
     else if (line.startsWith("data:")) data += line.slice(5).trim();
   }
-  if (!data) return;
+  if (ev !== "token" || !data) return;
   let obj;
   try { obj = JSON.parse(data); } catch (_) { return; }
-  if (ev === "token") {
-    if (bubble.querySelector(".thinking")) bubble.innerHTML = "";
-    bubble._raw = (bubble._raw || "") + obj.text;
-    bubble.innerHTML = esc(bubble._raw.trim());
-    onText(obj.text);
-    window.scrollTo(0, document.body.scrollHeight);
-  }
+  if (bubble.querySelector(".thinking")) bubble.innerHTML = "";
+  bubble._raw = (bubble._raw || "") + obj.text;
+  bubble.innerHTML = esc(bubble._raw);
+  onText(obj.text);
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
 form.addEventListener("submit", (e) => { e.preventDefault(); ask(input.value); });

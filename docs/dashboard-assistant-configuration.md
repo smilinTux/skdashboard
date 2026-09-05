@@ -1,59 +1,51 @@
-# Read-only Dashboard Assistant Configuration
+# Dashboard Assistant Contract
 
-## Purpose
+The dashboard assistant is a provider-neutral, read-only client of the
+logical `sk-dashboard-assistant` SKGateway route. Application code does not
+select a model, backend, private host, credential, or deployment target.
 
-Card `b677a99f` composes the existing governed AI outcome workspace with the approved provider-neutral assistant path from card `5c38b715`. The composition is observational only.
+## Request boundary
 
-## AI outcome boundary
+Before retrieval or model egress, the caller must provide a typed policy
+decision containing `tenant_id`, optional `matter_id`, classification,
+source-rights, an approved egress profile, and `read_authorized=true`.
+Requests are bounded, contain no tools or capabilities, and always serialize
+with `stream: true`.
 
-`/control-plane/ai` reads the protected aggregate control-plane overview. Each source row shows:
+The assistant never parses model text as a command. It cannot add notes, move
+or assign cards, queue agent runs, send communications, or perform any other
+external action.
 
-- owner and population
-- adapter version
-- truth state
-- exact `observed_at` timestamp and `age_seconds`
-- collector coverage
-- source watermark
-- metric registry version and hash
+## Response boundary
 
-Harness-reported, gateway-observed, and SKJoule lanes remain separate. The view does not expose prompts, responses, tool input, tool output, credentials, capabilities, workspace paths, or session identifiers. Missing outcome evidence remains Unknown and is not inferred from usage.
+Every response must carry typed headers for `X-SK-Route-Used`,
+`X-SK-Model-Served`, `X-SK-Backend-Id`, `X-SK-Egress-Profile`, and
+`X-SK-Retrieval-Traces`. Retrieval traces contain source identifiers, hashes,
+and optional source spans. The client rejects missing or malformed provenance,
+route drift, backend drift when an approved backend is configured, and egress
+profile mismatch.
 
-## Assistant route
+Streaming is buffered until every SSE record, terminal finish state, `[DONE]`
+marker, provenance field, and size bound has passed validation. No partial
+content is released on failure.
 
-SKDashboard sends one logical route through `skcapstone.skgateway_client`. Application code does not contain a provider hostname, provider SDK, backend identity, or credential.
+## Safety and audit
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SKDASHBOARD_ASSISTANT_ROUTE` | `sk-dashboard-assistant` | Bounded logical SKGateway route |
+Credential and capability patterns, opaque encoded material, oversized
+content, malformed requests, malformed responses, outages, and policy errors
+fail closed. Audit records contain actor, card context, reason, route, and
+bounded type-safe metadata only. Gateway bodies and protected content are not
+copied into logs or error responses.
 
-SKGateway deployment configuration owns the backend binding. This repository change does not deploy, restart, or mutate that configuration.
-
-## Request contract
-
-The facade accepts at most 20 messages and 24,000 characters. Every message has exactly `role` and `content`. It rejects:
-
-- tool or function fields
-- action or mutation schemas
-- capability material
-- credential-shaped text
-- protected payload field names
-- malformed logical routes
-- caller-selected route overrides
-
-The assistant receives only a bounded board and ITIL aggregate snapshot. Its system contract forbids commands, actions, tool calls, mutations, credentials, capabilities, and provider endpoints.
-
-## Response and failure behavior
-
-The browser renders token and done events only. There is no model-authored action protocol, action event, command parser, mutation dispatcher, or queue caller.
-
-Gateway failures fail closed to an unavailable message. Failure logging contains only bounded actor attribution, logical route, and error class. Request text, response text, credentials, capabilities, provider endpoints, and protected payloads are not logged.
+The logical route and its backend binding are deployment-owned configuration.
+Keep that configuration in the governed SKGateway registry and policy
+workflow. Do not place private addresses, credentials, registry copies, or
+restart and deployment commands in this repository.
 
 ## Verification
 
-```bash
-pytest -q tests/test_assistant_client.py tests/test_control_plane_ai_workspace.py
-pytest -q tests/test_queue_gate_enforcement.py
-ruff check src/skdashboard/assistant_client.py src/skdashboard/dashboard_assistant.py
-```
-
-The tests prove that requests cross only the shared SKGateway abstraction, aggregate freshness is rendered, forbidden fields fail before handoff, and the assistant module has no action or mutation surface.
+Focused verification should cover the assistant client, gateway contract,
+authorization and scope gate, schema and stream validation, redaction and
+audit safety, static checks, Ruff, Python compilation, and secret scanning.
+Integration tests must use mocks or simulation mode. No provider traffic is
+required for source review.
