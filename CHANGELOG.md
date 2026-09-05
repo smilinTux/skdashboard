@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Complete the provider-neutral, read-only assistant gateway boundary with typed scope, fail-closed validation, and bounded streaming.
+
 All notable changes to `skdashboard` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
