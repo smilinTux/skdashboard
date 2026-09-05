@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Complete the provider-neutral, read-only assistant gateway boundary with typed scope, fail-closed validation, and bounded streaming.
+- Make Portfolio presentation filters truthful and keep workspace navigation within the read-only accessibility contract.
 
 All notable changes to `skdashboard` are documented here.
 
