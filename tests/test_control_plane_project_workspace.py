@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 from skdashboard.dashboard import create_app
 
 ROOT = Path(__file__).parents[1]
+PORTFOLIO_QUALIFIER = ROOT / "scripts/qualify_control_plane_portfolio_cdp.mjs"
 
 
 def test_portfolio_route_is_read_only_and_uses_the_canonical_wireframe_path(
@@ -17,7 +23,54 @@ def test_portfolio_route_is_read_only_and_uses_the_canonical_wireframe_path(
     assert response.status_code == 200
     assert "Portfolio, projects, and Agile flow" in response.text
     assert 'id="project-table"' in response.text
+    assert 'aria-label="Open other presentation workspaces"' in response.text
     assert client.post("/control-plane/portfolio").status_code == 405
+
+
+def test_portfolio_presentation_control_only_filters_rendered_row_families() -> None:
+    html = (ROOT / "src/skdashboard/static/projects.html").read_text(encoding="utf-8")
+    js = (ROOT / "src/skdashboard/static/js/projects.js").read_text(encoding="utf-8")
+    select = re.search(r'<select id="project-silo".*?</select>', html, flags=re.S)
+
+    assert select
+    assert re.findall(r'<option value="([^"]*)"', select.group()) == ["", "portfolio", "flow"]
+    assert set(re.findall(r'data-workspace-silo="([^"]+)"', html)) == {
+        "itil",
+        "delivery",
+        "architecture",
+        "fleet",
+        "ai",
+        "economy",
+        "governance",
+        "legal",
+        "corpus",
+        "operator",
+    }
+    assert html.count('href="/control-plane/now?') >= 10
+    assert 'const LOCAL_SILOS = new Set(["", "portfolio", "flow"])' in js
+    assert 'document.querySelectorAll("[data-workspace-silo]")' in js
+    assert "location.replace(parsed.redirect)" in js
+    assert "safeSearch(parsed.context, { includeSavedView: false })" in js
+
+
+def test_portfolio_presentation_controls_in_real_browser() -> None:
+    node = shutil.which("node")
+    chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+    if not node or not chrome:
+        pytest.skip("Node or Chrome is unavailable for the Portfolio CDP qualifier")
+    result = subprocess.run(
+        [node, str(PORTFOLIO_QUALIFIER)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CHROME_PATH": chrome,
+            "SKCP_PORTFOLIO_PRESENTATION_ONLY": "1",
+        },
+    )
+    assert "truthful presentation links" in result.stdout
+    assert "old-silo history redirect" in result.stdout
 
 
 def test_project_workspace_keeps_every_measurement_boundary_explicit() -> None:
