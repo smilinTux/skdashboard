@@ -7,6 +7,7 @@ const UNKNOWN_SAMPLE = "Metric sample unavailable. Adapter coverage is source re
 const LATEST = "Latest source observation only";
 const OWNER_GAP = "Typed owner records are not projected by the protected API.";
 const MISSING_WINDOW = "Unavailable: required historical measurement window not observed";
+const LOCAL_SILOS = new Set(["", "portfolio", "flow"]);
 
 const SNAPSHOTS = [
   { id: "portfolio-total", area: "Portfolio snapshot", label: "Current portfolio total", family: "portfolio", adapter: "skcapstone.portfolio", key: "total", definition: "Count in the source portfolio snapshot.", exclusions: "No objective, benefit, value, or investment meaning is inferred." },
@@ -152,6 +153,11 @@ function applyContext(next, historyMode) {
   document.getElementById("project-role").value = context.role;
   document.getElementById("project-silo").value = context.selected_silo;
   document.getElementById("project-truth").value = context.truth;
+  document.querySelectorAll("[data-workspace-silo]").forEach((link) => {
+    const target = new URL(location.origin + "/control-plane/now");
+    target.search = safeSearch({ ...context, selected_silo: link.dataset.workspaceSilo }, { includeSavedView: false });
+    link.href = target;
+  });
   const url = new URL(location.href);
   url.pathname = "/control-plane/portfolio";
   url.search = safeSearch(context, { includeSavedView: false });
@@ -310,11 +316,17 @@ function parseLocation() {
   if (!location.search) return { ok: true, context: normalizedContext({ ...DEFAULT_CONTEXT, role: "project-manager" }) };
   const parsed = parseUrl(location.search);
   if (parsed.ok && parsed.context.saved_view) return { ok: false, state: "stale", message: "Saved views are not available for this workspace." };
+  if (parsed.ok && !LOCAL_SILOS.has(parsed.context.selected_silo)) {
+    const target = new URL(location.origin + "/control-plane/now");
+    target.search = safeSearch(parsed.context, { includeSavedView: false });
+    return { ok: false, redirect: target };
+  }
   return parsed;
 }
 
 function initialize() {
   const parsed = parseLocation();
+  if (parsed.redirect) { location.replace(parsed.redirect); return false; }
   if (!parsed.ok) { blockContext(parsed.state, parsed.message); return false; }
   applyContext(parsed.context, "replace");
   document.getElementById("project-context").addEventListener("change", () => {
@@ -323,7 +335,8 @@ function initialize() {
   });
   window.addEventListener("popstate", () => {
     const next = parseLocation();
-    if (!next.ok) blockContext(next.state, next.message);
+    if (next.redirect) location.replace(next.redirect);
+    else if (!next.ok) blockContext(next.state, next.message);
     else { applyContext(next.context, "none"); load(); }
   });
   const dialog = document.getElementById("project-evidence");

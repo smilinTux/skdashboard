@@ -89,23 +89,44 @@ uvicorn.run(app, host="127.0.0.1", port=${port}, log_level="error")
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
     await send("Network.setExtraHTTPHeaders", { headers: { Authorization: `Bearer ${fs.readFileSync(bearerFile, "utf8")}`, Origin: "http://10.0.0.139:7778" } });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/portfolio?role=operator&scope=estate&window=latest&baseline=none&service=all` });
-    await waitFor(async () => evaluate("document.querySelectorAll('#project-rows tr[data-signal]').length >= 30").catch(() => false), "Portfolio signals did not render");
-    const view = JSON.parse(await evaluate(`JSON.stringify({signals:document.querySelectorAll('#project-rows tr[data-signal]').length,records:document.querySelectorAll('#record-rows tr').length,edges:document.querySelectorAll('#dependency-rows tr').length,milestones:document.querySelectorAll('#milestone-rows tr').length,text:document.body.innerText})`));
-    assert.ok(view.signals >= 30); assert.equal(view.records, 2); assert.equal(view.edges, 1); assert.equal(view.milestones, 1);
-    assert.match(view.text, /project-1/); assert.match(view.text, /human gated/i); assert.match(view.text, /HISTORICAL FLOW METRICS\s+Unknown/i); assert.match(view.text, /Observed 1 in emitted subset/);
-    await evaluate("document.querySelector('.project-evidence-button').focus()"); await key("Enter");
-    assert.equal(await evaluate("document.getElementById('project-evidence').open"), true);
-    await key("Escape");
-    assert.equal(await evaluate("document.activeElement.classList.contains('project-evidence-button')"), true);
-    for (const width of [390, 320]) {
-      await send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: true });
-      const sizing = JSON.parse(await evaluate("JSON.stringify({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth})"));
-      assert.equal(sizing.scroll <= sizing.client, true, JSON.stringify(sizing));
+    await waitFor(async () => evaluate("document.querySelectorAll('[data-workspace-silo]').length === 10 && document.querySelector('[data-workspace-silo]').href.includes('role=operator')").catch(() => false), "Portfolio presentation links did not initialize");
+    const presentation = JSON.parse(await evaluate(`JSON.stringify({options:[...document.getElementById("project-silo").options].map((option)=>option.value),links:[...document.querySelectorAll("[data-workspace-silo]")].map((link)=>({silo:link.dataset.workspaceSilo,href:link.href}))})`));
+    assert.deepEqual(presentation.options, ["", "portfolio", "flow"]);
+    assert.equal(presentation.links.length, 10);
+    for (const link of presentation.links) {
+      const url = new URL(link.href);
+      assert.equal(url.pathname, "/control-plane/now");
+      assert.equal(url.searchParams.get("role"), "operator");
+      assert.equal(url.searchParams.get("scope"), "estate");
+      assert.equal(url.searchParams.get("window"), "latest");
+      assert.equal(url.searchParams.get("baseline"), "none");
+      assert.equal(url.searchParams.get("service"), "all");
+      assert.equal(url.searchParams.get("selected_silo"), link.silo);
     }
+    let signalCount = 0;
+    if (process.env.SKCP_PORTFOLIO_PRESENTATION_ONLY !== "1") {
+      await waitFor(async () => evaluate("document.querySelectorAll('#project-rows tr[data-signal]').length >= 30").catch(() => false), "Portfolio signals did not render");
+      const view = JSON.parse(await evaluate(`JSON.stringify({signals:document.querySelectorAll('#project-rows tr[data-signal]').length,records:document.querySelectorAll('#record-rows tr').length,edges:document.querySelectorAll('#dependency-rows tr').length,milestones:document.querySelectorAll('#milestone-rows tr').length,text:document.body.innerText})`));
+      signalCount = view.signals;
+      assert.ok(view.signals >= 30); assert.equal(view.records, 2); assert.equal(view.edges, 1); assert.equal(view.milestones, 1);
+      assert.match(view.text, /project-1/); assert.match(view.text, /human gated/i); assert.match(view.text, /HISTORICAL FLOW METRICS\s+Unknown/i); assert.match(view.text, /Observed 1 in emitted subset/);
+      await evaluate("document.querySelector('.project-evidence-button').focus()"); await key("Enter");
+      assert.equal(await evaluate("document.getElementById('project-evidence').open"), true);
+      await key("Escape");
+      assert.equal(await evaluate("document.activeElement.classList.contains('project-evidence-button')"), true);
+      for (const width of [390, 320]) {
+        await send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: true });
+        const sizing = JSON.parse(await evaluate("JSON.stringify({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth})"));
+        assert.equal(sizing.scroll <= sizing.client, true, JSON.stringify(sizing));
+      }
+    }
+    await evaluate(`history.pushState({}, "", "/control-plane/portfolio?role=architect&scope=estate&window=latest&baseline=none&service=all&selected_silo=itil&truth=current"); window.dispatchEvent(new PopStateEvent("popstate"));`);
+    await waitFor(async () => evaluate("location.pathname === '/control-plane/now'").catch(() => false), "Old Portfolio silo history entry did not redirect to Now");
+    assert.equal(await evaluate("location.search"), "?role=architect&scope=estate&window=latest&baseline=none&service=all&selected_silo=itil&truth=current");
     const writes = requests.filter((request) => !["GET", "OPTIONS"].includes(request.method));
-    const external = requests.filter((request) => !request.url.startsWith(`http://127.0.0.1:${port}/`));
+    const external = requests.filter((request) => !request.url.startsWith(`http://127.0.0.1:${port}/`) && !request.url.startsWith("data:"));
     assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.deepEqual(exceptions, []);
-    console.log(`SKCP-21 CDP PASS: ${view.signals} signals, 2 records, 1 edge, 1 milestone, keyboard evidence, 390/320, zero writes/external/exceptions`);
+    console.log(`SKCP-21 CDP PASS: ${signalCount} signals, truthful presentation links, old-silo history redirect, zero writes/external/exceptions`);
     socket.close();
   } finally {
     server.kill("SIGTERM"); chrome.kill("SIGTERM");
