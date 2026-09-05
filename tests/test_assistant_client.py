@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -24,6 +25,24 @@ from skdashboard.assistant_client import (
     ValidationError,
     get_client,
 )
+
+
+@pytest.fixture
+def mocker():
+    """Small local replacement for pytest-mock used by this focused suite."""
+    patchers = []
+
+    class Mocker:
+        MagicMock = mock.MagicMock
+
+        def patch(self, target, *args, **kwargs):
+            patcher = mock.patch(target, *args, **kwargs)
+            patchers.append(patcher)
+            return patcher.start()
+
+    yield Mocker()
+    for patcher in reversed(patchers):
+        patcher.stop()
 
 # ---------------------------------------------------------------------------
 # Schema Validation Tests
