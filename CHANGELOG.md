@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Make Portfolio presentation filters truthful and keep workspace navigation within the read-only accessibility contract.
+
 All notable changes to `skdashboard` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
