@@ -1714,6 +1714,7 @@ def create_app(
 
     async def api_assistant(request):
         from . import dashboard_assistant as da
+        from .assistant_client import AssistantScope
 
         try:
             body = await request.json()
@@ -1728,7 +1729,16 @@ def create_app(
             return _gate_deny(decision["reason"])
         if not prompt:
             return _json({"error": "prompt required"})
-        gen = da.stream_answer(home, prompt, actor=actor)
+        scope = AssistantScope(
+            tenant_id="platform",
+            classification="public",
+            source_rights=("skdashboard",),
+            egress_profile="local-only",
+            read_authorized=True,
+        )
+        gen = da.stream_answer(
+            home, prompt, actor=actor, capability_ok=decision["ok"], scope=scope
+        )
         return StreamingResponse(
             gen,
             media_type="text/event-stream",
