@@ -170,6 +170,10 @@ def get_economy(home: Path, filters: dict[str, str] | None = None) -> dict:
         ai_usage = _empty_ai_usage()
 
     return {
+        "report": {
+            "source": "SKCounter usage, skharness autopilot cost, and skjoule wallets",
+            "freshness": {"generated_at": datetime.now(timezone.utc).isoformat(), "state": "current"},
+        },
         "ai_usage": ai_usage,
         "autopilot_cost": autopilot["summary"],
         "cost_series": autopilot["cost_series"],

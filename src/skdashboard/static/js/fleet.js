@@ -26,6 +26,10 @@ async function load() {
     return;
   }
   renderErrors(d.errors || []);
+  const provenance = document.getElementById("fl-provenance");
+  const report = d.report || {};
+  const freshness = report.freshness || {};
+  provenance.textContent = `Source: ${report.source || "unavailable"} | Freshness: ${freshness.generated_at || "unavailable"}`;
   renderKPI(d.summary || {});
   renderNodes(d.nodes || []);
   renderSkipped(d.skipped || []);
