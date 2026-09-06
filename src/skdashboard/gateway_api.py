@@ -158,15 +158,16 @@ def project(observations: list[dict[str, Any]], query: dict[str, Any], *, timese
     # Apply the caller's bound after filtering and ordering. This protects both
     # summary and timeseries responses even when the index contains many rows.
     selected = selected[: query["limit"]]
-    selected = selected[: query["limit"]]
     latest = _parse_time(selected[0]["observed_at"], "observed_at") if selected else None
     age = max(0.0, (now - latest).total_seconds()) if latest else None
     if not observations:
         state, reason = "empty", "no_indexed_gateway_observations"
+    elif malformed:
+        # Preserve the distinction between a valid empty query and damaged
+        # indexed input. Consumers must not turn malformed telemetry into zero.
+        state, reason = "partial", "malformed_observations_omitted"
     elif not selected:
         state, reason = "empty", "no_observations_match_query"
-    elif malformed:
-        state, reason = "partial", "malformed_observations_omitted"
     elif age is not None and age > TTL_SECONDS:
         state, reason = "stale", "watermark_exceeds_ttl"
     else:
