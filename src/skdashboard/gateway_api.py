@@ -113,9 +113,16 @@ def _default_provider(home: Path, query: dict[str, Any]) -> list[dict[str, Any]]
             raise GatewayQueryError("observation_hash_mismatch", unavailable=True)
         try:
             observation = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise GatewayQueryError("malformed_observation", unavailable=True) from exc
-        if not isinstance(observation, dict) or observation.get("measurement_lane") != "gateway_observed":
+        except json.JSONDecodeError:
+            # A single damaged observation must not erase otherwise usable
+            # coverage. Keep a machine-readable marker so the projection can
+            # distinguish partial data from an empty result.
+            observations.append({"_gateway_malformed": True})
+            continue
+        if not isinstance(observation, dict):
+            observations.append({"_gateway_malformed": True})
+            continue
+        if observation.get("measurement_lane") != "gateway_observed":
             continue
         observations.append(observation)
     return observations
@@ -137,6 +144,9 @@ def project(observations: list[dict[str, Any]], query: dict[str, Any], *, timese
     selected: list[dict[str, Any]] = []
     malformed = 0
     for item in observations:
+        if item.get("_gateway_malformed"):
+            malformed += 1
+            continue
         try:
             observed = _parse_time(item.get("observed_at"), "observed_at")
         except GatewayQueryError:
@@ -145,6 +155,9 @@ def project(observations: list[dict[str, Any]], query: dict[str, Any], *, timese
         if query["start"] <= observed <= query["end"] and _matches(item, query["filters"]):
             selected.append(item)
     selected.sort(key=lambda item: item["observed_at"], reverse=True)
+    # Apply the caller's bound after filtering and ordering. This protects both
+    # summary and timeseries responses even when the index contains many rows.
+    selected = selected[: query["limit"]]
     selected = selected[: query["limit"]]
     latest = _parse_time(selected[0]["observed_at"], "observed_at") if selected else None
     age = max(0.0, (now - latest).total_seconds()) if latest else None
@@ -226,7 +239,7 @@ def handlers(home: Path, provider: Callable | None = None):
             except asyncio.TimeoutError:
                 return _response(request, {"schema_version": SCHEMA, "state": "unavailable", "unavailable_reason": "query_timeout"}, 503)
             except GatewayQueryError as exc:
-                status = 503 if exc.unavailable else (403 if exc.reason == "unauthorized_role" else 400)
+                status = 503 if exc.unavailable else (403 if exc.reason in {"unauthorized_role", "unauthorized_scope"} else 400)
                 return _response(request, {"schema_version": SCHEMA, "state": "unavailable", "unavailable_reason": exc.reason}, status)
 
         return handle
