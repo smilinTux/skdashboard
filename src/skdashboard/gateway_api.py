@@ -61,10 +61,18 @@ def parse_query(request) -> dict[str, Any]:
         raise GatewayQueryError("malformed_limit") from exc
     if not 1 <= limit <= MAX_ROWS:
         raise GatewayQueryError("row_limit_out_of_bounds")
-    role = request.query_params.get("role", "viewer")
-    if role not in ALLOWED_ROLES:
+    requested_role = request.query_params.get("role", "viewer")
+    if requested_role not in ALLOWED_ROLES:
         raise GatewayQueryError("unauthorized_role")
+    # Query parameters may narrow an authenticated grant, never manufacture one.
+    granted_role = getattr(request.state, "gateway_role", None) if hasattr(request, "state") else None
+    if granted_role is not None and requested_role != granted_role:
+        raise GatewayQueryError("unauthorized_role")
+    role = requested_role
     scope = request.query_params.get("scope", "fleet")
+    granted_scope = getattr(request.state, "gateway_scope", None) if hasattr(request, "state") else None
+    if granted_scope is not None and scope != granted_scope:
+        raise GatewayQueryError("unauthorized_scope")
     if not scope or len(scope) > 128 or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-" for ch in scope):
         raise GatewayQueryError("malformed_scope")
     filters = {key: request.query_params[key] for key in ALLOWED_FILTERS if key in request.query_params}
@@ -156,7 +164,7 @@ def project(observations: list[dict[str, Any]], query: dict[str, Any], *, timese
         "state": state,
         "unavailable_reason": reason,
         "observed_at": selected[0]["observed_at"] if selected else None,
-        "watermark": selected[0].get("payload_hash") if selected else None,
+        "watermark": (selected[0].get("watermark") or selected[0].get("payload_hash") or selected[0].get("source_sha256")) if selected else None,
         "age_seconds": age,
         "ttl_seconds": TTL_SECONDS,
         "coverage": coverage,
@@ -164,7 +172,7 @@ def project(observations: list[dict[str, Any]], query: dict[str, Any], *, timese
         "filters": query["filters"],
     }
     if timeseries:
-        common["items"] = [{"observed_at": item["observed_at"], "watermark": item.get("payload_hash"), "facts": item.get("facts")} for item in reversed(selected)]
+        common["items"] = [{"observed_at": item["observed_at"], "watermark": item.get("watermark") or item.get("payload_hash") or item.get("source_sha256"), "facts": item.get("facts")} for item in reversed(selected)]
     else:
         common["summary"] = selected[0].get("facts") if selected else None
     return common
