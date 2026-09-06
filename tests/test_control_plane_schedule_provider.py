@@ -80,6 +80,40 @@ def test_schedule_provider_receives_exact_context_scope_and_verifier(tmp_path: P
     assert response.headers["etag"]
 
 
+def test_bare_schedule_request_uses_canonical_defaults(tmp_path: Path) -> None:
+    rig = Rig(target="/api/v1/schedule/projection")
+    calls = []
+
+    class Provider:
+        def read(self, context, query, home, *, currentness_verifier):
+            calls.append(dict(query))
+            return _projection(query)
+
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=rig.factory,
+        control_plane_schedule_provider=Provider(),
+    )
+    response = TestClient(app).get(
+        "/api/v1/schedule/projection",
+        headers={"Authorization": f"Bearer {rig.bearer}", "Origin": ORIGIN},
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        {
+            "role": "project-manager",
+            "scope": "estate",
+            "window": "latest",
+            "baseline": "none",
+            "service": "all",
+            "lens": "roadmap",
+            "timezone": "UTC",
+        }
+    ]
+
+
 def test_schedule_scope_rejects_unknown_duplicate_and_protected_values(tmp_path: Path) -> None:
     class Provider:
         def read(self, *_args, **_kwargs):
