@@ -1885,6 +1885,31 @@ def create_app(
 
         return _json(deco.get_economy(home, dict(request.query_params)))
 
+    # Protected, server-side SKCounter gateway projections. The browser only sees
+    # these bounded summaries and never receives the collector path.
+    from .gateway_api import handlers as gateway_handlers
+
+    gateway_summary, gateway_timeseries = gateway_handlers(home)
+
+    async def api_gateway(request, *, timeseries=False):
+        decision = _capability_gate(
+            request,
+            resource="/api/v1/gateway/timeseries" if timeseries else "/api/v1/gateway/summary",
+            capability="skdashboard.read",
+            actor=request.headers.get("x-sk-actor") or "viewer",
+        )
+        if not decision.get("ok"):
+            from starlette.responses import JSONResponse
+            status = 401 if decision.get("reason") in {"missing_token", "unauthenticated"} else 403
+            return JSONResponse({"schema_version": "skdashboard.gateway.v1", "state": "unavailable", "unavailable_reason": decision.get("reason", "forbidden")}, status_code=status)
+        return await (gateway_timeseries if timeseries else gateway_summary)(request)
+
+    async def api_gateway_summary(request):
+        return await api_gateway(request, timeseries=False)
+
+    async def api_gateway_timeseries(request):
+        return await api_gateway(request, timeseries=True)
+
     # ── Fleet drift: install-profile drift per node (epic 3bbf39ea, card d1c6d605) ──
     # Reads published inventories out of the fleet tree, so this is the same
     # answer `skfleet node doctor --all` gives and costs no ssh. The alert gate
@@ -1997,6 +2022,8 @@ def create_app(
         Route("/api/economy", api_economy),
         Route("/fleet", _page("fleet.html")),
         Route("/api/fleet/drift", api_fleet_drift),
+        Route("/api/v1/gateway/summary", api_gateway_summary),
+        Route("/api/v1/gateway/timeseries", api_gateway_timeseries),
     ]
     from .control_plane_api import routes as control_plane_routes
 
