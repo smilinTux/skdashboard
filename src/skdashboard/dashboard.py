@@ -1995,7 +1995,11 @@ def create_app(
         Route("/api/trust/graph", lambda r: _json(_trust_graph_dict(home))),
         Route("/economy", _page("economy.html")),
         Route("/api/economy", api_economy),
+        # Drift is an explicit, read-only alias for the Fleet Drift report. It
+        # deliberately reuses the same published-inventory source and page,
+        # rather than implying a separate unimplemented data product.
         Route("/fleet", _page("fleet.html")),
+        Route("/drift", _page("fleet.html")),
         Route("/api/fleet/drift", api_fleet_drift),
     ]
     from .control_plane_api import routes as control_plane_routes
