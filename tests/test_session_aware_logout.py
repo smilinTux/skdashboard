@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import pytest
 from cryptography.fernet import Fernet
 from starlette.testclient import TestClient
 
@@ -13,7 +12,6 @@ from skdashboard.session_adapter import (
     COOKIE_NAME,
     EncryptedSessionAdapter,
     SessionConfig,
-    _digest,
 )
 
 ORIGIN = "https://10.0.0.139:7778"
@@ -74,7 +72,7 @@ def test_signed_in_shows_sign_out_and_hides_sign_in(tmp_path):
     # Both buttons exist in HTML with initial hidden state, JS toggles based on session
     assert 'id="signout-button"' in html
     assert 'id="signin-button"' in html
-    assert "class=\"hidden\"" in html  # Both start hidden
+    assert 'class="hidden"' in html  # Both start hidden
     assert "Sign out" in html
     assert "Sign in" in html
     # Session endpoint confirms authenticated state for JS to toggle visibility
@@ -91,7 +89,7 @@ def test_signed_out_shows_sign_in_and_hides_sign_out(tmp_path):
     # Both buttons exist in HTML with initial hidden state, JS toggles based on session
     assert 'id="signout-button"' in html
     assert 'id="signin-button"' in html
-    assert "class=\"hidden\"" in html  # Both start hidden
+    assert 'class="hidden"' in html  # Both start hidden
     assert "Sign out" in html
     assert "Sign in" in html
     # Session endpoint confirms unauthenticated state for JS to toggle visibility
@@ -173,8 +171,7 @@ def test_logout_with_wrong_origin_fails_closed(tmp_path):
     login(client)
     csrf = client.get("/auth/session").json()["csrf_token"]
     response = client.post(
-        "/auth/logout",
-        headers={"Origin": "https://malicious.example", "X-CSRF-Token": csrf}
+        "/auth/logout", headers={"Origin": "https://malicious.example", "X-CSRF-Token": csrf}
     )
     assert response.status_code == 403
     data = response.json()
@@ -185,10 +182,7 @@ def test_logout_with_wrong_origin_fails_closed(tmp_path):
 def test_logout_with_no_session_fails_closed(tmp_path):
     session = create_session_adapter(tmp_path)
     client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
-    response = client.post(
-        "/auth/logout",
-        headers={"Origin": ORIGIN, "X-CSRF-Token": "any-token"}
-    )
+    response = client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": "any-token"})
     assert response.status_code == 403
     data = response.json()
     assert data["error"] == "forbidden"
@@ -226,7 +220,7 @@ def test_expired_session_shows_sign_in_and_hides_sign_out(tmp_path):
     # Both buttons exist in HTML with initial hidden state, JS toggles based on session
     assert 'id="signout-button"' in html
     assert 'id="signin-button"' in html
-    assert "class=\"hidden\"" in html  # Both start hidden
+    assert 'class="hidden"' in html  # Both start hidden
     # Session endpoint confirms expired state for JS to toggle visibility
     session_response = client.get("/auth/session")
     assert session_response.status_code == 401
@@ -250,10 +244,7 @@ def test_no_redirect_loop_on_repeated_logout_attempts(tmp_path):
     csrf = client.get("/auth/session").json()["csrf_token"]
     first = client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf})
     assert first.status_code == 204
-    second = client.post(
-        "/auth/logout",
-        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}
-    )
+    second = client.post("/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf})
     assert second.status_code == 403
 
 
