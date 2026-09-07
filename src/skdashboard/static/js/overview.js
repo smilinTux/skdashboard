@@ -281,6 +281,10 @@ function clearScopedForTransition() {
   document.getElementById("estate-count").textContent = "Loading";
   document.getElementById("quality-summary").innerHTML = `<div class="spinner" aria-label="Loading data quality"></div>`;
   document.getElementById("quality-issues").replaceChildren();
+  const brief = document.getElementById("operator-brief");
+  if (brief) brief.innerHTML = `<p class="quality-empty">Loading authorized observations…</p>`;
+  const briefState = document.getElementById("operator-brief-state");
+  if (briefState) briefState.textContent = "Loading";
   setLegacyVisible(false);
 }
 
@@ -296,15 +300,42 @@ async function loadQuality(epoch, context) {
     }
     if (!renderEstate(response.items)) throw new Error("Expected 16 bounded adapter observations");
     renderQuality(quality);
+    renderOperatorBrief(response.items, quality);
     currentQuality = quality;
     refreshCommandResults();
     return true;
   } catch (error) {
     if (epoch !== loadEpoch) return null;
+    const brief = document.getElementById("operator-brief");
+    const briefState = document.getElementById("operator-brief-state");
+    briefState.textContent = error.message.toLowerCase().includes("unauthorized") ? "Unauthorized" : "Unavailable";
+    brief.innerHTML = `<p class="quality-empty">Operator brief unavailable: ${esc(error.message)}. AI abstains and no proposal is actionable.</p>`;
     clearProtectedEstate(`Protected estate evidence is unavailable: ${error.message}.`);
     if (currentContext.saved_view) document.getElementById("saved-view-status").textContent = "Unauthorized or revoked. The saved view retained no protected evidence.";
     return false;
   }
+}
+
+function renderOperatorBrief(items, quality) {
+  const target = document.getElementById("operator-brief");
+  const state = document.getElementById("operator-brief-state");
+  const observations = items.filter((item) => item.adapter_id);
+  const usable = observations.filter((item) => item.truth_state === "current" && item.aggregate);
+  if (!usable.length) {
+    state.textContent = quality?.truth_state === "unauthorized" ? "Unauthorized" : "No data";
+    target.innerHTML = `<p class="quality-empty">No authorized current aggregate observations are available. AI abstains from inference.</p>`;
+    return;
+  }
+  const risks = observations.filter((item) => ["partial", "stale", "unavailable"].includes(item.truth_state));
+  const ranked = [...risks].sort((a, b) => (b.age_seconds || 0) - (a.age_seconds || 0)).slice(0, 3);
+  const cards = [
+    `<div><dt>Current conditions</dt><dd>${usable.length} authorized aggregate source${usable.length === 1 ? "" : "s"} available; no causal claim is made. ${usable.slice(0, 2).map((item) => `${esc(item.adapter_id)}: ${esc(JSON.stringify(item.aggregate))}`).join("; ")}</dd></div>`,
+    `<div><dt>Risks and anomalies</dt><dd>${risks.length ? risks.map((item) => `${esc(item.adapter_id)} is ${esc(item.truth_state)}; observed ${esc(item.observed_at || "unknown")}; freshness ${esc(String(item.age_seconds ?? "unknown"))}s`).join("; ") : "No source freshness or coverage risk detected."}</dd></div>`,
+    `<div><dt>Ranked next-step proposals</dt><dd>${ranked.length ? ranked.map((item, i) => `${i + 1}. Inspect ${esc(item.adapter_id)} evidence before any proposal; observed ${esc(item.observed_at || "unknown")}, freshness ${esc(item.truth_state)}`).join("; ") : "1. Continue read-only monitoring; no action is proposed."}</dd></div>`,
+    ...usable.slice(0, 4).map((item) => `<div><dt>${esc(item.adapter_id)}</dt><dd>Source: ${esc(item.adapter_id)} | Observed: ${esc(item.observed_at || "unknown")} | Freshness: ${esc(item.truth_state)} (${esc(String(item.age_seconds ?? "unknown"))}s) | Uncertainty: aggregate only; abstain from causal inference.</dd></div>`),
+  ];
+  target.innerHTML = cards.join("");
+  state.textContent = "Evidence-backed";
 }
 
 function renderQuality(quality) {
