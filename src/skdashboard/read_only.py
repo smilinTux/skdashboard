@@ -426,7 +426,7 @@ def create_read_only_app(
         Route("/control-plane/reliability", page("reliability.html")),
         Route("/control-plane/architecture", page("architecture.html")),
         Route("/control-plane/ai", page("ai.html")),
-        Route("/economy", page("gateway_economy.html")),
+        Route("/gateway/economy", page("gateway_economy.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
         Route("/cockpit", redirect("/control-plane/now")),
