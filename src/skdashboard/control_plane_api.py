@@ -803,52 +803,26 @@ def routes(
             }
         return _response(request, projection)
 
-    async def gateway(request):
-        """Return the bounded gateway-observed SKCounter lane only."""
-        from . import dashboard_skcounter
+    def bind_gateway_grants(request):
+        context = getattr(request.state, "control_plane_decision", None)
+        request.state.gateway_role = "viewer"
+        request.state.gateway_scope = (
+            context.binding.resource_id if context is not None else "fleet"
+        )
 
-        raw = dashboard_skcounter.get_ai_usage(home, {"lane": "gateway_observed"})
-        summary = raw.get("summary", {})
-        coverage = raw.get("coverage", {})
-        duration_ms = summary.get("duration_ms", 0)
-        timed_tokens = summary.get("timed_tokens", 0)
-        throughput = (
-            round(timed_tokens * 1000 / duration_ms, 3)
-            if isinstance(duration_ms, (int, float))
-            and duration_ms > 0
-            and isinstance(timed_tokens, (int, float))
-            else None
-        )
-        item = {
-            "measurement_lane": raw.get("selected_lane"),
-            "tokens": {
-                key: summary.get(key, 0) for key in dashboard_skcounter.TOKEN_FIELDS
-            },
-            "tokens_per_second": throughput,
-            "duration_ms": duration_ms,
-            "sample_count": summary.get("sample_count", 0),
-            "observation_count": raw.get("observation_count", 0),
-            "cost_usd": (
-                summary.get("cost_usd")
-                if summary.get("cost_state") == "available"
-                else None
-            ),
-            "cost_state": summary.get("cost_state", "unavailable"),
-            "collectors": raw.get("collectors", []),
-            "expected_nodes": coverage.get("expected_nodes", 0),
-            "reporting_nodes": coverage.get("reporting_nodes", 0),
-            "missing_nodes": coverage.get("missing_nodes", []),
-        }
-        return _response(
-            request,
-            _page(
-                request,
-                "skgateway",
-                [item],
-                [str(error) for error in raw.get("errors", [])],
-                observed_at=raw.get("generated_at"),
-            ),
-        )
+    async def gateway(request):
+        from .gateway_api import handlers
+
+        bind_gateway_grants(request)
+        summary, _timeseries = handlers(home)
+        return await summary(request)
+
+    async def gateway_timeseries(request):
+        from .gateway_api import handlers
+
+        bind_gateway_grants(request)
+        _summary, timeseries = handlers(home)
+        return await timeseries(request)
 
     async def overview(request):
         from .control_plane_adapters import default_readers, project_estate
@@ -1539,6 +1513,10 @@ def routes(
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
         Route("/api/v1/gateway/summary", protected(gateway, "skdashboard.read")),
+        Route(
+            "/api/v1/gateway/timeseries",
+            protected(gateway_timeseries, "skdashboard.read"),
+        ),
         Route(
             "/api/v1/fleet-chat",
             protected(fleet_chat_projection, "skdashboard.read"),
