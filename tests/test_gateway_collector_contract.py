@@ -91,8 +91,8 @@ def observation():
     }
 
 
-def indexed_client(tmp_path, observations):
-    root = tmp_path / "skcounter"
+def indexed_client(tmp_path, observations, *, root=None):
+    root = root or tmp_path / "skcounter"
     root.mkdir()
     index_dir = root / "observation-index"
     index_dir.mkdir()
@@ -106,6 +106,17 @@ def indexed_client(tmp_path, observations):
     return TestClient(
         create_app(tmp_path, control_plane_authorizer=lambda bearer, *_: bearer == "reader")
     )
+
+
+def test_gateway_provider_honors_configured_collector_root(tmp_path, monkeypatch, observation):
+    configured_root = tmp_path / "collector-state"
+    monkeypatch.setenv("SKCOUNTER_DATA_DIR", str(configured_root))
+    client = indexed_client(tmp_path / "dashboard-home", [observation], root=configured_root)
+
+    response = client.get("/api/v1/gateway/summary", headers={"Authorization": "Bearer reader"})
+
+    assert response.status_code == 200
+    assert response.json()["coverage"] == {"returned": 1, "examined": 1, "malformed": 0}
 
 
 @pytest.mark.parametrize("endpoint", ["summary", "timeseries"])

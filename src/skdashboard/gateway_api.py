@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,7 +122,12 @@ def _safe_read(path: Path, maximum: int) -> bytes:
 
 
 def _default_provider(home: Path, query: dict[str, Any]) -> list[dict[str, Any]]:
-    root = (home / "skcounter").resolve()
+    configured_root = os.environ.get("SKCOUNTER_DATA_DIR")
+    root = (
+        Path(configured_root).expanduser().resolve()
+        if configured_root
+        else (home / "skcounter").resolve()
+    )
     index_path = root / "observation-index" / "latest.json"
     try:
         index = json.loads(_safe_read(index_path, MAX_INDEX_BYTES))
