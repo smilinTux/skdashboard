@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from skdashboard.gateway_api import _per_model_snapshot, parse_query, project
+from skdashboard.node_coverage import node_coverage
 
 
 def _request(query=None, *, role="viewer", scope="fleet"):
@@ -194,6 +195,20 @@ def test_per_node_snapshot_marks_old_observation_stale_without_changing_drift():
 
     assert result["nodes"][0]["telemetry_state"] == "stale"
     assert result["nodes"][0]["configuration_drift"] == "clean"
+
+
+def test_fleet_and_economy_totals_share_canonical_node_coverage():
+    coverage = node_coverage(
+        ["chiap01", "chiap02", "chiap08"],
+        {"chiap01": "current", "chiap08": "stale"},
+    )
+
+    assert {
+        "named": coverage["expected_nodes"],
+        "current": coverage["fresh_collectors"],
+        "stale": coverage["stale_collectors"],
+        "missing": len(coverage["missing_nodes"]),
+    } == {"named": 3, "current": 1, "stale": 1, "missing": 1}
 
 
 def test_malformed_node_inventory_fails_closed_as_partial():
