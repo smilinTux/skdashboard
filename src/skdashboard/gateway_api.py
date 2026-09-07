@@ -24,6 +24,11 @@ QUERY_TIMEOUT_SECONDS = 2.0
 TTL_SECONDS = 180
 ALLOWED_FILTERS = frozenset({"model", "provider", "node", "client", "app", "rail"})
 ALLOWED_ROLES = frozenset({"operator", "viewer", "auditor"})
+MAX_NODE_FIELD_LENGTH = 128
+NODE_TEXT_FIELDS = frozenset(
+    {"backend", "served_model", "transport_profile", "runtime_revision", "version", "gateway_version"}
+)
+CONFIGURATION_DRIFT_STATES = frozenset({"clean", "drifted", "unknown"})
 
 
 class GatewayQueryError(ValueError):
@@ -163,15 +168,34 @@ def _facts_are_well_formed(facts: Any) -> bool:
         return False
     breakdowns = facts.get("breakdowns", {})
     if not isinstance(breakdowns, dict) or any(
-        not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+        not isinstance(values, list)
+        or any(
+            not isinstance(value, str) or not value or len(value) > MAX_NODE_FIELD_LENGTH
+            for value in values
+        )
         for values in breakdowns.values()
     ):
         return False
     daily = facts.get("daily_token_rows", [])
     if not isinstance(daily, list) or any(
         not isinstance(row, dict)
-        or (row.get("model") is not None and not isinstance(row["model"], str))
-        or (row.get("backend") is not None and not isinstance(row["backend"], str))
+        or any(
+            row.get(field) is not None
+            and (
+                not isinstance(row[field], str)
+                or not row[field]
+                or len(row[field]) > MAX_NODE_FIELD_LENGTH
+            )
+            for field in ("model", "backend")
+        )
+        or (
+            row.get("node") is not None
+            and (
+                not isinstance(row["node"], str)
+                or not row["node"]
+                or len(row["node"]) > MAX_NODE_FIELD_LENGTH
+            )
+        )
         for row in daily
     ):
         return False
@@ -182,10 +206,30 @@ def _facts_are_well_formed(facts: Any) -> bool:
     node_details = gateway.get("nodes", {})
     if (
         not isinstance(expected_nodes, list)
-        or any(not isinstance(node, str) or not node for node in expected_nodes)
+        or any(
+            not isinstance(node, str) or not node or len(node) > MAX_NODE_FIELD_LENGTH
+            for node in expected_nodes
+        )
         or not isinstance(node_details, dict)
         or any(
-            not isinstance(node, str) or not node or not isinstance(detail, dict)
+            not isinstance(node, str)
+            or not node
+            or len(node) > MAX_NODE_FIELD_LENGTH
+            or not isinstance(detail, dict)
+            or any(
+                value is not None
+                and (
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > MAX_NODE_FIELD_LENGTH
+                )
+                for field, value in detail.items()
+                if field in NODE_TEXT_FIELDS
+            )
+            or (
+                detail.get("configuration_drift") is not None
+                and detail["configuration_drift"] not in CONFIGURATION_DRIFT_STATES
+            )
             for node, detail in node_details.items()
         )
     ):
