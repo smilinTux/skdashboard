@@ -6,11 +6,19 @@ export function esc(value) {
     .replace(/"/g, "&quot;");
 }
 
-export async function getJSON(url) {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    headers: { Accept: "application/json" },
-  });
+export async function getJSON(url, { timeoutMs = 0 } = {}) {
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: controller?.signal,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   if (response.status === 401) {
     if (
       typeof window !== "undefined" &&

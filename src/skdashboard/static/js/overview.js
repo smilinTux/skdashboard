@@ -264,7 +264,10 @@ async function analyzeNow() {
   alert.textContent = "";
   body.replaceChildren();
   try {
-    const brief = await getJSON(`/api/v1/now/ai-brief?${safeSearch(currentContext)}`);
+    const brief = await getJSON(
+      `/api/v1/now/ai-brief?${safeSearch(currentContext)}`,
+      { timeoutMs: 45000 },
+    );
     status.textContent = brief.status === "abstained"
       ? `AI abstained: ${brief.abstention || "insufficient evidence"}`
       : `Generated ${timeShort(brief.generated_at)}. Proposals only; no action was taken.`;

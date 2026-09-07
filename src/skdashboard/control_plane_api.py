@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import inspect
@@ -899,7 +900,11 @@ def routes(
             return overview_response
         try:
             aggregate = json.loads(overview_response.body)
-            return JSONResponse(now_operator_brief(aggregate, actor="now-operator"))
+            brief = await asyncio.wait_for(
+                asyncio.to_thread(now_operator_brief, aggregate, actor="now-operator"),
+                timeout=45,
+            )
+            return JSONResponse(brief)
         except Exception:
             return _error(
                 request,

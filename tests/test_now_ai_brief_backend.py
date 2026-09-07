@@ -1,4 +1,6 @@
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -62,3 +64,39 @@ def test_now_ai_brief_is_protected_typed_and_read_only(tmp_path: Path, monkeypat
     assert client.post(
         "/api/v1/now/ai-brief", headers={"Authorization": "Bearer test"}
     ).status_code == 405
+
+
+def test_now_ai_brief_does_not_block_other_requests(tmp_path: Path, monkeypatch) -> None:
+    started = False
+
+    def slow_brief(_aggregate, actor):
+        nonlocal started
+        started = True
+        time.sleep(0.3)
+        return {"status": "abstained", "generated_at": "2026-09-07T17:00:00Z"}
+
+    monkeypatch.setattr(dashboard_assistant, "now_operator_brief", slow_brief)
+    app = Starlette(
+        routes=routes(
+            tmp_path,
+            board_reader=lambda _home: {"tasks": []},
+            health_reader=lambda _home: {"consciousness": "active", "pillars": {}},
+            authorizer=lambda *_args: True,
+        )
+    )
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as executor:
+        request = executor.submit(
+            client.get,
+            "/api/v1/now/ai-brief",
+            headers={"Authorization": "Bearer test"},
+        )
+        deadline = time.monotonic() + 1
+        while not started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        before = time.monotonic()
+        health = client.get("/api/v1/health")
+        elapsed = time.monotonic() - before
+
+        assert health.status_code == 200
+        assert elapsed < 0.2
+        assert request.result().status_code == 200
