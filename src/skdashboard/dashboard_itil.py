@@ -503,19 +503,32 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
             metric.update(value=None, truth_state="unknown", numerator=None, denominator=None)
     gateway_metrics = _gateway_metrics(home)
     metrics.extend(gateway_metrics)
-    watermark = hashlib.sha256(
-        json.dumps({"itil": source, "gateway": [m.get("evidence_refs", []) for m in gateway_metrics]}, sort_keys=True, separators=(",", ":")).encode()
+    # Keep source watermarks independently attributable.  The projection hash
+    # may bind both lanes, but an ITIL watermark must never change merely
+    # because a gateway snapshot arrived (or vice versa).
+    itil_watermark = hashlib.sha256(
+        json.dumps(source, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    gateway_ref = next(
+        (ref for metric in gateway_metrics for ref in metric["evidence_refs"]),
+        None,
+    )
+    projection_watermark = hashlib.sha256(
+        json.dumps({"itil": itil_watermark, "gateway": gateway_ref}, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return {
         "schema_version": "1.0.0",
         "projection_id": "reliability-latest",
-        "projection_hash": f"sha256:{watermark}",
+        "projection_hash": f"sha256:{projection_watermark}",
         "source_owner": "SKCapstone ITIL and SKGateway (separate evidence lanes)",
         "scope": dict(query),
         "observed_at": now.isoformat(),
         "truth_state": "current" if source else "unknown",
         "visibility": {"state": "visible", "authorization": "authorized"},
-        "source_watermarks": [{"source": "skcoord.itil", "value": f"sha256:{watermark}"}, {"source": "skgateway.observed", "value": next((r for m in gateway_metrics for r in m["evidence_refs"]), "unavailable")}],
+        "source_watermarks": [
+            {"source": "skcoord.itil", "value": f"sha256:{itil_watermark}"},
+            {"source": "skgateway.observed", "value": gateway_ref or "unavailable"},
+        ],
         "metrics": metrics,
         "items": items,
         "display_limit": 200,
