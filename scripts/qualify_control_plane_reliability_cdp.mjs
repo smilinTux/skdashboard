@@ -94,7 +94,7 @@ uvicorn.run(app, host="127.0.0.1", port=${port}, log_level="error")
     await waitFor(async () => evaluate("new URL(location.href).searchParams.get('role') === 'architect'").catch(() => false), "Keyboard role change did not synchronize");
     for (const width of [390, 320]) { await send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: true }); const size = JSON.parse(await evaluate("JSON.stringify({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth})")); assert.equal(size.scroll <= size.client, true, JSON.stringify(size)); }
     const writes = requests.filter((request) => !["GET", "OPTIONS"].includes(request.method));
-    const external = requests.filter((request) => !request.url.startsWith(`http://127.0.0.1:${port}/`));
+    const external = requests.filter((request) => !request.url.startsWith(`http://127.0.0.1:${port}/`) && !request.url.startsWith("data:"));
     assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.deepEqual(exceptions, []);
     console.log("SKCP-22 CDP PASS: 11 metrics, breach denominator 10, lifecycle/PIR/KEDB, keyboard role, 390/320, zero writes/external/exceptions");
     socket.close();

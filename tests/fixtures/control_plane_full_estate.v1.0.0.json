@@ -20,7 +20,7 @@
       "projection": "estate_rows",
       "required_fields": ["silo", "signal", "truth_state", "watermark", "errors"],
       "expected_item_count": 16,
-      "expected_row_set_sha256": "sha256:6d5c4aeb6e7a836c3bb9b36de5c653960276866765f4940dc2cb1aace1e83d27"
+      "expected_row_set_sha256": "sha256:9f40babcdf871b17e685b2e83029de04bf21be8b90a603892c9f2161528af706"
     },
     "api": {
       "method": "GET",
@@ -31,13 +31,13 @@
     "agent": {
       "access": "read_only",
       "representation": "canonical_json",
-      "expected_payload_sha256": "sha256:a4c5338f757902dcb50c4a3a86dd646cef69b35493e5005cc51bbc5a7639a759"
+      "expected_payload_sha256": "sha256:730a922c1886b7bfac349316a5d5187659fd9c14eac9b61f7d78305e9d870950"
     },
     "mcp": {
       "access": "read_only",
       "resource_uri": "skdashboard://fixtures/control-plane/full-estate/v1",
       "media_type": "application/json",
-      "expected_payload_sha256": "sha256:a4c5338f757902dcb50c4a3a86dd646cef69b35493e5005cc51bbc5a7639a759"
+      "expected_payload_sha256": "sha256:730a922c1886b7bfac349316a5d5187659fd9c14eac9b61f7d78305e9d870950"
     },
     "report": {
       "schema": "control-plane-report-snapshot.v1.1.0",
@@ -149,7 +149,7 @@
       "adapter_id": "skcounter.harness",
       "condition": "mixed_lane",
       "measurement_lane": "harness_reported",
-      "aggregate": {"tokens_total": 1200, "cost_usd": 18.0, "cost_state": "estimated", "observation_count": 8, "fresh_collectors": 2, "delayed_collectors": 0, "stale_collectors": 0},
+      "aggregate": {"tokens_total": 1200, "cost_usd": 18.0, "cost_state": "estimated", "latency_ms": null, "cache_ratio": 0.8, "error_count": null, "denial_count": null, "observation_count": 8, "fresh_collectors": 2, "delayed_collectors": 0, "stale_collectors": 0},
       "coverage": {"expected": 2, "reporting": 2},
       "watermark": "synthetic-harness-r1",
       "errors": [],
@@ -162,7 +162,7 @@
       "adapter_id": "skgateway.observed",
       "condition": "mixed_lane",
       "measurement_lane": "gateway_observed",
-      "aggregate": {"tokens_total": 1260, "cost_usd": null, "cost_state": "unavailable", "observation_count": 9, "fresh_collectors": 1, "delayed_collectors": 1, "stale_collectors": 0},
+      "aggregate": {"tokens_total": 1260, "cost_usd": null, "cost_state": "unavailable", "latency_ms": null, "cache_ratio": 0.6, "error_count": null, "denial_count": null, "observation_count": 9, "fresh_collectors": 1, "delayed_collectors": 1, "stale_collectors": 0},
       "coverage": {"expected": 2, "reporting": 1},
       "watermark": "synthetic-gateway-r1",
       "errors": ["one gateway collector is delayed"],
@@ -284,6 +284,6 @@
       "skos"
     ],
     "watermark_policy": "include_nonempty_authorized_aggregate_watermarks",
-    "expected_report_hash": "sha256:015094d96ce6acb97947a4fd04a31a22678fe490a1a5b0930b38d6d7b2d70af5"
+    "expected_report_hash": "sha256:94da0e01e11e519628f28648e67367fe434547cb781a309920e1f32f05d2ea69"
   }
 }

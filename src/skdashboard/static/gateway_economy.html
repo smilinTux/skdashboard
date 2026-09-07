@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SKDashboard | Gateway Economy</title>
+  <link rel="stylesheet" href="/static/css/gateway_economy.css">
+</head>
+<body>
+  <a class="skip" href="#economy-main">Skip to Economy</a>
+  <header><h1>Gateway Economy</h1><nav aria-label="Related evidence"><a href="/control-plane/now">Now</a> <a href="/control-plane/ai">AI outcomes</a> <a href="/control-plane/reliability">Reliability</a> <a href="/fleet">Fleet</a></nav></header>
+  <main id="economy-main">
+    <p>Gateway-observed usage only. Tokens, USD, and Joules are distinct. Harness usage and outcome quality are not included.</p>
+    <form id="gateway-filters" aria-label="Gateway observation filters">
+      <label>From (UTC)<input name="start" type="datetime-local" step="1"></label>
+      <label>To (UTC)<input name="end" type="datetime-local" step="1"></label>
+      <label>Model<input name="model" maxlength="128"></label>
+      <label>Backend<input name="backend" maxlength="128"></label>
+      <label>Provider<input name="provider" maxlength="128"></label>
+      <label>Gateway node<input name="node" maxlength="128"></label>
+      <label>Client<input name="client" maxlength="128"></label>
+      <label>Application<input name="app" maxlength="128"></label>
+      <label>Fleet rail<input name="rail" maxlength="128"></label>
+      <button type="submit">Apply filters</button><button type="button" id="gateway-reset">Clear filters</button>
+    </form>
+    <p>Time selects observation timestamps, up to 24 hours. Blank time fields follow the latest hour. Filters select matching snapshots; their aggregates retain their original population. Backend and route detail is shown when observed.</p>
+    <div class="actions"><button type="button" id="gateway-refresh">Refresh now</button><label><input id="gateway-live" type="checkbox" checked> Refresh every 15 seconds</label></div>
+    <p id="gateway-state" role="status" aria-live="polite">Loading protected gateway observations.</p>
+    <section id="gateway-evidence" aria-label="Gateway evidence" aria-busy="true">
+      <p id="gateway-provenance">Snapshot identity, scope, freshness, and coverage unavailable.</p>
+      <p><a id="gateway-source" hidden>Open the protected query</a> <span id="gateway-source-note" hidden>Snapshot identities are shown below; a new query may observe newer evidence.</span></p>
+      <div id="gateway-tables"></div>
+    </section>
+    <noscript>JavaScript is required to load protected observations. No usage values have been loaded.</noscript>
+  </main>
+  <script type="module" src="/static/js/gateway_economy.js"></script>
+</body>
+</html>

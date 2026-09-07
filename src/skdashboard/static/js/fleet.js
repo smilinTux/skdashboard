@@ -5,6 +5,7 @@
 // (info) next to a node running something it was told not to run (error), and
 // the operator would learn to ignore both.
 import { esc, getJSON, toast } from "./api.js";
+import { gatewayFilters, gatewayFreshness, gatewayValue, gatewayViewState, readGateway } from "./gateway_client.js";
 
 const GRADES = ["error", "warn", "info"];
 const GRADE_LABEL = { error: "Forbidden", warn: "Missing required", info: "Unexpected" };
@@ -20,7 +21,13 @@ const SKIP_LABEL = {
 async function load() {
   let d;
   try {
-    d = await getJSON("/api/fleet/drift");
+    const [drift, gateway] = await Promise.allSettled([
+      getJSON("/api/fleet/drift"),
+      readGateway(gatewayFilters(location.search), undefined, "summary"),
+    ]);
+    if (drift.status !== "fulfilled") throw drift.reason;
+    d = drift.value;
+    renderGateway(gateway.status === "fulfilled" ? gateway.value : null, gateway.reason);
   } catch (e) {
     document.getElementById("fl-nodes").innerHTML = `<div class="emptymsg">${esc(e.message)}</div>`;
     return;
@@ -29,6 +36,50 @@ async function load() {
   renderKPI(d.summary || {});
   renderNodes(d.nodes || []);
   renderSkipped(d.skipped || []);
+}
+
+function text(value) {
+  if (value == null || value === "") return "Unknown";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function age(value) {
+  if (value == null) return "Unknown";
+  const seconds = Math.max(0, Number(value));
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+function renderGateway(snapshot, error) {
+  const body = document.getElementById("fl-gateway");
+  const summary = document.getElementById("fl-gateway-summary");
+  if (!snapshot) {
+    summary.textContent = `${gatewayViewState(error)} | Gateway totals unavailable`;
+    body.innerHTML = `<div class="emptymsg">Protected gateway observations are unavailable${error ? `: ${esc(error.message)}` : "."} No node is assumed healthy.</div>`;
+    return;
+  }
+  const nodes = snapshot.nodes || [];
+  const totals = snapshot.node_totals || {};
+  const freshness = gatewayFreshness(snapshot);
+  summary.textContent = `${gatewayViewState({ ...snapshot, state: freshness.state })} | ${text(totals.named)} named | ${text(totals.current)} current | ${text(totals.stale)} stale | ${text(totals.missing)} missing | evidence ${gatewayValue(snapshot.evidence?.watermark)}`;
+  if (!nodes.length) {
+    body.innerHTML = `<div class="emptymsg">No named gateway node is present in the protected snapshot. Snapshot state: ${esc(text(snapshot.state))}.</div>`;
+    return;
+  }
+  body.innerHTML = `<div class="fl-table-wrap"><table class="fl-gateway-table">
+    <caption>Per-node gateway telemetry freshness and version truth</caption>
+    <thead><tr><th scope="col">Node</th><th scope="col">Telemetry</th><th scope="col">Last observation</th><th scope="col">Backend and model</th><th scope="col">Profile</th><th scope="col">Runtime</th><th scope="col">Config drift</th></tr></thead>
+    <tbody>${nodes.map((node) => `<tr>
+      <th scope="row">${esc(node.node_id)}</th>
+      <td><span class="fl-sev gateway-${esc(node.telemetry_state)}">${esc(node.telemetry_state)}</span><small>${esc(age(node.age_seconds))} / TTL ${esc(age(node.ttl_seconds))}</small></td>
+      <td>${esc(text(node.observed_at))}</td>
+      <td>${esc(text(node.backend))}<small>${esc(text(node.served_model))}</small></td>
+      <td>${esc(text(node.transport_profile))}<small>version ${esc(text(node.version))}</small></td>
+      <td class="mono">${esc(text(node.runtime_revision))}</td>
+      <td>${esc(text(node.configuration_drift))}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
 }
 
 function renderErrors(errors) {

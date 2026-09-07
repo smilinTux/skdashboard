@@ -10,9 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from .dashboard_skcounter import get_ai_usage
 
 logger = logging.getLogger("skcapstone.dashboard.itil")
 
@@ -21,6 +26,11 @@ SLA_MINUTES = {"sev1": 5, "sev2": 15, "sev3": 60, "sev4": 240}
 _OPEN_INCIDENT = {"detected", "acknowledged", "investigating", "escalated"}
 _CHANGE_SUCCESS = {"verified"}
 _CHANGE_FAIL = {"failed"}
+_GATEWAY_MAX_AGE_SECONDS = 120
+_GATEWAY_COUNT_KEYS = {
+    "success", "error", "rate_limited_429", "timeouts", "rollback_triggers",
+}
+_GATEWAY_SLO_STATES = {"healthy", "at_risk", "breached", "unknown"}
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:
@@ -136,14 +146,113 @@ class ReliabilityProjectionProvider:
         return projection
 
 
+def _gateway_snapshot(home: Path, *, now: datetime) -> dict | None:
+    """Read and validate one content-addressed gateway snapshot."""
+    configured = os.environ.get("SKGATEWAY_RELIABILITY_SNAPSHOT")
+    path = (Path(configured).expanduser() if configured else
+            Path(home).expanduser() / "skgateway" / "reliability.json")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or
+                    metadata.st_mode & 0o022 or metadata.st_size > 1024 * 1024):
+                return None
+            raw = os.read(descriptor, metadata.st_size + 1)
+        finally:
+            os.close(descriptor)
+        if len(raw) != metadata.st_size:
+            return None
+        document = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+    if (not isinstance(document, dict) or set(document) != {
+            "schema_version", "source", "observed_at", "window", "sample_size",
+            "observations", "snapshot_hash",
+    } or document.get("schema_version") != "1.0.0" or
+            document.get("source") != "skgateway"):
+        return None
+    digest = document.get("snapshot_hash")
+    if not isinstance(digest, str) or len(digest) != 64:
+        return None
+    payload = {key: value for key, value in document.items() if key != "snapshot_hash"}
+    expected = hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    if digest != expected:
+        return None
+
+    observed_at = _parse(document.get("observed_at"))
+    if observed_at is None:
+        return None
+    age = (now - observed_at.astimezone(timezone.utc)).total_seconds()
+    window = document.get("window")
+    sample_size = document.get("sample_size")
+    observations = document.get("observations")
+    if (age < -5 or age > _GATEWAY_MAX_AGE_SECONDS or
+            not isinstance(window, str) or not window or len(window) > 64 or
+            isinstance(sample_size, bool) or not isinstance(sample_size, int) or
+            not 0 <= sample_size <= 1_000_000_000 or
+            not isinstance(observations, dict) or
+            set(observations) != _GATEWAY_COUNT_KEYS | {"latency_percentiles", "slo_state"}):
+        return None
+    if any(isinstance(observations[key], bool) or
+           not isinstance(observations[key], int) or observations[key] < 0
+           for key in _GATEWAY_COUNT_KEYS):
+        return None
+    if observations["success"] + observations["error"] != sample_size:
+        return None
+    latency = observations["latency_percentiles"]
+    if not isinstance(latency, dict) or set(latency) != {"p50", "p95", "p99"}:
+        return None
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+           not math.isfinite(value) or value < 0 for value in latency.values()):
+        return None
+    if observations["slo_state"] not in _GATEWAY_SLO_STATES:
+        return None
+    document["age_seconds"] = round(max(age, 0), 3)
+    return document
+
+
+def _gateway_metrics(home: Path, *, now: datetime) -> list[dict]:
+    ids = (
+        ("gateway.request_success", "Gateway request success", "count", "success"),
+        ("gateway.request_error", "Gateway request errors", "count", "error"),
+        ("gateway.rate_limited_429", "Gateway HTTP 429 responses", "count", "rate_limited_429"),
+        ("gateway.timeouts", "Gateway timeouts", "count", "timeouts"),
+        ("gateway.latency_percentiles", "Gateway latency percentiles", "milliseconds", "latency_percentiles"),
+        ("gateway.slo_state", "Gateway SLO state", "state", "slo_state"),
+        ("gateway.rollback_triggers", "Gateway rollback triggers", "count", "rollback_triggers"),
+    )
+    snapshot = _gateway_snapshot(home, now=now)
+    if snapshot is None:
+        return [_metric(metric_id, label, value=None, unit=unit, numerator=None,
+                        denominator=None, sample_size=0, window="unknown",
+                        classification="skgateway_observed",
+                        exclusions=["Protected SKGateway observation unavailable or stale."],
+                        legacy_coverage={}, evidence_refs=[])
+                for metric_id, label, unit, _key in ids]
+    observations = snapshot["observations"]
+    evidence_refs = [f"skgateway.observed:{snapshot['snapshot_hash']}"]
+    window = f"{snapshot['window']}; age={snapshot['age_seconds']}s; freshness=current"
+    return [_metric(metric_id, label, value=observations[key], unit=unit,
+                    numerator=None, denominator=None, sample_size=snapshot["sample_size"],
+                    window=window, classification="skgateway_observed", exclusions=[],
+                    legacy_coverage={}, evidence_refs=evidence_refs)
+            for metric_id, label, unit, key in ids]
+
+
 def get_reliability_projection(home: Path, query: dict) -> dict:
-    """Build one bounded read-only reliability projection from folded ITIL records."""
+    """Build one bounded read-only reliability projection from independent sources."""
     mgr = _mgr(home)
     incidents = mgr.list_incidents()
     problems = mgr.list_problems()
     changes = mgr.list_changes()
     kedb = mgr.search_kedb("")
     now = _now()
+    node_coverage = get_ai_usage(home, {"lane": "gateway_observed"}, now=now)["coverage"]
     cutoff = now.timestamp() - 7 * 86400
 
     recent = []
@@ -451,19 +560,31 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
     if not source:
         for metric in metrics:
             metric.update(value=None, truth_state="unknown", numerator=None, denominator=None)
-    watermark = hashlib.sha256(
+    gateway_metrics = _gateway_metrics(home, now=now)
+    metrics.extend(gateway_metrics)
+    itil_watermark = hashlib.sha256(
         json.dumps(source, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    gateway_ref = next((reference for metric in gateway_metrics
+                        for reference in metric["evidence_refs"]), None)
+    projection_watermark = hashlib.sha256(json.dumps(
+        {"itil": itil_watermark, "gateway": gateway_ref},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    current = bool(source or gateway_ref)
     return {
         "schema_version": "1.0.0",
         "projection_id": "reliability-latest",
-        "projection_hash": f"sha256:{watermark}",
-        "source_owner": "SKCapstone ITIL",
+        "projection_hash": f"sha256:{projection_watermark}",
+        "source_owner": "SKCapstone ITIL and SKGateway (separate evidence lanes)",
         "scope": dict(query),
         "observed_at": now.isoformat(),
-        "truth_state": "current" if source else "unknown",
+        "truth_state": "current" if current else "unknown",
         "visibility": {"state": "visible", "authorization": "authorized"},
-        "source_watermarks": [{"source": "skcoord.itil", "value": f"sha256:{watermark}"}],
+        "source_watermarks": [
+            {"source": "skcoord.itil", "value": f"sha256:{itil_watermark}"},
+            {"source": "skgateway.observed", "value": gateway_ref or "unavailable"},
+        ],
         "metrics": metrics,
         "items": items,
         "display_limit": 200,
@@ -473,8 +594,9 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
             "changes": len(changes),
             "kedb": len(kedb),
         },
+        "node_coverage": node_coverage,
         "errors": []
-        if source
+        if current
         else [{"code": "SOURCE_UNKNOWN", "message": "No folded ITIL records are available."}],
     }
 

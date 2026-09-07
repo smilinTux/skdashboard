@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Render truthful token, cost, and cache aggregates for the separate
+  harness-reported and gateway-observed AI lanes while leaving unobserved
+  latency, denial, and request-error measurements explicitly unknown.
+- Add content-verified, freshness-bounded SKGateway reliability indicators with separately attributable gateway and ITIL evidence.
 - Complete the provider-neutral, read-only assistant gateway boundary with typed scope, fail-closed validation, and bounded streaming.
 - Make Portfolio presentation filters truthful and keep workspace navigation within the read-only accessibility contract.
 

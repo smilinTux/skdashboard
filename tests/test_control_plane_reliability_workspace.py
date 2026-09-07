@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from starlette.testclient import TestClient
 
 from skdashboard.dashboard import create_app
-from skdashboard.dashboard_itil import get_overview, get_reliability_projection
+from skdashboard.dashboard_itil import _gateway_snapshot, get_overview, get_reliability_projection
 
 ROOT = Path(__file__).parents[1]
 NOW = datetime.now(timezone.utc)
@@ -149,6 +151,30 @@ class Manager:
         return [Record(decision=Value("approved"), agent="human")]
 
 
+def write_gateway_snapshot(home: Path, **updates) -> dict:
+    document = {
+        "schema_version": "1.0.0",
+        "source": "skgateway",
+        "observed_at": NOW.isoformat(),
+        "window": "60s",
+        "sample_size": 11,
+        "observations": {
+            "success": 10, "error": 1, "rate_limited_429": 1, "timeouts": 1,
+            "latency_percentiles": {"p50": 12.5, "p95": 40, "p99": 80},
+            "slo_state": "at_risk", "rollback_triggers": 0,
+        },
+    }
+    document.update(updates)
+    document["snapshot_hash"] = hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    target = home / "skgateway" / "reliability.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(document), encoding="utf-8")
+    target.chmod(0o644)
+    return document
+
+
 def test_reliability_metrics_use_full_denominators_and_terminal_change_outcomes(
     monkeypatch,
 ) -> None:
@@ -219,6 +245,64 @@ def test_empty_reliability_source_is_unknown_not_zero(monkeypatch) -> None:
     )
 
 
+def test_gateway_snapshot_is_digest_bound_typed_and_current(tmp_path: Path) -> None:
+    document = write_gateway_snapshot(tmp_path)
+    snapshot = _gateway_snapshot(tmp_path, now=NOW + timedelta(seconds=30))
+    assert snapshot is not None
+    assert snapshot["snapshot_hash"] == document["snapshot_hash"]
+    assert snapshot["age_seconds"] == 30
+
+
+def test_gateway_snapshot_rejects_tampering_staleness_and_untyped_values(tmp_path: Path) -> None:
+    document = write_gateway_snapshot(tmp_path)
+    target = tmp_path / "skgateway" / "reliability.json"
+    document["observations"]["success"] = 999
+    target.write_text(json.dumps(document), encoding="utf-8")
+    target.chmod(0o644)
+    assert _gateway_snapshot(tmp_path, now=NOW) is None
+
+    write_gateway_snapshot(tmp_path, observed_at=(NOW - timedelta(seconds=121)).isoformat())
+    assert _gateway_snapshot(tmp_path, now=NOW) is None
+    valid_observations = write_gateway_snapshot(tmp_path)["observations"]
+    for updates in (
+        {"sample_size": True},
+        {"observations": {"success": "10"}},
+        {"observations": {**valid_observations, "slo_state": "probably-fine"}},
+    ):
+        write_gateway_snapshot(tmp_path, **updates)
+        assert _gateway_snapshot(tmp_path, now=NOW) is None
+
+
+def test_gateway_metrics_remain_separate_and_missing_never_becomes_zero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manager = Manager()
+    manager.incidents = []
+    manager.problems = []
+    manager.changes = []
+    manager.kedb = []
+    monkeypatch.setattr("skdashboard.dashboard_itil._mgr", lambda _home: manager)
+    monkeypatch.setattr("skdashboard.dashboard_itil._now", lambda: NOW)
+    document = write_gateway_snapshot(tmp_path)
+    projection = get_reliability_projection(tmp_path, {"scope": "estate"})
+    metrics = {item["metric_id"]: item for item in projection["metrics"]}
+    assert projection["truth_state"] == "current"
+    assert projection["source_watermarks"] == [
+        {"source": "skcoord.itil", "value": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
+        {"source": "skgateway.observed", "value": f"skgateway.observed:{document['snapshot_hash']}"},
+    ]
+    assert metrics["gateway.request_success"]["value"] == 10
+    assert metrics["gateway.latency_percentiles"]["value"] == {
+        "p50": 12.5, "p95": 40, "p99": 80,
+    }
+    (tmp_path / "skgateway" / "reliability.json").unlink()
+    unavailable = get_reliability_projection(tmp_path, {"scope": "estate"})
+    gateway = [item for item in unavailable["metrics"]
+               if item["metric_id"].startswith("gateway.")]
+    assert all(item["value"] is None and item["truth_state"] == "unknown"
+               for item in gateway)
+
+
 def test_reliability_page_is_read_only_and_has_accessible_tables(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path, control_plane_authorizer=lambda *_: False))
     response = client.get("/control-plane/reliability")
@@ -250,6 +334,9 @@ def test_reliability_surface_has_no_mutation_controls_or_external_dependencies()
     ):
         assert marker in html
     assert "/api/v1/reliability/projection" in js
+    assert '["p50", "p95", "p99"]' in js
+    assert '"SKGateway evidence"' in js
+    assert "Object.hasOwn" in js
     assert "fetch(" not in js
     assert "postChange" not in js
     assert "@media(max-width:760px)" in css

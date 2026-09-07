@@ -7,14 +7,18 @@ accepts raw prompt or response material.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
+import stat
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
+
+from .node_coverage import node_coverage
 
 SCHEMA_VERSION = "skcounter.snapshot.v1"
 LANES = frozenset({"harness_reported", "gateway_observed"})
@@ -32,10 +36,31 @@ VIEWS = frozenset(
 )
 TOKEN_FIELDS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
 MAX_OBSERVATION_BYTES = 5 * 1024 * 1024
-MAX_OBSERVATION_FILES = 10_000
+MAX_INDEX_BYTES = 10 * 1024 * 1024
+MAX_INDEX_ENTRIES = 10_000
+MAX_INDEX_SOURCES = MAX_INDEX_ENTRIES
+MAX_TOTAL_OBSERVATION_BYTES = 64 * 1024 * 1024
+MAX_INDEX_READ_ATTEMPTS = 3
+MAX_REPORTED_ERRORS = 100
 FRESH_SECONDS = 45 * 60
 DELAYED_SECONDS = 24 * 60 * 60
+INDEX_SCHEMA_VERSION = "skcounter.latest-observation-index.v1"
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+
+_INDEX_ENTRY_FIELDS = frozenset(
+    {
+        "measurement_lane",
+        "node_id",
+        "principal_id",
+        "view",
+        "bucket_start",
+        "observed_at",
+        "idempotency_key",
+        "payload_hash",
+        "source_path",
+        "source_sha256",
+    }
+)
 
 _TOP_LEVEL_FIELDS = frozenset(
     {
@@ -317,27 +342,243 @@ def _normalize_snapshot(document: Any) -> tuple[dict, list[dict]]:
     return meta, rows
 
 
-def _read_observations(home: Path) -> tuple[list[dict], list[dict], list[str]]:
-    root = _data_root(home)
-    observation_root = root / "observations"
-    if not observation_root.is_dir():
-        return [], [], []
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _read_stable_file(path: Path, maximum: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
+            raise SnapshotError("file is not a bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            data = stream.read(maximum + 1)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if len(data) > maximum:
+        raise SnapshotError("file exceeds its byte limit")
+    before_state = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    after_state = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if before_state != after_state or len(data) != after.st_size:
+        raise SnapshotError("file changed during read")
+    return data
+
+
+def _safe_source_path(root: Path, source_path: Any) -> tuple[str, Path]:
+    value = _text(source_path, "index source_path", 1024)
+    relative = PurePosixPath(value)
+    if (
+        relative.is_absolute()
+        or "\\" in value
+        or not relative.parts
+        or relative.parts[0] != "observations"
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise SnapshotError("index source_path is outside the observation store")
+    resolved_root = root.resolve()
+    candidate = resolved_root.joinpath(*relative.parts)
+    current = resolved_root
+    for part in relative.parts[:-1]:
+        current /= part
+        if current.is_symlink():
+            raise SnapshotError("index source_path contains a symbolic link")
+    return relative.as_posix(), candidate
+
+
+def _index_logical_key(entry: dict) -> tuple[str, str, str, str, str]:
+    return (
+        entry["measurement_lane"],
+        entry["node_id"],
+        entry["principal_id"],
+        entry["view"],
+        entry["bucket_start"],
+    )
+
+
+def _validate_index_entry(entry: Any, position: int) -> dict:
+    if not isinstance(entry, dict) or set(entry) != set(_INDEX_ENTRY_FIELDS):
+        raise SnapshotError(f"index entry {position} fields do not match v1")
+    normalized = {
+        "measurement_lane": _text(entry.get("measurement_lane"), "measurement_lane", 64),
+        "node_id": _text(entry.get("node_id"), "node_id", 128),
+        "principal_id": _text(entry.get("principal_id"), "principal_id", 128),
+        "view": _text(entry.get("view"), "view", 64),
+        "bucket_start": _text(entry.get("bucket_start"), "bucket_start", 64),
+        "observed_at": _text(entry.get("observed_at"), "observed_at", 64),
+        "idempotency_key": _text(entry.get("idempotency_key"), "idempotency_key", 64),
+        "payload_hash": _text(entry.get("payload_hash"), "payload_hash", 64),
+        "source_path": _text(entry.get("source_path"), "source_path", 1024),
+        "source_sha256": _text(entry.get("source_sha256"), "source_sha256", 64),
+    }
+    if normalized["measurement_lane"] not in LANES or normalized["view"] not in VIEWS:
+        raise SnapshotError(f"index entry {position} has an unsupported lane or view")
+    _parse_time(normalized["bucket_start"], "index bucket_start")
+    _parse_time(normalized["observed_at"], "index observed_at")
+    for field in ("idempotency_key", "payload_hash", "source_sha256"):
+        if not _SHA256_RE.fullmatch(normalized[field]):
+            raise SnapshotError(f"index entry {position} {field} is not a SHA-256 digest")
+    return normalized
+
+
+def _read_index_generation(root: Path) -> tuple[dict, bytes] | None:
+    path = root / "observation-index" / "latest.json"
+    try:
+        raw = _read_stable_file(path, MAX_INDEX_BYTES)
+    except FileNotFoundError:
+        return None
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SnapshotError("latest observation index is malformed") from exc
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema_version", "entries", "index_sha256"}
+        or document.get("schema_version") != INDEX_SCHEMA_VERSION
+        or not isinstance(document.get("entries"), list)
+        or len(document["entries"]) > MAX_INDEX_ENTRIES
+        or not _SHA256_RE.fullmatch(str(document.get("index_sha256", "")))
+    ):
+        raise SnapshotError("latest observation index fields do not match v1")
+    unsigned = {
+        "schema_version": document["schema_version"],
+        "entries": document["entries"],
+    }
+    expected = hashlib.sha256(_canonical_json(unsigned)).hexdigest()
+    if expected != document["index_sha256"]:
+        raise SnapshotError("latest observation index hash mismatch")
+    entries: list[dict] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for position, value in enumerate(document["entries"]):
+        entry = _validate_index_entry(value, position)
+        key = _index_logical_key(entry)
+        if key in seen:
+            raise SnapshotError("latest observation index contains duplicate keys")
+        seen.add(key)
+        entries.append(entry)
+    if len({entry["source_path"] for entry in entries}) > MAX_INDEX_SOURCES:
+        raise SnapshotError("latest observation index exceeds its source limit")
+    return {**document, "entries": entries}, raw
+
+
+def _read_indexed_sources(root: Path, entries: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for entry in entries:
+        grouped[entry["source_path"]].append(entry)
 
     rows: list[dict] = []
     observations: list[dict] = []
     errors: list[str] = []
-    paths = sorted(observation_root.rglob("*.json"))[:MAX_OBSERVATION_FILES]
-    for path in paths:
+    total_bytes = 0
+    for source_name in sorted(grouped):
+        indexed = grouped[source_name]
         try:
-            if path.is_symlink() or path.stat().st_size > MAX_OBSERVATION_BYTES:
-                raise SnapshotError("unsafe link or oversized observation")
-            document = json.loads(path.read_text(encoding="utf-8"))
+            relative, path = _safe_source_path(root, source_name)
+            source_hashes = {entry["source_sha256"] for entry in indexed}
+            if len(source_hashes) != 1:
+                raise SnapshotError("index disagrees on the source hash")
+            raw = _read_stable_file(path, MAX_OBSERVATION_BYTES)
+            total_bytes += len(raw)
+            if total_bytes > MAX_TOTAL_OBSERVATION_BYTES:
+                raise SnapshotError("indexed observation byte budget exceeded")
+            source_sha256 = hashlib.sha256(raw).hexdigest()
+            if source_sha256 not in source_hashes:
+                raise SnapshotError("indexed observation hash mismatch")
+            try:
+                document = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SnapshotError("indexed observation is malformed") from exc
             meta, normalized_rows = _normalize_snapshot(document)
-            observations.append(meta)
-            rows.extend(normalized_rows)
-        except (OSError, json.JSONDecodeError, SnapshotError) as exc:
-            errors.append(f"{path.name}: {exc}")
+            selected_rows: list[dict] = []
+            for entry in indexed:
+                if (
+                    entry["measurement_lane"] != meta["lane"]
+                    or entry["node_id"] != meta["node_id"]
+                    or entry["principal_id"] != meta["principal_id"]
+                    or _parse_time(entry["observed_at"], "index observed_at")
+                    != meta["observed_at"]
+                    or entry["payload_hash"] != document["payload_hash"]
+                    or entry["idempotency_key"] != document["idempotency_key"]
+                ):
+                    raise SnapshotError("index provenance does not match its observation")
+                bucket = _parse_time(entry["bucket_start"], "index bucket_start")
+                matching = [
+                    row
+                    for row in normalized_rows
+                    if row["view"] == entry["view"] and row["bucket_start"] == bucket
+                ]
+                if not matching:
+                    raise SnapshotError("index key does not exist in its observation")
+                selected_rows.extend(matching)
+            observations.append(
+                {
+                    **meta,
+                    "source_path": relative,
+                    "source_sha256": source_sha256,
+                    "payload_hash": document["payload_hash"],
+                    "idempotency_key": document["idempotency_key"],
+                    "source_bytes": len(raw),
+                }
+            )
+            rows.extend(selected_rows)
+        except (OSError, SnapshotError) as exc:
+            if len(errors) < MAX_REPORTED_ERRORS:
+                errors.append(f"{source_name}: {exc}")
     return observations, rows, errors
+
+
+def _read_observations(
+    home: Path,
+) -> tuple[list[dict], list[dict], list[str], dict[str, Any]]:
+    root = _data_root(home)
+    for _attempt in range(MAX_INDEX_READ_ATTEMPTS):
+        try:
+            generation = _read_index_generation(root)
+        except (OSError, SnapshotError) as exc:
+            return [], [], [str(exc)], {
+                "schema_version": INDEX_SCHEMA_VERSION,
+                "status": "unavailable",
+                "index_sha256": "",
+                "entry_count": 0,
+                "source_count": 0,
+            }
+        if generation is None:
+            return [], [], ["latest observation index is unavailable"], {
+                "schema_version": INDEX_SCHEMA_VERSION,
+                "status": "unavailable",
+                "index_sha256": "",
+                "entry_count": 0,
+                "source_count": 0,
+            }
+        document, raw = generation
+        observations, rows, errors = _read_indexed_sources(root, document["entries"])
+        try:
+            confirmed = _read_index_generation(root)
+        except (OSError, SnapshotError):
+            continue
+        if confirmed is None or confirmed[1] != raw:
+            continue
+        return observations, rows, errors, {
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "status": "partial" if errors else ("current" if document["entries"] else "empty"),
+            "index_sha256": document["index_sha256"],
+            "entry_count": len(document["entries"]),
+            "source_count": len({entry["source_path"] for entry in document["entries"]}),
+        }
+    return [], [], ["latest observation index changed during bounded read"], {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "status": "changing",
+        "index_sha256": "",
+        "entry_count": 0,
+        "source_count": 0,
+    }
 
 
 def _latest_rows(rows: Iterable[dict]) -> list[dict]:
@@ -551,7 +792,7 @@ def get_ai_usage(
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     filters = {key: str(value) for key, value in (filters or {}).items() if value}
-    observations, rows, errors = _read_observations(home)
+    observations, rows, errors, index = _read_observations(home)
     rows = _latest_rows(rows)
     available_lanes = sorted({row["lane"] for row in rows})
     requested_lane = filters.get("lane", "harness_reported")
@@ -581,23 +822,12 @@ def get_ai_usage(
 
     collectors = _collectors(observations, lane, now)
     expected_nodes = _expected_nodes(lane)
-    reporting_nodes = sorted({item["node_id"] for item in collectors})
-    missing_nodes = sorted(set(expected_nodes) - set(reporting_nodes))
-    coverage = {
-        "expected_nodes": len(expected_nodes),
-        "reporting_nodes": len(reporting_nodes),
-        "fresh_collectors": sum(item["status"] == "fresh" for item in collectors),
-        "delayed_collectors": sum(item["status"] == "delayed" for item in collectors),
-        "stale_collectors": sum(item["status"] == "stale" for item in collectors),
-        "missing_nodes": missing_nodes,
-        "percent": (
-            round(len(set(expected_nodes) & set(reporting_nodes)) / len(expected_nodes) * 100, 1)
-            if expected_nodes
-            else None
-        ),
-    }
+    coverage = node_coverage(
+        expected_nodes,
+        {item["node_id"]: item["status"] for item in collectors},
+    )
 
-    status = "empty"
+    status = "degraded" if index["status"] in {"unavailable", "changing"} else "empty"
     if rows:
         status = "degraded" if errors else "current"
     elif errors:
@@ -630,5 +860,23 @@ def get_ai_usage(
         "collectors": collectors,
         "coverage": coverage,
         "observation_count": len(observations),
+        "index": index,
+        "sources": [
+            {
+                "source_path": observation["source_path"],
+                "source_sha256": observation["source_sha256"],
+                "source_bytes": observation["source_bytes"],
+                "observed_at": observation["observed_at_text"],
+                "payload_hash": observation["payload_hash"],
+                "idempotency_key": observation["idempotency_key"],
+                "measurement_lane": observation["lane"],
+                "node_id": observation["node_id"],
+                "principal_id": observation["principal_id"],
+            }
+            for observation in sorted(
+                observations,
+                key=lambda item: (item["source_path"], item["observed_at_text"]),
+            )
+        ],
         "errors": errors,
     }
