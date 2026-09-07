@@ -355,6 +355,46 @@ def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry
     assert by_id["skgateway.observed"]["truth_state"] == "partial"
 
 
+def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Path) -> None:
+    stale = {
+        "generated_at": NOW.isoformat(),
+        "summary": {"tokens": {"total": 1}, "cost_usd": 0.0, "cost_state": "unavailable"},
+        "coverage": {
+            "expected_nodes": 1,
+            "reporting_nodes": 1,
+            "fresh_collectors": 0,
+            "delayed_collectors": 0,
+            "stale_collectors": 1,
+        },
+        "collectors": [{"last_seen": "2026-01-01T00:00:00Z", "status": "stale"}],
+        "observation_count": 1,
+        "errors": [],
+    }
+    live = {
+        "observed_at": NOW.isoformat(),
+        "source": {
+            "summary": {
+                "totalRequests": 12,
+                "totalInputTokens": 80,
+                "totalOutputTokens": 20,
+                "totalCostUsd": 0,
+                "unpricedRequests": 12,
+            },
+            "backends": {"a": {"observed": True}},
+        },
+        "errors": [],
+    }
+    with (
+        patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=stale),
+        patch("skdashboard.dashboard_observability.collect_gateway", return_value=live),
+    ):
+        result = _local_readers(tmp_path, board_data={})["skgateway.observed"]()
+
+    assert result["aggregate"]["observation_count"] == 12
+    assert result["aggregate"]["tokens_total"] == 100
+    assert result["coverage"] == {"expected": 1, "reporting": 1}
+
+
 def test_overview_etag_ignores_delivery_clocks_but_changes_with_source() -> None:
     observed_at = datetime.now(timezone.utc).isoformat()
     readers = _all_readers(observed_at=observed_at)

@@ -210,6 +210,20 @@ def test_acknowledged_edge_store_reads_only_latest_snapshot(tmp_path, monkeypatc
     assert result["summary"]["tokens"]["total"] == 250
 
 
+def test_valid_index_missing_requested_lane_uses_acknowledged_local_snapshot(
+    data_root, tmp_path
+):
+    sent = data_root / "sent" / "chiap08" / "jarvis"
+    sent.mkdir(parents=True)
+    (sent / "latest.json").write_text(json.dumps(_snapshot()), encoding="utf-8")
+
+    result = get_ai_usage(tmp_path)
+
+    assert result["observation_count"] == 1
+    assert result["summary"]["tokens"]["total"] == 100
+    assert result["available_lanes"] == ["harness_reported"]
+
+
 def test_duplicate_observation_and_acknowledged_snapshot_is_counted_once(
     data_root, tmp_path
 ):
