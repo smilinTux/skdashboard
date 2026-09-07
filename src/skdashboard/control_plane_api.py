@@ -803,15 +803,24 @@ def routes(
             }
         return _response(request, projection)
 
+    def bind_gateway_grants(request):
+        context = getattr(request.state, "control_plane_decision", None)
+        request.state.gateway_role = "viewer"
+        request.state.gateway_scope = (
+            context.binding.resource_id if context is not None else "fleet"
+        )
+
     async def gateway(request):
         from .gateway_api import handlers
 
+        bind_gateway_grants(request)
         summary, _timeseries = handlers(home)
         return await summary(request)
 
     async def gateway_timeseries(request):
         from .gateway_api import handlers
 
+        bind_gateway_grants(request)
         _summary, timeseries = handlers(home)
         return await timeseries(request)
 

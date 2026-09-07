@@ -5,8 +5,34 @@ from types import SimpleNamespace
 from skdashboard.gateway_api import _per_model_snapshot, parse_query, project
 
 
-def _request(query=None):
-    return SimpleNamespace(query_params=query or {}, state=SimpleNamespace())
+def _request(query=None, *, role="viewer", scope="fleet"):
+    state = SimpleNamespace()
+    if role is not None:
+        state.gateway_role = role
+    if scope is not None:
+        state.gateway_scope = scope
+    return SimpleNamespace(query_params=query or {}, state=state)
+
+
+def test_query_requires_authenticated_gateway_grants():
+    for request in (
+        _request({"role": "operator", "scope": "tenant-other"}, role=None, scope=None),
+        _request({"role": "operator"}, role="viewer"),
+        _request({"scope": "tenant-other"}, scope="fleet"),
+    ):
+        try:
+            parse_query(request)
+        except ValueError as exc:
+            assert str(exc) in {"unauthorized_role", "unauthorized_scope"}
+        else:
+            raise AssertionError("caller supplied gateway grant was accepted")
+
+
+def test_query_defaults_to_authenticated_gateway_grants():
+    query = parse_query(_request(role="auditor", scope="tenant-one"))
+
+    assert query["role"] == "auditor"
+    assert query["scope"] == "tenant-one"
 
 
 def test_per_model_snapshot_joins_observed_facts_and_marks_missing_unknown():
@@ -58,3 +84,30 @@ def test_malformed_and_empty_states_are_distinct():
     partial = project([{"_gateway_malformed": True}], query, timeseries=False)
     assert partial["state"] == "partial"
     assert partial["coverage"]["malformed"] == 1
+
+
+def test_malformed_nested_gateway_facts_are_omitted_without_exception():
+    observed = datetime.now(timezone.utc) - timedelta(seconds=5)
+    query = parse_query(_request())
+    malformed = [
+        {
+            "observed_at": observed.isoformat(),
+            "payload_hash": "a" * 64,
+            "facts": {"breakdowns": {"models": [{"name": "codex"}]}},
+        },
+        {
+            "observed_at": observed.isoformat(),
+            "payload_hash": "b" * 64,
+            "facts": {
+                "breakdowns": {"models": ["codex"]},
+                "gateway": [],
+            },
+        },
+    ]
+
+    result = project(malformed, query, timeseries=False)
+
+    assert result["state"] == "partial"
+    assert result["unavailable_reason"] == "malformed_observations_omitted"
+    assert result["coverage"] == {"returned": 0, "examined": 2, "malformed": 2}
+    assert result["models"] == []

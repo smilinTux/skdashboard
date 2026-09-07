@@ -130,9 +130,15 @@ def test_v1_gateway_summary_fails_closed_without_indexed_gateway_observation(
 ) -> None:
     client = TestClient(_app(tmp_path))
     response = client.get("/api/v1/gateway/summary", headers=READ_HEADERS)
+    forged = client.get(
+        "/api/v1/gateway/summary?role=operator&scope=tenant-other",
+        headers=READ_HEADERS,
+    )
     denied = client.post("/api/v1/gateway/summary", headers=READ_HEADERS)
     assert response.status_code == 503
     assert response.json()["unavailable_reason"] == "source_unavailable"
+    assert forged.status_code == 403
+    assert forged.json()["unavailable_reason"] == "unauthorized_role"
     assert denied.status_code == 405
 
 

@@ -66,25 +66,17 @@ def parse_query(request) -> dict[str, Any]:
         raise GatewayQueryError("malformed_limit") from exc
     if not 1 <= limit <= MAX_ROWS:
         raise GatewayQueryError("row_limit_out_of_bounds")
-    requested_role = request.query_params.get("role", "viewer")
-    if requested_role not in ALLOWED_ROLES:
+    granted_role = getattr(getattr(request, "state", None), "gateway_role", None)
+    granted_scope = getattr(getattr(request, "state", None), "gateway_scope", None)
+    if granted_role not in ALLOWED_ROLES:
         raise GatewayQueryError("unauthorized_role")
-    # Query parameters may narrow an authenticated grant, never manufacture one.
-    granted_role = (
-        getattr(request.state, "gateway_role", None)
-        if hasattr(request, "state")
-        else None
-    )
-    if granted_role is not None and requested_role != granted_role:
+    requested_role = request.query_params.get("role", granted_role)
+    if requested_role != granted_role:
         raise GatewayQueryError("unauthorized_role")
-    role = requested_role
-    scope = request.query_params.get("scope", "fleet")
-    granted_scope = (
-        getattr(request.state, "gateway_scope", None)
-        if hasattr(request, "state")
-        else None
-    )
-    if granted_scope is not None and scope != granted_scope:
+    if not isinstance(granted_scope, str):
+        raise GatewayQueryError("unauthorized_scope")
+    scope = request.query_params.get("scope", granted_scope)
+    if scope != granted_scope:
         raise GatewayQueryError("unauthorized_scope")
     if (
         not scope
@@ -107,7 +99,7 @@ def parse_query(request) -> dict[str, Any]:
         "start": start,
         "end": end,
         "limit": limit,
-        "role": role,
+        "role": granted_role,
         "scope": scope,
         "filters": filters,
     }
@@ -162,6 +154,44 @@ def _default_provider(home: Path, query: dict[str, Any]) -> list[dict[str, Any]]
 
 def _unknown(reason: str) -> dict[str, str]:
     return {"state": "unknown", "reason": reason}
+
+
+def _facts_are_well_formed(facts: Any) -> bool:
+    """Validate only the nested shapes consumed by the projection."""
+    if not isinstance(facts, dict):
+        return False
+    breakdowns = facts.get("breakdowns", {})
+    if not isinstance(breakdowns, dict) or any(
+        not isinstance(values, list)
+        or any(not isinstance(value, str) for value in values)
+        for values in breakdowns.values()
+    ):
+        return False
+    daily = facts.get("daily_token_rows", [])
+    if not isinstance(daily, list) or any(
+        not isinstance(row, dict)
+        or (row.get("model") is not None and not isinstance(row["model"], str))
+        or (row.get("backend") is not None and not isinstance(row["backend"], str))
+        for row in daily
+    ):
+        return False
+    gateway = facts.get("gateway", {})
+    if not isinstance(gateway, dict) or not isinstance(
+        gateway.get("backend_health", {}), dict
+    ):
+        return False
+    return all(
+        isinstance(facts.get(key, {}), dict)
+        for key in (
+            "latency_ms",
+            "catalog",
+            "buckets",
+            "claim_health",
+            "capacity",
+            "queue",
+            "errors_by_model",
+        )
+    ) and all(isinstance(key, str) for key in facts.get("catalog", {}))
 
 
 def _per_model_snapshot(facts: dict[str, Any]) -> list[dict[str, Any]]:
@@ -278,6 +308,9 @@ def project(
     malformed = 0
     for item in observations:
         if item.get("_gateway_malformed"):
+            malformed += 1
+            continue
+        if not _facts_are_well_formed(item.get("facts")):
             malformed += 1
             continue
         try:
