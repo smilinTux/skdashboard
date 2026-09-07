@@ -806,9 +806,9 @@ def routes(
     def bind_gateway_grants(request):
         context = getattr(request.state, "control_plane_decision", None)
         request.state.gateway_role = "viewer"
-        request.state.gateway_scope = (
-            context.binding.resource_id if context is not None else "fleet"
-        )
+        # The typed decision already fences the exact authorized resource set.
+        # The projection scope is a public query dimension, not that opaque ID.
+        request.state.gateway_scope = "estate" if context is not None else "fleet"
 
     async def gateway(request):
         from .gateway_api import handlers

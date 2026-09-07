@@ -566,6 +566,9 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     headers = {"Origin": ORIGIN}
     assert client.get("/control-plane/now").status_code == 200
     assert client.get("/control-plane/portfolio").status_code == 200
+    gateway = client.get("/api/v1/gateway/summary?scope=estate", headers=headers)
+    assert gateway.status_code == 503
+    assert gateway.json()["unavailable_reason"] == "source_unavailable"
     overview = client.get("/api/v1/overview", headers=headers)
     schedule = client.get(SCHEDULE_TARGET, headers=headers)
 
