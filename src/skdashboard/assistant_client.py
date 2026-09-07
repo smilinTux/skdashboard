@@ -88,6 +88,7 @@ class AssistantProvenance(BaseModel):
 
 class AssistantDelta(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    role: Literal["assistant"] | None = None
     content: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
 
 
@@ -122,6 +123,8 @@ class AssistantStreamChunk(BaseModel):
     object: Literal["chat.completion.chunk"]
     created: int
     model: str = Field(min_length=1, max_length=256)
+    requested_model: str | None = Field(default=None, min_length=1, max_length=256)
+    system_fingerprint: str | None = Field(default=None, max_length=256)
     choices: list[AssistantChoice] = Field(min_length=1, max_length=4)
 
 

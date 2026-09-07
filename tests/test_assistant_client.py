@@ -506,6 +506,28 @@ def test_request_serializes_stream_true_and_no_tools(mocker):
     assert json.loads(request.call_args.kwargs["data"]) ["stream"] is True
 
 
+def test_stream_accepts_live_gateway_attribution_and_assistant_role(mocker):
+    client = AssistantClient()
+    response = mocker.MagicMock()
+    response.headers = {
+        "X-SK-Model-Served": "qwen-test",
+        "X-SK-Backend": "backend-test",
+        "X-SK-Logical-Route": "sk-dashboard-assistant",
+        "X-SK-Rail": "local",
+    }
+    response.__iter__.return_value = iter([
+        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n',
+        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n',
+        b'data: [DONE]\n',
+    ])
+    mocker.patch("urllib.request.urlopen", return_value=response)
+
+    assert list(client.chat_stream(
+        [{"role": "user", "content": "hello"}],
+        require_retrieval_traces=False,
+    )) == ["ok", ""]
+
+
 def test_incomplete_stream_releases_no_partial_content(mocker):
     client = AssistantClient()
     response = mocker.MagicMock()
