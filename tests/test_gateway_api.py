@@ -240,7 +240,6 @@ def test_malformed_node_inventory_fails_closed_as_partial():
         ("runtime_revision", ""),
         ("version", "x" * 129),
         ("gateway_version", False),
-        ("configuration_drift", "healthy"),
     ],
 )
 def test_malformed_node_detail_values_fail_closed(field, value):
@@ -255,6 +254,28 @@ def test_malformed_node_detail_values_fail_closed(field, value):
 
     result = project(
         [{"observed_at": observed.isoformat(), "payload_hash": "d" * 64, "facts": facts}],
+        parse_query(_request()),
+        timeseries=False,
+    )
+
+    assert result["state"] == "partial"
+    assert result["nodes"] == []
+    assert result["summary"] is None
+
+
+@pytest.mark.parametrize("value", [[], {}, True, "", "x" * 129, "healthy"])
+def test_malformed_configuration_drift_fails_closed_without_exception(value):
+    observed = datetime.now(timezone.utc) - timedelta(seconds=5)
+    facts = {
+        "breakdowns": {"models": [], "nodes": ["chiap01"]},
+        "gateway": {
+            "backend_health": {},
+            "nodes": {"chiap01": {"configuration_drift": value}},
+        },
+    }
+
+    result = project(
+        [{"observed_at": observed.isoformat(), "payload_hash": "e" * 64, "facts": facts}],
         parse_query(_request()),
         timeseries=False,
     )

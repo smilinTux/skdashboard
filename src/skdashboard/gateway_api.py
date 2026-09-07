@@ -228,7 +228,12 @@ def _facts_are_well_formed(facts: Any) -> bool:
             )
             or (
                 detail.get("configuration_drift") is not None
-                and detail["configuration_drift"] not in CONFIGURATION_DRIFT_STATES
+                and (
+                    not isinstance(detail["configuration_drift"], str)
+                    or not detail["configuration_drift"]
+                    or len(detail["configuration_drift"]) > MAX_NODE_FIELD_LENGTH
+                    or detail["configuration_drift"] not in CONFIGURATION_DRIFT_STATES
+                )
             )
             for node, detail in node_details.items()
         )
