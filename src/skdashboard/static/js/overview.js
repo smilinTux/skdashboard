@@ -302,11 +302,15 @@ function openEstateEvidence(siloId, trigger) {
 }
 
 function coverageText(coverage) {
-  if (!coverage || coverage.percent == null) return "Coverage unavailable";
+  if (!coverage) return "Coverage unavailable";
+  const percent = coverage.percent == null && Number.isFinite(coverage.expected) && coverage.expected > 0 && Number.isFinite(coverage.reporting)
+    ? Math.round((coverage.reporting / coverage.expected) * 100)
+    : coverage.percent;
+  if (percent == null) return "Coverage unavailable";
   if (coverage.population === "declared_sources") {
-    return `${coverage.reporting} of ${coverage.expected} sources observed (${coverage.percent}%)`;
+    return `${coverage.reporting} of ${coverage.expected} sources observed (${percent}%)`;
   }
-  return `${coverage.reporting} of ${coverage.expected} reporting (${coverage.percent}%)`;
+  return `${coverage.reporting} of ${coverage.expected} reporting (${percent}%)`;
 }
 
 function clearLegacyOverview(message) {

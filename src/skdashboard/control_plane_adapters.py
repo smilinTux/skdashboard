@@ -611,7 +611,15 @@ def _local_readers(
 
     def usage(lane: str) -> dict:
         raw = dashboard_skcounter.get_ai_usage(home, {"lane": lane})
-        if lane == "gateway_observed" and not raw.get("observation_count"):
+        collectors = raw.get("collectors") if isinstance(raw.get("collectors"), list) else []
+        has_aged_collector = any(
+            item.get("status") in {"delayed", "stale"}
+            for item in collectors
+            if isinstance(item, dict)
+        )
+        if lane == "gateway_observed" and (
+            not raw.get("observation_count") or has_aged_collector
+        ):
             from .dashboard_observability import collect_gateway
 
             telemetry = collect_gateway()

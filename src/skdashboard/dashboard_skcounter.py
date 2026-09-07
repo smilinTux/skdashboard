@@ -851,10 +851,21 @@ def get_ai_usage(
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     filters = {key: str(value) for key, value in (filters or {}).items() if value}
     observations, rows, errors, index = _read_observations(home)
-    rows = _latest_rows(rows)
-    available_lanes = sorted({row["lane"] for row in rows})
     requested_lane = filters.get("lane", "harness_reported")
     lane = requested_lane if requested_lane in LANES else "harness_reported"
+    if index["status"] in {"current", "partial", "empty"} and not any(
+        observation["lane"] == lane for observation in observations
+    ):
+        fallback_observations, fallback_rows, fallback_errors = _read_acknowledged_snapshots(
+            _data_root(home)
+        )
+        observations.extend(
+            observation for observation in fallback_observations if observation["lane"] == lane
+        )
+        rows.extend(row for row in fallback_rows if row["lane"] == lane)
+        errors.extend(fallback_errors)
+    rows = _latest_rows(rows)
+    available_lanes = sorted({row["lane"] for row in rows})
     lane_rows = [row for row in rows if row["lane"] == lane]
     model_rows_all = [row for row in lane_rows if row["view"] == "models"]
     facets = {
