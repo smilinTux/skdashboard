@@ -21,7 +21,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "skcp-50-cdp-"));
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "skcp-50-home-"));
 const artifactDir = path.resolve(process.env.SKCP50_ARTIFACT_DIR || "/tmp/skcp50-browser");
-const port = 17888;
+const port = 17000 + (process.pid % 1000);
 const routes = [
   "/control-plane/now",
   "/control-plane/portfolio?role=project-manager&scope=estate&window=latest&baseline=none&service=all",
@@ -31,8 +31,8 @@ const routes = [
   "/control-plane/governance?role=governance&scope=estate&window=latest&baseline=none&service=all",
   "/control-plane/reports?role=project-manager&scope=estate&window=latest&baseline=none&service=all&report_type=all",
 ];
-const python = `from pathlib import Path\nimport uvicorn\nfrom skdashboard.dashboard import create_app\nuvicorn.run(create_app(Path(${JSON.stringify(home)})), host="127.0.0.1", port=${port}, log_level="error")`;
-const pythonPath = [process.env.HOME + "/work/capauth/src", path.join(repo, "src")].join(path.delimiter);
+const python = `from pathlib import Path\nimport uvicorn\nfrom skdashboard.dashboard import create_app\nuvicorn.run(create_app(Path(${JSON.stringify(home)}), control_plane_authorizer=lambda bearer, *_: bearer == "accessibility-cdp"), host="127.0.0.1", port=${port}, log_level="error")`;
+const pythonPath = [process.env.PYTHONPATH, path.join(repo, "src")].filter(Boolean).join(path.delimiter);
 const server = spawn(process.env.PYTHON || "python", ["-c", python], { cwd: repo, env: { ...process.env, PYTHONPATH: pythonPath }, stdio: "ignore" });
 const chrome = spawn(process.env.CHROME_PATH || "/usr/bin/google-chrome", ["--headless=new", "--no-sandbox", "--disable-gpu", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdio: "ignore" });
 
@@ -63,11 +63,13 @@ try {
     return result.result.value;
   };
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
+  await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer accessibility-cdp", Origin: "https://10.0.0.139:7778" } });
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   const matrix = [];
   for (const route of routes) {
     await send("Page.navigate", { url: `http://127.0.0.1:${port}${route}` });
-    await waitFor(async () => evaluate("document.readyState === 'complete'").catch(() => false), `Page did not load: ${route}`);
+    const expectedPath = JSON.stringify(new URL(route, "http://dashboard.invalid").pathname);
+    await waitFor(async () => evaluate(`location.pathname === ${expectedPath} && document.readyState === 'complete'`).catch(() => false), `Page did not load: ${route}`);
     await evaluate("document.activeElement?.blur()");
     await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });

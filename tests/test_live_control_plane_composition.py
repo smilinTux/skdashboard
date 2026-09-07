@@ -28,7 +28,6 @@ from skdashboard.live_control_plane import (
     FLEET_CHAT_TARGET,
     RELIABILITY_TARGET,
     RESOURCE_TYPE,
-    REPORTS_CAPABILITY,
     SCHEDULE_TARGET,
     TARGET,
     InProcessOperatorBridge,
@@ -608,7 +607,8 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     assert schedule.status_code == 200, schedule.text
     assert reports.status_code == 200, reports.text
     assert governance.status_code == 200, governance.text
-    assert reliability.status_code == 200, reliability.text
+    assert reliability.status_code == 503, reliability.text
+    assert reliability.json()["code"] == "RELIABILITY_UNAVAILABLE"
     assert architecture.status_code == 200, architecture.text
     schedule_projection = schedule.json()
     assert schedule_projection["items"][0]["item_id"] == source.id
