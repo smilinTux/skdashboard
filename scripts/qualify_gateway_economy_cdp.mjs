@@ -152,5 +152,5 @@ try {
   chrome.kill("SIGTERM");
   await new Promise((resolve) => { if (chrome.exitCode !== null) resolve(); else chrome.once("exit", resolve); });
   await new Promise((resolve) => server.close(resolve));
-  fs.rmSync(profile, { recursive: true, force: true });
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
