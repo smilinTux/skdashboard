@@ -121,6 +121,10 @@ SPECS = (
             "tokens_total",
             "cost_usd",
             "cost_state",
+            "latency_ms",
+            "cache_ratio",
+            "error_count",
+            "denial_count",
             "observation_count",
             "fresh_collectors",
             "delayed_collectors",
@@ -135,6 +139,10 @@ SPECS = (
             "tokens_total",
             "cost_usd",
             "cost_state",
+            "latency_ms",
+            "cache_ratio",
+            "error_count",
+            "denial_count",
             "observation_count",
             "fresh_collectors",
             "delayed_collectors",
@@ -633,6 +641,10 @@ def _local_readers(
         return aggregate_reader(
             {
                 "tokens_total": summary.get("total", 0),
+                "latency_ms": summary.get("duration_ms") if summary.get("duration_ms") is not None else None,
+                "cache_ratio": summary.get("cache_ratio") if summary.get("cache_ratio") is not None else None,
+                "error_count": len(raw.get("errors", [])),
+                "denial_count": raw.get("denial_count") if isinstance(raw.get("denial_count"), int) else None,
                 "cost_usd": summary.get("cost_usd")
                 if summary.get("cost_state") == "available"
                 else None,
