@@ -38,6 +38,26 @@ def test_query_defaults_to_authenticated_gateway_grants():
     assert query["scope"] == "tenant-one"
 
 
+def test_backend_filter_is_canonical_and_matches_observed_rows():
+    query = parse_query(_request({"backend": "chiap08-qwen38"}))
+    observed = (query["end"] - timedelta(seconds=1)).isoformat()
+    matching = {
+        "observed_at": observed,
+        "payload_hash": "a" * 64,
+        "facts": {"daily_token_rows": [{"backend": "chiap08-qwen38"}]},
+    }
+    other = {
+        "observed_at": observed,
+        "payload_hash": "b" * 64,
+        "facts": {"daily_token_rows": [{"backend": "other"}]},
+    }
+
+    result = project([matching, other], query, timeseries=True)
+
+    assert result["filters"] == {"backend": "chiap08-qwen38"}
+    assert len(result["items"]) == 1
+
+
 def test_per_model_snapshot_joins_observed_facts_and_marks_missing_unknown():
     facts = {
         "breakdowns": {"models": ["qwen3.8"]},

@@ -1,5 +1,6 @@
 import { esc, getJSON } from "./api.js";
 import { DEFAULT_CONTEXT, apiUrl, normalizedContext, parseUrl, responseMatches, safeSearch } from "./control_plane_scope.js";
+import { gatewayFilters, gatewayURL } from "./gateway_client.js";
 
 const SOURCES = Object.freeze([
   { id: "skcounter.harness", label: "Harness-reported", unit: "tokens and USD" },
@@ -115,6 +116,7 @@ function apply(next, mode = "replace") {
   url.pathname = "/control-plane/ai";
   url.search = safeSearch(context, { includeSavedView: false });
   history[`${mode}State`]({}, "", url);
+  document.getElementById("ai-gateway-evidence").href = gatewayURL(gatewayFilters(url.search));
 }
 
 function initialize() {

@@ -5,6 +5,7 @@
 // (info) next to a node running something it was told not to run (error), and
 // the operator would learn to ignore both.
 import { esc, getJSON, toast } from "./api.js";
+import { gatewayFilters, gatewayFreshness, gatewayValue, gatewayViewState, readGateway } from "./gateway_client.js";
 
 const GRADES = ["error", "warn", "info"];
 const GRADE_LABEL = { error: "Forbidden", warn: "Missing required", info: "Unexpected" };
@@ -22,7 +23,7 @@ async function load() {
   try {
     const [drift, gateway] = await Promise.allSettled([
       getJSON("/api/fleet/drift"),
-      getJSON("/api/v1/gateway/summary"),
+      readGateway(gatewayFilters(location.search), undefined, "summary"),
     ]);
     if (drift.status !== "fulfilled") throw drift.reason;
     d = drift.value;
@@ -54,13 +55,14 @@ function renderGateway(snapshot, error) {
   const body = document.getElementById("fl-gateway");
   const summary = document.getElementById("fl-gateway-summary");
   if (!snapshot) {
-    summary.textContent = "Gateway totals unavailable";
+    summary.textContent = `${gatewayViewState(error)} | Gateway totals unavailable`;
     body.innerHTML = `<div class="emptymsg">Protected gateway observations are unavailable${error ? `: ${esc(error.message)}` : "."} No node is assumed healthy.</div>`;
     return;
   }
   const nodes = snapshot.nodes || [];
   const totals = snapshot.node_totals || {};
-  summary.textContent = `${text(totals.named)} named | ${text(totals.current)} current | ${text(totals.stale)} stale | ${text(totals.missing)} missing`;
+  const freshness = gatewayFreshness(snapshot);
+  summary.textContent = `${gatewayViewState({ ...snapshot, state: freshness.state })} | ${text(totals.named)} named | ${text(totals.current)} current | ${text(totals.stale)} stale | ${text(totals.missing)} missing | evidence ${gatewayValue(snapshot.evidence?.watermark)}`;
   if (!nodes.length) {
     body.innerHTML = `<div class="emptymsg">No named gateway node is present in the protected snapshot. Snapshot state: ${esc(text(snapshot.state))}.</div>`;
     return;

@@ -22,7 +22,7 @@ MAX_INDEX_BYTES = 512 * 1024
 MAX_OBSERVATION_BYTES = 2 * 1024 * 1024
 QUERY_TIMEOUT_SECONDS = 2.0
 TTL_SECONDS = 180
-ALLOWED_FILTERS = frozenset({"model", "provider", "node", "client", "app", "rail"})
+ALLOWED_FILTERS = frozenset({"model", "backend", "provider", "node", "client", "app", "rail"})
 ALLOWED_ROLES = frozenset({"operator", "viewer", "auditor"})
 MAX_NODE_FIELD_LENGTH = 128
 NODE_TEXT_FIELDS = frozenset(
@@ -459,6 +459,13 @@ def _matches(observation: dict[str, Any], filters: dict[str, str]) -> bool:
         "rail": "rails",
     }
     for key, expected in filters.items():
+        if key == "backend":
+            rows = facts.get("daily_token_rows", []) if isinstance(facts, dict) else []
+            if not isinstance(rows, list) or not any(
+                isinstance(row, dict) and row.get("backend") == expected for row in rows
+            ):
+                return False
+            continue
         values = (
             breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
         )

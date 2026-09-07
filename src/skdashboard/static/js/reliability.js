@@ -1,4 +1,5 @@
 import { esc, getJSON } from "./api.js";
+import { gatewayFilters, gatewayURL } from "./gateway_client.js";
 
 const BASE = Object.freeze({ role: "operator", scope: "estate", window: "latest", baseline: "none", service: "all" });
 const ROLES = new Set(["operator", "architect", "service-owner"]);
@@ -22,6 +23,7 @@ function updateContext(role, mode = "push") {
   url.search = query();
   history[`${mode}State`]({}, "", url);
   document.getElementById("reliability-role").value = role;
+  document.getElementById("reliability-gateway-evidence").href = gatewayURL(gatewayFilters(url.search));
 }
 
 function value(metric) {
