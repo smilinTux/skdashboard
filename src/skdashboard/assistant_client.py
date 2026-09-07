@@ -125,6 +125,7 @@ class AssistantStreamChunk(BaseModel):
     model: str = Field(min_length=1, max_length=256)
     requested_model: str | None = Field(default=None, min_length=1, max_length=256)
     system_fingerprint: str | None = Field(default=None, max_length=256)
+    timings: dict[str, int | float] | None = None
     choices: list[AssistantChoice] = Field(min_length=1, max_length=4)
 
 
