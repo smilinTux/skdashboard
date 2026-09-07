@@ -49,9 +49,7 @@ def test_per_model_snapshot_joins_observed_facts_and_marks_missing_unknown():
     row = _per_model_snapshot(facts)[0]
 
     assert row["model"] == "qwen3.8"
-    assert row["backends"] == [
-        {"backend": "chiap08-qwen38", "health": {"status": "ok"}}
-    ]
+    assert row["backends"] == [{"backend": "chiap08-qwen38", "health": {"status": "ok"}}]
     assert row["latency_ms"]["chiap08-qwen38/qwen3.8"]["p95"] == 400
     assert row["catalog"] == {"state": "unknown", "reason": "catalog_not_observed"}
     assert row["claim_health"] == {
@@ -130,3 +128,87 @@ def test_non_string_observed_at_values_are_omitted_without_exception():
     assert result["unavailable_reason"] == "malformed_observations_omitted"
     assert result["coverage"] == {"returned": 0, "examined": 4, "malformed": 4}
     assert result["models"] == []
+
+
+def test_summary_projects_per_node_freshness_version_and_separate_drift():
+    observed = datetime.now(timezone.utc) - timedelta(seconds=5)
+    facts = {
+        "breakdowns": {"models": ["qwen3.8"], "nodes": ["chiap01", "chiap08"]},
+        "daily_token_rows": [{"node": "chiap08", "model": "qwen3.8", "backend": "vllm"}],
+        "gateway": {
+            "backend_health": {},
+            "expected_nodes": ["chiap01", "chiap02", "chiap08"],
+            "nodes": {
+                "chiap08": {
+                    "backend": "vllm",
+                    "served_model": "qwen3.8",
+                    "transport_profile": "skgateway-local",
+                    "runtime_revision": "a" * 40,
+                    "version": "0.2.0",
+                    "configuration_drift": "clean",
+                }
+            },
+        },
+    }
+    result = project(
+        [{"observed_at": observed.isoformat(), "payload_hash": "a" * 64, "facts": facts}],
+        parse_query(_request()),
+        timeseries=False,
+    )
+
+    nodes = {row["node_id"]: row for row in result["nodes"]}
+    assert nodes["chiap08"]["telemetry_state"] == "current"
+    assert nodes["chiap08"]["backend"] == "vllm"
+    assert nodes["chiap08"]["served_model"] == "qwen3.8"
+    assert nodes["chiap08"]["transport_profile"] == "skgateway-local"
+    assert nodes["chiap08"]["runtime_revision"] == "a" * 40
+    assert nodes["chiap08"]["configuration_drift"] == "clean"
+    assert nodes["chiap01"]["telemetry_state"] == "current"
+    assert nodes["chiap01"]["backend"] is None
+    assert nodes["chiap01"]["configuration_drift"] is None
+    assert nodes["chiap02"]["telemetry_state"] == "missing"
+    assert nodes["chiap02"]["observed_at"] is None
+    assert result["node_totals"] == {
+        "named": 3,
+        "current": 2,
+        "stale": 0,
+        "missing": 1,
+        "unknown": 0,
+    }
+
+
+def test_per_node_snapshot_marks_old_observation_stale_without_changing_drift():
+    observed = datetime.now(timezone.utc) - timedelta(seconds=181)
+    facts = {
+        "breakdowns": {"models": [], "nodes": ["chiap01"]},
+        "gateway": {
+            "backend_health": {},
+            "nodes": {"chiap01": {"configuration_drift": "clean"}},
+        },
+    }
+    result = project(
+        [{"observed_at": observed.isoformat(), "payload_hash": "b" * 64, "facts": facts}],
+        parse_query(_request()),
+        timeseries=False,
+    )
+
+    assert result["nodes"][0]["telemetry_state"] == "stale"
+    assert result["nodes"][0]["configuration_drift"] == "clean"
+
+
+def test_malformed_node_inventory_fails_closed_as_partial():
+    observed = datetime.now(timezone.utc) - timedelta(seconds=5)
+    facts = {
+        "breakdowns": {"models": [], "nodes": ["chiap01"]},
+        "gateway": {"backend_health": {}, "expected_nodes": "chiap01"},
+    }
+
+    result = project(
+        [{"observed_at": observed.isoformat(), "payload_hash": "c" * 64, "facts": facts}],
+        parse_query(_request()),
+        timeseries=False,
+    )
+
+    assert result["state"] == "partial"
+    assert result["nodes"] == []
+    assert result["coverage"]["malformed"] == 1
