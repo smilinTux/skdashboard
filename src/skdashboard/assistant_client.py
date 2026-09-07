@@ -67,6 +67,7 @@ class AssistantRequest(BaseModel):
     max_tokens: int = Field(default=1400, ge=1, le=4096)
     temperature: float = Field(default=0.3, ge=0.0, le=1.0)
     stream: Literal[True] = True
+    response_format: dict[str, object] | None = None
 
 
 class RetrievalTrace(BaseModel):
@@ -90,6 +91,7 @@ class AssistantDelta(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     role: Literal["assistant"] | None = None
     content: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
+    token_ids: list[int] | None = Field(default=None, max_length=4096)
 
 
 class AssistantChoice(BaseModel):
@@ -98,6 +100,9 @@ class AssistantChoice(BaseModel):
     delta: AssistantDelta | None = None
     message: dict[str, object] | None = None
     finish_reason: Literal["stop", "length", "error"] | None = None
+    logprobs: dict[str, object] | None = None
+    stop_reason: str | int | None = Field(default=None, max_length=256)
+    token_ids: list[int] | None = Field(default=None, max_length=4096)
 
 
 class AssistantResponse(BaseModel):
@@ -126,6 +131,8 @@ class AssistantStreamChunk(BaseModel):
     requested_model: str | None = Field(default=None, min_length=1, max_length=256)
     system_fingerprint: str | None = Field(default=None, max_length=256)
     timings: dict[str, int | float] | None = None
+    prompt_token_ids: list[int] | None = Field(default=None, max_length=32768)
+    prompt_text: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
     choices: list[AssistantChoice] = Field(min_length=1, max_length=4)
 
 
@@ -180,10 +187,34 @@ class AssistantClient:
         return {"actor": _safe(actor), "card_id": _safe(card_id) if card_id else None,
                 **{key: _safe(value) for key, value in values.items()}}
 
-    def _request(self, messages: list[dict], actor: str, card_id: str | None) -> bytes:
+    def _request(
+        self,
+        messages: list[dict],
+        actor: str,
+        card_id: str | None,
+        *,
+        max_tokens: int = 1400,
+        json_response: bool = False,
+        response_schema: dict[str, object] | None = None,
+    ) -> bytes:
         try:
             typed = [AssistantRequestMessage(**message) for message in messages]
-            payload = AssistantRequest(messages=typed).model_dump_json(exclude_none=True).encode()
+            payload = AssistantRequest(
+                messages=typed,
+                max_tokens=max_tokens,
+                response_format=(
+                    {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "typed_response",
+                            "strict": True,
+                            "schema": response_schema,
+                        },
+                    }
+                    if response_schema is not None
+                    else ({"type": "json_object"} if json_response else None)
+                ),
+            ).model_dump_json(exclude_none=True).encode()
         except Exception as exc:
             raise AssistantClientError("Invalid assistant request", "invalid_request",
                                        self._audit(actor, card_id, error=type(exc).__name__)) from exc
@@ -206,14 +237,31 @@ class AssistantClient:
                               self._audit(actor, card_id, error=type(exc).__name__)) from exc
 
     def chat(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
-             *, require_retrieval_traces: bool = True) -> str:
+             *, require_retrieval_traces: bool = True, max_tokens: int = 1400,
+             json_response: bool = False,
+             response_schema: dict[str, object] | None = None) -> str:
         """Collect a fully validated stream; the wire request always has stream=true."""
         return "".join(self.chat_stream(messages, actor=actor, card_id=card_id,
-                                        require_retrieval_traces=require_retrieval_traces))
+                                        require_retrieval_traces=require_retrieval_traces,
+                                        max_tokens=max_tokens, json_response=json_response,
+                                        response_schema=response_schema))
 
     def chat_stream(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
-                    *, require_retrieval_traces: bool = True):
-        response = self._urlopen(self._request(messages, actor, card_id), actor, card_id)
+                    *, require_retrieval_traces: bool = True, max_tokens: int = 1400,
+                    json_response: bool = False,
+                    response_schema: dict[str, object] | None = None):
+        response = self._urlopen(
+            self._request(
+                messages,
+                actor,
+                card_id,
+                max_tokens=max_tokens,
+                json_response=json_response,
+                response_schema=response_schema,
+            ),
+            actor,
+            card_id,
+        )
         try:
             provenance = self._provenance(response, actor, card_id)
             tokens, terminal_finished, done_seen = [], False, False

@@ -26,14 +26,14 @@ class NowBriefReference(BaseModel):
 
 class NowBriefInsight(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    summary: str = Field(min_length=1, max_length=500)
-    sources: list[NowBriefReference] = Field(min_length=1, max_length=8)
-    uncertainty: str = Field(min_length=1, max_length=500)
+    summary: str = Field(min_length=1, max_length=240)
+    sources: list[NowBriefReference] = Field(min_length=1, max_length=2)
+    uncertainty: str = Field(min_length=1, max_length=240)
 
 
 class NowBriefNextStep(NowBriefInsight):
     rank: int = Field(ge=1, le=10)
-    proposal: str = Field(min_length=1, max_length=500)
+    proposal: str = Field(min_length=1, max_length=240)
 
 
 class NowOperatorBrief(BaseModel):
@@ -41,11 +41,11 @@ class NowOperatorBrief(BaseModel):
     schema_version: Literal["skdashboard.now-operator-brief.v1"]
     status: Literal["proposal", "abstained"]
     generated_at: str
-    conditions: list[NowBriefInsight] = Field(default_factory=list, max_length=8)
-    risks: list[NowBriefInsight] = Field(default_factory=list, max_length=8)
-    anomalies: list[NowBriefInsight] = Field(default_factory=list, max_length=8)
-    next_steps: list[NowBriefNextStep] = Field(default_factory=list, max_length=10)
-    abstention: str | None = Field(default=None, max_length=500)
+    conditions: list[NowBriefInsight] = Field(default_factory=list, max_length=1)
+    risks: list[NowBriefInsight] = Field(default_factory=list, max_length=1)
+    anomalies: list[NowBriefInsight] = Field(default_factory=list, max_length=1)
+    next_steps: list[NowBriefNextStep] = Field(default_factory=list, max_length=3)
+    abstention: str | None = Field(default=None, max_length=240)
 
 
 def now_operator_brief(overview: dict, actor: str = "operator") -> dict:
@@ -81,7 +81,9 @@ def now_operator_brief(overview: dict, actor: str = "operator") -> dict:
                 "Return only JSON matching skdashboard.now-operator-brief.v1. Analyze only "
                 "the supplied aggregate facts. Include source_id, observed_at, freshness, and "
                 "uncertainty for every insight. Rank next steps as read-only proposals. Abstain "
-                "when evidence is insufficient. Never emit commands, tools, or actions."
+                "when evidence is insufficient. Return no more than one condition, one risk, "
+                "one anomaly, and three next steps. Be concise. Never emit commands, tools, "
+                "or actions."
             ),
         },
         {"role": "user", "content": f"CURRENT NOW FACTS:\n{context}"},
@@ -92,6 +94,8 @@ def now_operator_brief(overview: dict, actor: str = "operator") -> dict:
             actor=actor,
             card_id="4e9bdbe3",
             require_retrieval_traces=False,
+            max_tokens=600,
+            response_schema=NowOperatorBrief.model_json_schema(),
         )
     )
     allowed_sources = {fact["source_id"] for fact in facts}
