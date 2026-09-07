@@ -34,6 +34,8 @@ class GatewayQueryError(ValueError):
 
 
 def _parse_time(value: str, name: str) -> datetime:
+    if not isinstance(value, str):
+        raise GatewayQueryError(f"malformed_{name}")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:

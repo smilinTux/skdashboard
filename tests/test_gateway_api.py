@@ -111,3 +111,22 @@ def test_malformed_nested_gateway_facts_are_omitted_without_exception():
     assert result["unavailable_reason"] == "malformed_observations_omitted"
     assert result["coverage"] == {"returned": 0, "examined": 2, "malformed": 2}
     assert result["models"] == []
+
+
+def test_non_string_observed_at_values_are_omitted_without_exception():
+    query = parse_query(_request())
+    malformed = [
+        {
+            "observed_at": value,
+            "payload_hash": str(index) * 64,
+            "facts": {"breakdowns": {"models": ["codex"]}},
+        }
+        for index, value in enumerate((None, 1, {}, []), start=1)
+    ]
+
+    result = project(malformed, query, timeseries=False)
+
+    assert result["state"] == "partial"
+    assert result["unavailable_reason"] == "malformed_observations_omitted"
+    assert result["coverage"] == {"returned": 0, "examined": 4, "malformed": 4}
+    assert result["models"] == []
