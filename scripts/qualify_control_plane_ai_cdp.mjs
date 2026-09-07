@@ -230,7 +230,7 @@ try {
 } finally {
   await Promise.all([stop(server), stop(chrome)]);
   const cleanup = (target) =>
-    fs.rmSync(target, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   cleanup(home);
   cleanup(profile);
 }
