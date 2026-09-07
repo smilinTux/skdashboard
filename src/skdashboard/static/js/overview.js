@@ -255,10 +255,13 @@ async function analyzeNow() {
   const button = document.getElementById("ai-analyze-button");
   const panel = document.getElementById("ai-analysis");
   const status = document.getElementById("ai-analysis-status");
+  const alert = document.getElementById("ai-analysis-alert");
   const body = document.getElementById("ai-analysis-body");
   button.disabled = true;
   panel.hidden = false;
   status.textContent = "Analyzing current authorized metrics...";
+  alert.hidden = true;
+  alert.textContent = "";
   body.replaceChildren();
   try {
     const brief = await getJSON(`/api/v1/now/ai-brief?${safeSearch(currentContext)}`);
@@ -272,7 +275,9 @@ async function analyzeNow() {
       briefList("Recommended next steps", brief.next_steps || [], true),
     ].join("") || "<p>No supported insight was returned.</p>";
   } catch (error) {
-    status.textContent = `AI analysis unavailable: ${error.message}. The evidence brief above remains current.`;
+    status.textContent = "AI analysis unavailable. The evidence brief above remains current.";
+    alert.textContent = "The LLM is not configured, cannot be reached, or returned an invalid response. Check SKGateway and the sk-m-public route, then retry.";
+    alert.hidden = false;
   } finally {
     button.disabled = false;
   }
