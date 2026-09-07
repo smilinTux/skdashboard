@@ -82,6 +82,7 @@ uvicorn.run(create_app(Path(${JSON.stringify(home)})), host="127.0.0.1", port=${
     await send("Page.enable");
     await send("Runtime.enable");
     await send("Network.enable");
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer nav-cdp" } });
 
     const surfaces = [
       ["Now", "/control-plane/now"],

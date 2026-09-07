@@ -55,6 +55,9 @@ def test_now_workspace_declares_exact_breadth_and_fail_closed_ai_boundary() -> N
     assert 'url.pathname = "/control-plane/now"' in js
     assert 'scope: "estate", window: "latest", baseline: "none", service: "all"' in js
     assert "Expected 16 bounded adapter observations" in js
+    assert "renderAiBrief(response.items)" in js
+    assert "Request activity is not treated as an accepted outcome or verified effect" in js
+    assert "No impact estimate or action authorization" in js
     assert "No silo is assumed healthy" in js
     assert "item.population" in js
     assert "coverage.reporting, 0" not in js

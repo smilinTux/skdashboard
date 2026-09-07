@@ -40,6 +40,22 @@
     </div>
 
     <div class="kpirow" id="fl-kpi"></div>
+    <p class="fl-reason" id="fl-provenance">Loading fleet source provenance.</p>
+
+    <div class="card" style="margin-top:14px">
+      <h2>Running fleet workers <span class="badge">SKCoord claim and heartbeat truth</span></h2>
+      <div class="kpirow fl-runtime-kpi" id="fl-runtime-kpi"></div>
+      <div class="fl-runtime-grid">
+        <div><h3>Nodes</h3><div id="fl-runtime-nodes"></div></div>
+        <div><h3>Lanes</h3><div id="fl-runtime-lanes"></div></div>
+      </div>
+      <div class="cbody" id="fl-workers"><div class="spinner"></div></div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>Model runtime <span class="badge">separate SKGateway and vLLM attribution</span></h2>
+      <div class="cbody" id="fl-inference"><div class="spinner"></div></div>
+    </div>
 
     <section class="card" style="margin-top:14px" aria-labelledby="gateway-nodes-title">
       <h2 id="gateway-nodes-title">Gateway observations <span class="badge">protected per-node snapshot</span></h2>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SKDashboard | Observability</title>
+  <link rel="stylesheet" href="/static/css/observability.css">
+</head>
+<body>
+  <div class="obs-shell">
+    <header class="obs-header">
+      <div><a class="back" href="/control-plane/now">SKDashboard</a><p class="eyebrow">LIVE OPERATIONS</p><h1>Gateway observability</h1><p class="lede">SKGateway routing and vLLM capacity, freshness, and model attribution.</p></div>
+      <div class="header-actions"><span id="truth" class="status unknown">Loading</span><a id="obs-sign-in" class="button" hidden href="/auth/login">Sign in</a><a class="button" href="/assistant">Ask Assistant</a></div>
+    </header>
+    <main>
+      <section id="summary" class="metric-grid" aria-label="Operational summary"><div class="empty">Loading live telemetry...</div></section>
+      <section class="source-grid" aria-label="Telemetry sources">
+        <article class="panel"><div class="panel-head"><h2>SKGateway</h2><span id="gateway-state" class="status unknown">Waiting</span></div><div id="gateway" class="source-body"><div class="empty">Waiting for authenticated telemetry.</div></div></article>
+        <article class="panel"><div class="panel-head"><h2>vLLM and KV cache</h2><span id="vllm-state" class="status unknown">Waiting</span></div><div id="vllm" class="source-body"><div class="empty">Waiting for authenticated telemetry.</div></div></article>
+      </section>
+      <section class="panel"><div class="panel-head"><div><h2>Model and backend attribution</h2><p class="muted">Reported by the router, not inferred by the browser.</p></div></div><div id="attribution" class="table-wrap"><div class="empty">No data yet.</div></div></section>
+      <p id="freshness" class="freshness" role="status" aria-live="polite">Refreshing every 15 seconds.</p>
+    </main>
+  </div>
+  <script type="module" src="/static/js/observability.js"></script>
+</body>
+</html>

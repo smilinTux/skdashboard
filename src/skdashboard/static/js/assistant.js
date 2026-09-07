@@ -1,6 +1,7 @@
 // Assistant console: POST a prompt, stream the answer over SSE (read from the
 // fetch body) and render tokens live.
 import { esc, toast, authHeaders } from "./api.js";
+import { renderSignInAction } from "./read_only_api.js";
 
 const chat = document.getElementById("chat");
 const form = document.getElementById("ask-form");
@@ -33,7 +34,8 @@ async function ask(prompt) {
       headers: await authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ prompt }),
     });
-    if (!resp.ok || !resp.body) throw new Error("assistant unavailable");
+    if (resp.status === 401 || resp.status === 503) void renderSignInAction(true);
+    if (!resp.ok || !resp.body) throw new Error(`assistant unavailable (${resp.status})`);
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
