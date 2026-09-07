@@ -36,6 +36,17 @@ SKDashboard reads append-only `skcounter.snapshot.v1` JSON observations from `${
 
 The dashboard is read-only. A separate central collector validates CapAuth, transport, replay, schema, and payload size before writing observations. SKDashboard performs defensive validation again and rejects unknown fields, raw-data fields, unsafe links, oversized files, unsupported lanes, and unsupported schemas.
 
+The SKCounter gateway producer publishes `latest-observation-index.jsonl` beside
+its private `sent/` archive. Transport that index and only its referenced files
+to a private local staging directory, then run
+`skdashboard-compose-skcounter-gateway`. The composer has no network or
+credential access. It accepts only `gateway_observed` rows, validates each row
+against the referenced snapshot, preserves the exact snapshot bytes under
+`observations/gateway/`, and atomically publishes the hashed
+`observation-index/latest.json` generation consumed by the dashboard. Existing
+non-gateway index entries are retained. A malformed, missing, mismatched, or
+path-escaping source fails closed without publishing a new index generation.
+
 The projection retains only the newest observation for each logical key within one view. Model, daily, hourly, agent, session, and time-metric views can overlap and are never combined. The main total uses only the `models` view. Time series use only `daily` and `hourly` views.
 
 ## Privacy-safe drilldown

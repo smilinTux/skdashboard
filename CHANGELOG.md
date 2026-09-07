@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a fail-closed projection for transported SKCounter gateway indexes into
+  the read-only dashboard data root.
 - Render truthful token, cost, and cache aggregates for the separate
   harness-reported and gateway-observed AI lanes while leaving unobserved
   latency, denial, and request-error measurements explicitly unknown.

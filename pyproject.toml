@@ -35,6 +35,7 @@ dependencies = [
 [project.scripts]
 skdashboard-read-only = "skdashboard.read_only:main"
 skdashboard-control-plane-mcp = "skdashboard.control_plane_mcp:main"
+skdashboard-compose-skcounter-gateway = "skdashboard.skcounter_gateway_compose:main"
 
 
 [project.urls]
