@@ -26,11 +26,21 @@ function updateContext(role, mode = "push") {
 
 function value(metric) {
   if (!metric || metric.value == null) return "Unknown";
+  if (metric.metric_id === "gateway.latency_percentiles") {
+    return ["p50", "p95", "p99"].map((key) => `${key} ${metric.value[key]} ms`).join("; ");
+  }
   return `${metric.value}${metric.unit === "percent" ? "%" : ` ${metric.unit}`}`;
 }
 
 function metric(id) { return projection.metrics.find((item) => item.metric_id === id); }
 function yn(value) { return value ? "Recorded" : "Unknown"; }
+function provenance(metric) {
+  const coverage = metric.legacy_coverage || {};
+  const legacy = Object.hasOwn(coverage, "incident_records")
+    ? `INC ${coverage.incident_aliases}/${coverage.incident_records}; PRB ${coverage.problem_aliases}/${coverage.problem_records}; CHG ${coverage.change_aliases}/${coverage.change_records}`
+    : "SKGateway evidence";
+  return `${legacy}; ${metric.evidence_refs.join(", ") || "Evidence unavailable"}`;
+}
 
 function render() {
   document.getElementById("reliability-status").textContent = `${projection.truth_state} | ${projection.projection_hash}`;
@@ -45,7 +55,7 @@ function render() {
     return `<article><span>${esc(item.label)}</span><strong>${esc(value(item))}</strong><small>${esc(note)} ${esc(item.truth_state)}.</small></article>`;
   }).join("");
 
-  document.getElementById("reliability-metric-rows").innerHTML = projection.metrics.map((item) => `<tr><th scope="row">${esc(item.label)}<small class="mono">${esc(item.metric_id)}</small></th><td><strong>${esc(value(item))}</strong><small>${esc(item.truth_state)}</small></td><td>${esc(item.numerator ?? "Unknown")} / ${esc(item.denominator ?? "Unknown")}</td><td>${esc(item.sample_size)} records<small>${esc(item.window)}</small></td><td>${esc(item.classification)}</td><td>${esc(item.exclusions.join(" ") || "None recorded")}</td><td>INC ${esc(item.legacy_coverage.incident_aliases)}/${esc(item.legacy_coverage.incident_records)}; PRB ${esc(item.legacy_coverage.problem_aliases)}/${esc(item.legacy_coverage.problem_records)}; CHG ${esc(item.legacy_coverage.change_aliases)}/${esc(item.legacy_coverage.change_records)}<small>${esc(item.evidence_refs.join(", ") || "Evidence unavailable")}</small></td></tr>`).join("");
+  document.getElementById("reliability-metric-rows").innerHTML = projection.metrics.map((item) => `<tr><th scope="row">${esc(item.label)}<small class="mono">${esc(item.metric_id)}</small></th><td><strong>${esc(value(item))}</strong><small>${esc(item.truth_state)}</small></td><td>${esc(item.numerator ?? "Unknown")} / ${esc(item.denominator ?? "Unknown")}</td><td>${esc(item.sample_size)} records<small>${esc(item.window)}</small></td><td>${esc(item.classification)}</td><td>${esc(item.exclusions.join(" ") || "None recorded")}</td><td>${esc(provenance(item))}</td></tr>`).join("");
 
   const breaches = projection.items.breach_risk || [];
   const breachMetric = metric("itil.open_sla_breaches");
