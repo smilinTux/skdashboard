@@ -1547,12 +1547,18 @@ def routes(
         from . import dashboard_itil
 
         path = request.path_params.get("resource") or request.url.path.rsplit("/", 1)[-1]
-        if path == "overview": value = dashboard_itil.get_overview(home)
-        elif path == "incidents": value = dashboard_itil.get_incidents(home)
-        elif path == "problems": value = dashboard_itil.get_problems(home)
-        elif path == "changes": value = dashboard_itil.get_changes(home)
-        elif path == "kedb": value = dashboard_itil.search_kedb(home, request.query_params.get("q", ""))
-        else: return _error(request, 404, "NOT_FOUND", "ITIL resource not found")
+        if path == "overview":
+            value = dashboard_itil.get_overview(home)
+        elif path == "incidents":
+            value = dashboard_itil.get_incidents(home)
+        elif path == "problems":
+            value = dashboard_itil.get_problems(home)
+        elif path == "changes":
+            value = dashboard_itil.get_changes(home)
+        elif path == "kedb":
+            value = dashboard_itil.search_kedb(home, request.query_params.get("q", ""))
+        else:
+            return _error(request, 404, "NOT_FOUND", "ITIL resource not found")
         return JSONResponse(value)
 
     async def legacy_itil_record(request):
@@ -1569,13 +1575,35 @@ def routes(
         from . import dashboard_cmdb
 
         resource = request.path_params.get("resource") or request.url.path.rsplit("/", 1)[-1]
-        if resource == "overview": value = dashboard_cmdb.get_overview(home)
-        elif resource == "ci": value = dashboard_cmdb.get_ci(home, request.path_params["ci_id"])
-        elif resource == "plan": value = dashboard_cmdb.plan(home, authorization={"evaluated": True, "authorized": False, "reason": "read-only dashboard"})
+        if resource == "overview":
+            value = dashboard_cmdb.get_overview(home)
+        elif resource == "ci":
+            value = dashboard_cmdb.get_ci(home, request.path_params["ci_id"])
+        elif resource == "plan":
+            value = dashboard_cmdb.plan(
+                home,
+                authorization={
+                    "evaluated": True,
+                    "authorized": False,
+                    "reason": "read-only dashboard",
+                },
+            )
         elif resource == "search":
             params = request.query_params
-            value = dashboard_cmdb.search(home, params.get("q", ""), params.get("limit", "50"), ci_type=params.get("type", ""), node=params.get("node", ""), status=params.get("status", ""), owner=params.get("owner", ""), tag=params.get("tag", ""), staleness=params.get("staleness", ""), source=params.get("source", ""))
-        else: return _error(request, 404, "NOT_FOUND", "CMDB resource not found")
+            value = dashboard_cmdb.search(
+                home,
+                params.get("q", ""),
+                params.get("limit", "50"),
+                ci_type=params.get("type", ""),
+                node=params.get("node", ""),
+                status=params.get("status", ""),
+                owner=params.get("owner", ""),
+                tag=params.get("tag", ""),
+                staleness=params.get("staleness", ""),
+                source=params.get("source", ""),
+            )
+        else:
+            return _error(request, 404, "NOT_FOUND", "CMDB resource not found")
         return JSONResponse(value)
 
     async def legacy_cmdb_plan(_request):

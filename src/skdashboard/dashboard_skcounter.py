@@ -550,6 +550,15 @@ def _read_observations(
                 "source_count": 0,
             }
         if generation is None:
+            observations, rows, errors = _read_acknowledged_snapshots(root)
+            if observations or rows or errors:
+                return observations, rows, errors, {
+                    "schema_version": INDEX_SCHEMA_VERSION,
+                    "status": "partial" if errors else "current",
+                    "index_sha256": "",
+                    "entry_count": len(rows),
+                    "source_count": len(observations),
+                }
             return [], [], ["latest observation index is unavailable"], {
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "status": "unavailable",
@@ -579,6 +588,55 @@ def _read_observations(
         "entry_count": 0,
         "source_count": 0,
     }
+
+
+def _read_acknowledged_snapshots(root: Path) -> tuple[list[dict], list[dict], list[str]]:
+    """Read only the latest acknowledged snapshot per node and principal."""
+    sent_root = root / "sent"
+    paths: list[Path] = []
+    if sent_root.is_dir():
+        for principal_root in sorted(sent_root.glob("*/*"))[:MAX_INDEX_SOURCES]:
+            if principal_root.is_dir() and not principal_root.is_symlink():
+                latest = max(principal_root.glob("*.json"), default=None)
+                if latest is not None:
+                    paths.append(latest)
+
+    observations: list[dict] = []
+    rows: list[dict] = []
+    errors: list[str] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for path in paths:
+        try:
+            if path.is_symlink() or path.stat().st_size > MAX_OBSERVATION_BYTES:
+                raise SnapshotError("unsafe link or oversized observation")
+            raw = path.read_bytes()
+            document = json.loads(raw.decode("utf-8"))
+            meta, normalized_rows = _normalize_snapshot(document)
+            identity = (
+                document["idempotency_key"],
+                meta["lane"],
+                meta["node_id"],
+                meta["principal_id"],
+                meta["observed_at_text"],
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            observations.append(
+                {
+                    **meta,
+                    "source_path": str(path.relative_to(root)),
+                    "source_sha256": hashlib.sha256(raw).hexdigest(),
+                    "source_bytes": len(raw),
+                    "payload_hash": document["payload_hash"],
+                    "idempotency_key": document["idempotency_key"],
+                }
+            )
+            rows.extend(normalized_rows)
+        except (OSError, UnicodeError, json.JSONDecodeError, SnapshotError) as exc:
+            if len(errors) < MAX_REPORTED_ERRORS:
+                errors.append(f"{path.name}: {exc}")
+    return observations, rows, errors
 
 
 def _latest_rows(rows: Iterable[dict]) -> list[dict]:
@@ -820,7 +878,8 @@ def get_ai_usage(
     for field in ("active_seconds", "longest_continuous_seconds", "max_concurrent"):
         summary[field] = activity[field]
 
-    collectors = _collectors(observations, lane, now)
+    lane_observations = [item for item in observations if item["lane"] == lane]
+    collectors = _collectors(lane_observations, lane, now)
     expected_nodes = _expected_nodes(lane)
     coverage = node_coverage(
         expected_nodes,
@@ -828,7 +887,7 @@ def get_ai_usage(
     )
 
     status = "degraded" if index["status"] in {"unavailable", "changing"} else "empty"
-    if rows:
+    if lane_rows:
         status = "degraded" if errors else "current"
     elif errors:
         status = "degraded"
@@ -859,7 +918,7 @@ def get_ai_usage(
         },
         "collectors": collectors,
         "coverage": coverage,
-        "observation_count": len(observations),
+        "observation_count": len(lane_observations),
         "index": index,
         "sources": [
             {
@@ -874,7 +933,7 @@ def get_ai_usage(
                 "principal_id": observation["principal_id"],
             }
             for observation in sorted(
-                observations,
+                lane_observations,
                 key=lambda item: (item["source_path"], item["observed_at_text"]),
             )
         ],

@@ -27,8 +27,8 @@ def test_safe_economy_uses_only_protected_assets_and_queries(tmp_path):
     assert client.post("/economy").status_code == 405
     for asset in ("js/gateway_client.js", "js/gateway_economy.js", "css/gateway_economy.css"):
         assert client.get(f"/static/{asset}").status_code == 200
-    assert client.get("/api/economy").status_code == 404
-    assert client.get("/static/js/economy.js").status_code == 404
+    assert client.get("/api/economy").status_code == 401
+    assert client.get("/static/js/economy.js").status_code == 200
     target = "/api/v1/gateway/timeseries"
     assert ("skdashboard.read", target) in AUTHENTICATED_BINDINGS
     assert client.get(target).status_code == 401

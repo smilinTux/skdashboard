@@ -633,7 +633,11 @@ def _local_readers(
                         "cost_usd": summary.get("totalCostUsd")
                         if not unpriced
                         else None,
-                        "cost_state": "available" if not unpriced else "unavailable",
+                        "cost_state": "billed" if not unpriced else "unavailable",
+                        "latency_ms": None,
+                        "cache_ratio": None,
+                        "error_count": None,
+                        "denial_count": None,
                         "observation_count": int(summary.get("totalRequests", 0) or 0),
                         "fresh_collectors": reporting,
                         "delayed_collectors": 0,
