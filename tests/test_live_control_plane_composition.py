@@ -627,7 +627,6 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
         "/assistant",
         "/trust",
         "/models",
-        "/economy",
         "/fleet",
     )
     app = create_read_only_app(tmp_path, legacy_board_url=board)
@@ -654,6 +653,7 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     assert "Portfolio" in pages["portfolio"].text
     assert "Schedule" in pages["schedule"].text
     for response in pages.values():
+        assert 'href="/economy"' in response.text
         for path in legacy_paths:
             expected = board if path == "/board" else f"{legacy_origin}{path}"
             assert f'href="{expected}"' in response.text
