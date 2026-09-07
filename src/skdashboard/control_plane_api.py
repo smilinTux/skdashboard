@@ -7,6 +7,7 @@ import base64
 import hashlib
 import inspect
 import json
+import logging
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
 TENANT_RESOURCE_TYPE = "tenant"
 SSE_CURRENTNESS_SECONDS = 1
+logger = logging.getLogger("skcapstone.dashboard.control_plane")
 
 
 class ControlPlaneInvocationFactory(Protocol):
@@ -905,7 +907,12 @@ def routes(
                 timeout=45,
             )
             return JSONResponse(brief)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "NOW AI brief failed: %s reason=%s",
+                type(exc).__name__,
+                getattr(exc, "reason", "unavailable"),
+            )
             return _error(
                 request,
                 503,

@@ -266,7 +266,7 @@ async function analyzeNow() {
   try {
     const brief = await getJSON(
       `/api/v1/now/ai-brief?${safeSearch(currentContext)}`,
-      { timeoutMs: 45000 },
+      { timeoutMs: 50000 },
     );
     status.textContent = brief.status === "abstained"
       ? `AI abstained: ${brief.abstention || "insufficient evidence"}`
@@ -279,7 +279,7 @@ async function analyzeNow() {
     ].join("") || "<p>No supported insight was returned.</p>";
   } catch (error) {
     status.textContent = "AI analysis unavailable. The evidence brief above remains current.";
-    alert.textContent = "The LLM is not configured, cannot be reached, or returned an invalid response. Check SKGateway and the sk-m-public route, then retry.";
+    alert.textContent = "The configured SKGateway dashboard route could not return a valid analysis. Check gateway health, then retry.";
     alert.hidden = false;
   } finally {
     button.disabled = false;
