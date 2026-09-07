@@ -516,8 +516,8 @@ def test_stream_accepts_live_gateway_attribution_and_assistant_role(mocker):
         "X-SK-Rail": "local",
     }
     response.__iter__.return_value = iter([
-        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","timings":{"cache_n":0,"prompt_n":20,"predicted_per_second":24.7},"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n',
-        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n',
+        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","prompt_token_ids":[1,2],"prompt_text":null,"timings":{"cache_n":0,"prompt_n":20,"predicted_per_second":24.7},"choices":[{"index":0,"delta":{"role":"assistant","content":"ok","token_ids":[3]},"logprobs":null,"finish_reason":null,"token_ids":[3]}]}\n',
+        b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen-test","requested_model":"sk-dashboard-assistant","system_fingerprint":"build-1","choices":[{"index":0,"delta":{},"finish_reason":"stop","stop_reason":"stop"}]}\n',
         b'data: [DONE]\n',
     ])
     mocker.patch("urllib.request.urlopen", return_value=response)
