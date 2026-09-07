@@ -242,6 +242,42 @@ function renderAiBrief(items) {
   document.getElementById("ai-impact").textContent = "No impact estimate or action authorization. Restore missing coverage before drawing outcome conclusions.";
 }
 
+function briefList(title, entries, nextSteps = false) {
+  if (!entries.length) return "";
+  return `<section><h4>${esc(title)}</h4><ol>${entries.map((entry) => {
+    const text = nextSteps ? entry.proposal : entry.summary;
+    const sources = (entry.sources || []).map((source) => `${source.source_id} | ${source.freshness} | ${source.observed_at || "time unavailable"}`).join("; ");
+    return `<li><strong>${esc(text)}</strong><small>${esc(entry.summary)} | ${esc(entry.uncertainty)} | ${esc(sources)}</small></li>`;
+  }).join("")}</ol></section>`;
+}
+
+async function analyzeNow() {
+  const button = document.getElementById("ai-analyze-button");
+  const panel = document.getElementById("ai-analysis");
+  const status = document.getElementById("ai-analysis-status");
+  const body = document.getElementById("ai-analysis-body");
+  button.disabled = true;
+  panel.hidden = false;
+  status.textContent = "Analyzing current authorized metrics...";
+  body.replaceChildren();
+  try {
+    const brief = await getJSON(`/api/v1/now/ai-brief?${safeSearch(currentContext)}`);
+    status.textContent = brief.status === "abstained"
+      ? `AI abstained: ${brief.abstention || "insufficient evidence"}`
+      : `Generated ${timeShort(brief.generated_at)}. Proposals only; no action was taken.`;
+    body.innerHTML = [
+      briefList("What is happening", brief.conditions || []),
+      briefList("Risks", brief.risks || []),
+      briefList("Anomalies", brief.anomalies || []),
+      briefList("Recommended next steps", brief.next_steps || [], true),
+    ].join("") || "<p>No supported insight was returned.</p>";
+  } catch (error) {
+    status.textContent = `AI analysis unavailable: ${error.message}. The evidence brief above remains current.`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function openEstateEvidence(siloId, trigger) {
   const evidence = estateEvidence.get(siloId);
   if (!evidence) return;
@@ -639,6 +675,7 @@ document.getElementById("ai-boundary-button").addEventListener("click", (event) 
   dialog._trigger = event.currentTarget;
   dialog.showModal();
 });
+document.getElementById("ai-analyze-button").addEventListener("click", analyzeNow);
 for (const dialog of document.querySelectorAll("dialog")) {
   dialog.addEventListener("close", () => {
     if (dialog._trigger) dialog._trigger.focus();
