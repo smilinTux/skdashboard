@@ -84,16 +84,13 @@ def parse_query(request) -> dict[str, Any]:
         not scope
         or len(scope) > 128
         or any(
-            ch
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+            ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
             for ch in scope
         )
     ):
         raise GatewayQueryError("malformed_scope")
     filters = {
-        key: request.query_params[key]
-        for key in ALLOWED_FILTERS
-        if key in request.query_params
+        key: request.query_params[key] for key in ALLOWED_FILTERS if key in request.query_params
     }
     if any(not value or len(value) > 128 for value in filters.values()):
         raise GatewayQueryError("malformed_filter")
@@ -164,8 +161,7 @@ def _facts_are_well_formed(facts: Any) -> bool:
         return False
     breakdowns = facts.get("breakdowns", {})
     if not isinstance(breakdowns, dict) or any(
-        not isinstance(values, list)
-        or any(not isinstance(value, str) for value in values)
+        not isinstance(values, list) or any(not isinstance(value, str) for value in values)
         for values in breakdowns.values()
     ):
         return False
@@ -178,8 +174,18 @@ def _facts_are_well_formed(facts: Any) -> bool:
     ):
         return False
     gateway = facts.get("gateway", {})
-    if not isinstance(gateway, dict) or not isinstance(
-        gateway.get("backend_health", {}), dict
+    if not isinstance(gateway, dict) or not isinstance(gateway.get("backend_health", {}), dict):
+        return False
+    expected_nodes = gateway.get("expected_nodes", [])
+    node_details = gateway.get("nodes", {})
+    if (
+        not isinstance(expected_nodes, list)
+        or any(not isinstance(node, str) or not node for node in expected_nodes)
+        or not isinstance(node_details, dict)
+        or any(
+            not isinstance(node, str) or not node or not isinstance(detail, dict)
+            for node, detail in node_details.items()
+        )
     ):
         return False
     return all(
@@ -211,18 +217,14 @@ def _per_model_snapshot(facts: dict[str, Any]) -> list[dict[str, Any]]:
     names = set(breakdowns.get("models", [])) if isinstance(breakdowns, dict) else set()
     if isinstance(daily, list):
         names.update(
-            row.get("model")
-            for row in daily
-            if isinstance(row, dict) and row.get("model")
+            row.get("model") for row in daily if isinstance(row, dict) and row.get("model")
         )
     if isinstance(catalog, dict):
         names.update(catalog)
 
     rows = []
     for model in sorted(names):
-        model_daily = [
-            row for row in daily if isinstance(row, dict) and row.get("model") == model
-        ]
+        model_daily = [row for row in daily if isinstance(row, dict) and row.get("model") == model]
         backends = sorted({row["backend"] for row in model_daily if row.get("backend")})
         model_latency = {
             key: value
@@ -282,6 +284,108 @@ def _per_model_snapshot(facts: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _per_node_snapshot(observations: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Project the latest protected gateway facts into truthful node rows.
+
+    A missing value remains ``None``.  In particular, collector freshness is
+    never reused as configuration drift and a node named by the inventory but
+    absent from the observation is rendered as missing, not healthy.
+    """
+    latest: dict[str, tuple[datetime, dict[str, Any], dict[str, Any]]] = {}
+    expected: set[str] = set()
+    for observation in observations:
+        facts = observation.get("facts")
+        if not isinstance(facts, dict):
+            continue
+        try:
+            observed = _parse_time(observation.get("observed_at"), "observed_at")
+        except GatewayQueryError:
+            continue
+        breakdowns = facts.get("breakdowns", {})
+        observed_nodes: set[str] = set()
+        if isinstance(breakdowns, dict):
+            observed_nodes.update(
+                value for value in breakdowns.get("nodes", []) if isinstance(value, str) and value
+            )
+        gateway = facts.get("gateway", {})
+        node_details = gateway.get("nodes", {}) if isinstance(gateway, dict) else {}
+        if isinstance(gateway, dict):
+            expected.update(
+                value
+                for value in gateway.get("expected_nodes", [])
+                if isinstance(value, str) and value
+            )
+        if not isinstance(node_details, dict):
+            node_details = {}
+        observed_nodes.update(key for key in node_details if isinstance(key, str) and key)
+        daily = facts.get("daily_token_rows", [])
+        if isinstance(daily, list):
+            observed_nodes.update(
+                row["node"]
+                for row in daily
+                if isinstance(row, dict) and isinstance(row.get("node"), str) and row["node"]
+            )
+        expected.update(observed_nodes)
+        for node in observed_nodes:
+            detail = node_details.get(node)
+            if detail is not None and not isinstance(detail, dict):
+                detail = {}
+            prior = latest.get(node)
+            if prior is None or observed > prior[0]:
+                latest[node] = (observed, detail or {}, facts)
+
+    rows: list[dict[str, Any]] = []
+    for node in sorted(expected):
+        record = latest.get(node)
+        if record is None:
+            rows.append(
+                {
+                    "node_id": node,
+                    "telemetry_state": "missing",
+                    "observed_at": None,
+                    "age_seconds": None,
+                    "ttl_seconds": TTL_SECONDS,
+                    "backend": None,
+                    "served_model": None,
+                    "transport_profile": None,
+                    "runtime_revision": None,
+                    "version": None,
+                    "configuration_drift": None,
+                }
+            )
+            continue
+        observed, detail, facts = record
+        age = max(0.0, (now - observed).total_seconds())
+        daily = facts.get("daily_token_rows", [])
+        node_daily = (
+            [item for item in daily if isinstance(item, dict) and item.get("node") == node]
+            if isinstance(daily, list)
+            else []
+        )
+        backends = sorted(
+            {item["backend"] for item in node_daily if isinstance(item.get("backend"), str)}
+        )
+        models = sorted(
+            {item["model"] for item in node_daily if isinstance(item.get("model"), str)}
+        )
+        rows.append(
+            {
+                "node_id": node,
+                "telemetry_state": "stale" if age > TTL_SECONDS else "current",
+                "observed_at": observed.isoformat().replace("+00:00", "Z"),
+                "age_seconds": age,
+                "ttl_seconds": TTL_SECONDS,
+                "backend": detail.get("backend") or (", ".join(backends) or None),
+                "served_model": detail.get("served_model") or (", ".join(models) or None),
+                "transport_profile": detail.get("transport_profile"),
+                "runtime_revision": detail.get("runtime_revision"),
+                "version": detail.get("version") or detail.get("gateway_version"),
+                "configuration_drift": detail.get("configuration_drift"),
+            }
+        )
+    return rows
+
+
 def _matches(observation: dict[str, Any], filters: dict[str, str]) -> bool:
     facts = observation.get("facts", {})
     breakdowns = facts.get("breakdowns", {}) if isinstance(facts, dict) else {}
@@ -294,9 +398,7 @@ def _matches(observation: dict[str, Any], filters: dict[str, str]) -> bool:
         "rail": "rails",
     }
     for key, expected in filters.items():
-        values = (
-            breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
-        )
+        values = breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
         if expected not in values:
             return False
     return True
@@ -320,17 +422,13 @@ def project(
         except GatewayQueryError:
             malformed += 1
             continue
-        if query["start"] <= observed <= query["end"] and _matches(
-            item, query["filters"]
-        ):
+        if query["start"] <= observed <= query["end"] and _matches(item, query["filters"]):
             selected.append(item)
     selected.sort(key=lambda item: item["observed_at"], reverse=True)
     # Apply the caller's bound after filtering and ordering. This protects both
     # summary and timeseries responses even when the index contains many rows.
     selected = selected[: query["limit"]]
-    latest = (
-        _parse_time(selected[0]["observed_at"], "observed_at") if selected else None
-    )
+    latest = _parse_time(selected[0]["observed_at"], "observed_at") if selected else None
     age = max(0.0, (now - latest).total_seconds()) if latest else None
     if not observations:
         state, reason = "empty", "no_indexed_gateway_observations"
@@ -384,6 +482,14 @@ def project(
         facts = selected[0].get("facts") if selected else None
         common["summary"] = facts
         common["models"] = _per_model_snapshot(facts) if isinstance(facts, dict) else []
+        common["nodes"] = _per_node_snapshot(selected, now)
+        common["node_totals"] = {
+            "named": len(common["nodes"]),
+            "current": sum(node["telemetry_state"] == "current" for node in common["nodes"]),
+            "stale": sum(node["telemetry_state"] == "stale" for node in common["nodes"]),
+            "missing": sum(node["telemetry_state"] == "missing" for node in common["nodes"]),
+            "unknown": sum(node["telemetry_state"] == "unknown" for node in common["nodes"]),
+        }
     return common
 
 
@@ -450,9 +556,7 @@ def handlers(home: Path, provider: Callable | None = None):
                 )
                 if not isinstance(observations, list):
                     raise GatewayQueryError("malformed_provider", unavailable=True)
-                return _response(
-                    request, project(observations, query, timeseries=timeseries)
-                )
+                return _response(request, project(observations, query, timeseries=timeseries))
             except asyncio.TimeoutError:
                 return _response(
                     request,
@@ -468,9 +572,7 @@ def handlers(home: Path, provider: Callable | None = None):
                     503
                     if exc.unavailable
                     else (
-                        403
-                        if exc.reason in {"unauthorized_role", "unauthorized_scope"}
-                        else 400
+                        403 if exc.reason in {"unauthorized_role", "unauthorized_scope"} else 400
                     )
                 )
                 return _response(
