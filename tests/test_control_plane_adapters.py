@@ -191,7 +191,13 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         total = 10 if lane == "harness_reported" else 20
         return {
             "generated_at": NOW.isoformat(),
-            "summary": {"total": total, "cost_state": "unavailable"},
+            "summary": {
+                "tokens": {"total": total},
+                "cost_usd": 1.25,
+                "cost_state": "estimated",
+                "duration_ms": 500,
+                "cache_ratio": 0.75,
+            },
             "coverage": {
                 "expected_nodes": 1,
                 "reporting_nodes": 1,
@@ -201,7 +207,7 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
             },
             "collectors": [{"last_seen": NOW.isoformat(), "node_id": lane}],
             "observation_count": 1,
-            "errors": [],
+            "errors": ["collector warning"],
         }
 
     stats = Mock(agent_balances={"jarvis": 7}, active_agents=1)
@@ -250,6 +256,11 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
     }
     assert by_id["skcounter.harness"]["aggregate"]["tokens_total"] == 10
     assert by_id["skgateway.observed"]["aggregate"]["tokens_total"] == 20
+    for field in ("latency_ms", "error_count", "denial_count"):
+        assert by_id["skcounter.harness"]["aggregate"][field] is None
+    assert by_id["skcounter.harness"]["aggregate"]["cache_ratio"] == 0.75
+    assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.25
+    assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
     assert by_id["skjoule.wallet"]["aggregate"] == {"total_supply": 7, "active_agents": 1}
 
 
