@@ -1,0 +1,16 @@
+# Sensitive lifecycle, release, authorization, deployment, and policy paths.
+# Keep this file minimal so ownership is explicit without widening review scope.
+/.github/ @chefboyrdave21
+/release/ @chefboyrdave21
+/packaging/ @chefboyrdave21
+/deploy/ @chefboyrdave21
+/pyproject.toml @chefboyrdave21
+/requirements*.txt @chefboyrdave21
+/src/skdashboard/*auth* @chefboyrdave21
+/src/skdashboard/consent.py @chefboyrdave21
+/src/skdashboard/gpg_agent_signer.py @chefboyrdave21
+/src/skdashboard/runtime_*.py @chefboyrdave21
+/SOP.md @chefboyrdave21
+/SECURITY.md @chefboyrdave21
+/docs/policy/ @chefboyrdave21
+/docs/approval/ @chefboyrdave21
