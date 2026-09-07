@@ -9,7 +9,13 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator, FormatChecker, RefResolver
 from starlette.testclient import TestClient
 
-from skdashboard.control_plane_adapters import SPECS, Reader, aggregate_reader, project_estate
+from skdashboard.control_plane_adapters import (
+    SPECS,
+    Reader,
+    _local_readers,
+    aggregate_reader,
+    project_estate,
+)
 from skdashboard.control_plane_metric_registry import REGISTRY, calculate_metric, registry_manifest
 from skdashboard.dashboard import create_app
 
@@ -32,7 +38,11 @@ def _hash(value: object) -> str:
 
 def _readers(fixture: dict, *, observed_at: str | None = None) -> dict[str, Reader]:
     readers = {}
+    ai_cases = {}
     for case in fixture["estate_cases"]:
+        if case["adapter_id"] in {"skcounter.harness", "skgateway.observed"}:
+            ai_cases[case["measurement_lane"]] = case
+            continue
         if failure := case.get("failure"):
             readers[case["adapter_id"]] = Reader(failure=failure)
             continue
@@ -45,6 +55,53 @@ def _readers(fixture: dict, *, observed_at: str | None = None) -> dict[str, Read
             errors=case["errors"],
             has_observations=case["has_observations"],
         )
+
+    def usage(_home: Path, filters: dict) -> dict:
+        case = ai_cases[filters["lane"]]
+        aggregate = case["aggregate"]
+        reporting = case["coverage"]["reporting"]
+        statuses = (
+            ["fresh"] * aggregate["fresh_collectors"]
+            + ["delayed"] * aggregate["delayed_collectors"]
+            + ["stale"] * aggregate["stale_collectors"]
+        )
+        collectors = [
+            {
+                "last_seen": observed_at or case.get("observed_at", fixture["observed_at"]),
+                "node_id": f"synthetic-{index}",
+                "status": status,
+            }
+            for index, status in enumerate(statuses)
+        ]
+        return {
+            "generated_at": observed_at or case.get("observed_at", fixture["observed_at"]),
+            "summary": {
+                "tokens": {"total": aggregate["tokens_total"]},
+                "cost_usd": aggregate["cost_usd"],
+                "cost_state": aggregate["cost_state"],
+                "duration_ms": 9_999,
+                "cache_ratio": aggregate["cache_ratio"],
+            },
+            "coverage": {
+                "expected_nodes": case["coverage"]["expected"],
+                "reporting_nodes": reporting,
+                "fresh_collectors": aggregate["fresh_collectors"],
+                "delayed_collectors": aggregate["delayed_collectors"],
+                "stale_collectors": aggregate["stale_collectors"],
+            },
+            "collectors": collectors,
+            "observation_count": aggregate["observation_count"],
+            "errors": case["errors"],
+        }
+
+    with patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage):
+        local = _local_readers(
+            Path("/tmp/public-synthetic-estate"),
+            board_data={},
+            default_observed_at=observed_at or fixture["observed_at"],
+        )
+        for adapter_id in ("skcounter.harness", "skgateway.observed"):
+            readers[adapter_id] = Reader(payload=local[adapter_id]())
     return readers
 
 
@@ -205,7 +262,7 @@ def test_fixture_spans_every_public_synthetic_estate_signal_and_truth_condition(
     }
 
     assert hashlib.sha256(ESTATE_FIXTURE.read_bytes()).hexdigest() == (
-        "926f0374b8f32e64d0f370f9a6197b848a95a3403b8d497c5c67848e77fb821d"
+        "12a7f57d5a20e3b8115f27a921cedab410c29b14f374e3aa54dfcfd3b4780b5c"
     )
     assert fixture["classification"] == "public"
     assert fixture["synthetic"] is True
@@ -240,6 +297,16 @@ def test_fixture_spans_every_public_synthetic_estate_signal_and_truth_condition(
     assert any("conflict" in error for error in conflict["errors"])
     assert by_id["skcapstone.fleet"]["aggregate"] is None
     assert by_id["skcapstone.fleet"]["errors"][0]["code"] == "SOURCE_TIMEOUT"
+    harness = by_id["skcounter.harness"]["aggregate"]
+    gateway = by_id["skgateway.observed"]["aggregate"]
+    assert harness["tokens_total"] == 1200
+    assert harness["cost_usd"] == 18.0
+    assert harness["cost_state"] == "estimated"
+    assert harness["cache_ratio"] == 0.8
+    for aggregate in (harness, gateway):
+        assert aggregate["latency_ms"] is None
+        assert aggregate["error_count"] is None
+        assert aggregate["denial_count"] is None
 
 
 def test_metric_pack_hashes_results_definitions_forecast_and_lanes_deterministically() -> None:
