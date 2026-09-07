@@ -232,6 +232,78 @@ def _aggregate_metrics(items: dict[str, dict]) -> list[dict]:
     ]
 
 
+def _impact_graph(
+    ci_id: str,
+    cis: Mapping[str, object],
+    reverse: Mapping[str, list[tuple[str, str]]],
+    *,
+    max_depth: int = 8,
+    max_nodes: int = 200,
+) -> dict:
+    """Project one impact graph from a shared in-memory CMDB fold."""
+    queue: list[tuple[str, int, tuple[str, ...]]] = [(ci_id, 0, (ci_id,))]
+    seen = {ci_id}
+    nodes = []
+    cycles = []
+    truncated = False
+    while queue:
+        target, depth, path = queue.pop(0)
+        if depth >= max_depth:
+            truncated = truncated or bool(reverse.get(target))
+            continue
+        for source_id, rel_type in sorted(reverse.get(target, [])):
+            if source_id in path:
+                cycles.append([*path, source_id])
+                continue
+            if source_id in seen:
+                continue
+            if len(nodes) >= max_nodes:
+                truncated = True
+                queue.clear()
+                break
+            seen.add(source_id)
+            source = cis[source_id]
+            nodes.append(
+                {
+                    "id": source_id,
+                    "name": source.name,
+                    "ci_type": source.ci_type,
+                    "rel": rel_type,
+                    "depth": depth + 1,
+                }
+            )
+            queue.append((source_id, depth + 1, (*path, source_id)))
+    return {"dependents": nodes, "cycles": cycles, "truncated": truncated}
+
+
+def _relationship_findings(cis: Mapping[str, object], allowed: Mapping[str, set[str]]) -> list[dict]:
+    findings = []
+    for source_id in sorted(cis):
+        source = cis[source_id]
+        for relationship in sorted(
+            source.relationships, key=lambda item: (item.rel_type, item.target)
+        ):
+            target = cis.get(relationship.target)
+            base = {
+                "source": source_id,
+                "relationship": relationship.rel_type,
+                "target": relationship.target,
+            }
+            if target is None:
+                findings.append({"kind": "dangling_target", **base})
+                continue
+            if source_id == relationship.target:
+                findings.append({"kind": "self_edge", **base})
+            permitted = allowed.get(relationship.rel_type)
+            if permitted is None:
+                findings.append({"kind": "unknown_relationship", **base})
+            elif target.ci_type not in permitted:
+                findings.append(
+                    {"kind": "invalid_target_type", **base, "target_type": target.ci_type}
+                )
+    return findings
+
+
 def get_architecture_projection(
     home: Path,
     query: dict,
@@ -240,7 +312,7 @@ def get_architecture_projection(
     now: datetime | None = None,
 ) -> dict:
     """Project bounded CMDB topology and approved aggregate evidence without writes."""
-    from skcoord.cmdb import CMDBManager
+    from skcoord.cmdb import ALLOWED_RELATIONSHIPS, CMDBManager
     from skcoord.discovery import ci_observation_state
 
     from .dashboard_cmdb import _verified_run_artifacts
@@ -248,6 +320,14 @@ def get_architecture_projection(
     instant = (now or _now()).astimezone(timezone.utc)
     manager = CMDBManager(Path(home).expanduser())
     all_cis = sorted(manager.list_cis(), key=lambda item: item.id)
+    cis_by_id = {item.id: item for item in all_cis}
+    reverse: dict[str, list[tuple[str, str]]] = {}
+    for source in all_cis:
+        for relationship in source.relationships:
+            if relationship.rel_type in {"depends_on", "runs_on"}:
+                reverse.setdefault(relationship.target, []).append(
+                    (source.id, relationship.rel_type)
+                )
     cis = all_cis[:MAX_CIS]
     ids = {item.id for item in cis}
     freshness = {item.id: ci_observation_state(item).value for item in cis}
@@ -256,7 +336,7 @@ def get_architecture_projection(
     lifecycle_risk = [
         item for item in cis if item.status == "retired" or "unsupported" in item.tags
     ]
-    relationship_findings = manager.audit_relationships()
+    relationship_findings = _relationship_findings(cis_by_id, ALLOWED_RELATIONSHIPS)
     artifacts = _verified_run_artifacts(Path(home).expanduser())
     latest = artifacts[0] if artifacts else {}
     latest_drift = (latest.get("drift") or {}).get("count")
@@ -267,7 +347,7 @@ def get_architecture_projection(
 
     nodes = []
     for ci in cis:
-        graph = manager.impact_graph(ci.id, max_depth=8, max_nodes=200)
+        graph = _impact_graph(ci.id, cis_by_id, reverse)
         dependents = graph.get("dependents", [])
         impacted_services = sorted(
             {item["id"] for item in dependents if item.get("ci_type") == "service"}

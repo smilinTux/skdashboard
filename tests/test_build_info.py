@@ -102,7 +102,7 @@ def test_every_full_runtime_surface_loads_shared_badge_module(tmp_path: Path) ->
 
     shared_api = client.get("/static/js/api.js")
     assert shared_api.status_code == 200
-    assert shared_api.text.count('import "./read_only_api.js";') == 1
+    assert shared_api.text.count('from "./read_only_api.js";') == 1
     for route, asset in SURFACES.items():
         assert client.get(f"/control-plane/{route}").status_code == 200
         script = client.get(f"/static/js/{asset}.js")
@@ -200,7 +200,7 @@ globalThis.location = {
   search: "?role=project-manager&scope=estate&window=latest&baseline=none&service=all",
 };
 globalThis.document = {
-  querySelector(selector) { return selector === ".topbar, .sidebar" ? navigation : null; },
+  querySelector(selector) { return selector === ".topbar, .sidebar, .header-actions" ? navigation : null; },
   getElementById(id) { return inserted.find((item) => item.id === id) || null; },
   createElement() {
     return {

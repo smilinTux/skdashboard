@@ -217,6 +217,31 @@ function renderEstate(items) {
   return true;
 }
 
+function renderAiBrief(items) {
+  const sources = items.filter((item) => ["skcounter.harness", "skgateway.observed"].includes(item.adapter_id));
+  const observed = sources.filter((item) => item.aggregate && item.aggregate.observation_count > 0);
+  if (!observed.length) return;
+  const gateway = observed.find((item) => item.adapter_id === "skgateway.observed");
+  const attention = sources.filter((item) => !["current", "not_applicable"].includes(item.truth_state));
+  const evidence = observed.map((item) => `${item.owner}: ${item.aggregate.observation_count} observations, ${coverageText(item.coverage)}, truth ${item.truth_state}`).join("; ");
+  const gatewaySummary = gateway
+    ? `SKGateway reports ${gateway.aggregate.observation_count} requests with ${coverageText(gateway.coverage).toLowerCase()}. ${gateway.aggregate.cost_state === "unavailable" ? "Cost remains unavailable." : `Cost state is ${gateway.aggregate.cost_state}.`}`
+    : "No gateway-observed request population is available.";
+  document.getElementById("ai-heading").textContent = attention.length
+    ? `Evidence brief: ${attention.length} AI source${attention.length === 1 ? " needs" : "s need"} attention`
+    : "Evidence brief: AI sources are current";
+  document.getElementById("ai-summary").textContent = `${gatewaySummary} Request activity is not treated as an accepted outcome or verified effect.`;
+  document.getElementById("ai-evidence").textContent = evidence;
+  document.getElementById("ai-practice").textContent = "Keep usage, cost, accepted outcomes, and verified effects as separate measures.";
+  document.getElementById("ai-confidence").textContent = "High for displayed source state; not calculated for outcomes or causal effect.";
+  document.getElementById("ai-uncertainty").textContent = "Accepted-outcome and post-decision effect evidence are not projected.";
+  document.getElementById("ai-counter").textContent = attention.length
+    ? attention.map((item) => `${item.owner} is ${item.truth_state}`).join("; ")
+    : "No source-state warning in the two bounded AI usage lanes.";
+  document.getElementById("ai-alternatives").textContent = "Open AI outcomes for lane provenance or source evidence for exact reconciliation details.";
+  document.getElementById("ai-impact").textContent = "No impact estimate or action authorization. Restore missing coverage before drawing outcome conclusions.";
+}
+
 function openEstateEvidence(siloId, trigger) {
   const evidence = estateEvidence.get(siloId);
   if (!evidence) return;
@@ -295,6 +320,7 @@ async function loadQuality(epoch, context) {
       throw new Error("Metric registry changed; this view is stale");
     }
     if (!renderEstate(response.items)) throw new Error("Expected 16 bounded adapter observations");
+    renderAiBrief(response.items);
     renderQuality(quality);
     currentQuality = quality;
     refreshCommandResults();

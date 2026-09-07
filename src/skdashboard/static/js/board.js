@@ -90,6 +90,7 @@ function wireSortables() {
   _sortables.length = 0;
   document.querySelectorAll(".cell").forEach((cell) => {
     _sortables.push(new Sortable(cell, {
+      disabled: true,
       group: "kanban",
       animation: 130,
       ghostClass: "sortable-ghost",

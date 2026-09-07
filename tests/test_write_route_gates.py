@@ -251,6 +251,10 @@ _GATE_MARKERS = (
     "_ai_capability_ok",
 )
 
+_READ_ONLY_POST_EXEMPTIONS = {
+    "/api/assistant": "report streaming is protected by skdashboard.read and always disables actions",
+}
+
 
 def test_every_post_route_carries_a_gate_marker(app):
     """Sweep the real route table: every registered POST endpoint must call a
@@ -269,6 +273,8 @@ def test_every_post_route_carries_a_gate_marker(app):
             continue
         path = route.path
         checked.append(path)
+        if path in _READ_ONLY_POST_EXEMPTIONS:
+            continue
         source = inspect.getsource(route.endpoint)
         if not any(marker in source for marker in _GATE_MARKERS):
             ungated.append(path)

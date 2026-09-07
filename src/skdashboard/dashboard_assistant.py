@@ -15,12 +15,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("skcapstone.dashboard.assistant")
 
 # Actions the assistant may request (subset of the card mutation + run tools).
 _ACTIONS = {"note", "move", "assign", "queue-ai"}
+ASSISTANT_ROUTE = os.environ.get("SKDASHBOARD_ASSISTANT_ROUTE", "sk-m-public")
+ASSISTANT_GATEWAY_URL = os.environ.get(
+    "SKDASHBOARD_GATEWAY_URL", "http://chiap01:18790/v1"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +84,15 @@ def top_incidents(home: Path, n: int = 5) -> list[dict]:
 def build_context(home: Path) -> str:
     """A compact live snapshot for the model to answer from."""
     from . import dashboard_itil as di
+    from .dashboard_observability import collect as collect_observability
 
     bs = board_summary(home)
     ov = di.get_overview(home)
+    telemetry = collect_observability()
+    telemetry_summary = [
+        {"source": item.get("source"), "truth_state": item.get("truth_state"), "summary": item.get("summary", {}), "backends": item.get("backends", {}), "models": item.get("models", {})}
+        for item in telemetry.get("sources", [])
+    ]
     parts = [
         "KANBAN: %d active cards; by column %s; by lane %s."
         % (bs["active"], bs["by_column"], bs["by_lane"]),
@@ -90,6 +101,7 @@ def build_context(home: Path) -> str:
         "ITIL KPIs: " + json.dumps(ov.get("kpis", {})),
         "SLA BREACH-RISK: " + json.dumps(ov.get("breach_risk", [])[:6]),
         "CAB QUEUE: " + json.dumps(ov.get("cab_queue", [])),
+        "GATEWAY AND VLLM TELEMETRY: " + json.dumps({"freshness": telemetry.get("freshness"), "sources": telemetry_summary, "errors": telemetry.get("errors", [])}),
     ]
     return "\n".join(parts)
 
@@ -125,7 +137,14 @@ def stream_answer(home: Path, prompt: str, actor: str = "operator", capability_o
     ]
     collected = []
     got_any = False
-    for tok in gw.chat_stream(messages, max_tokens=1400, temperature=0.3, timeout=90):
+    for tok in gw.chat_stream(
+        messages,
+        model=ASSISTANT_ROUTE,
+        max_tokens=1400,
+        temperature=0.3,
+        timeout=90,
+        base_url=ASSISTANT_GATEWAY_URL,
+    ):
         got_any = True
         collected.append(tok)
         yield _sse("token", {"text": tok})

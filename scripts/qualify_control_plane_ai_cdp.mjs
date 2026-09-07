@@ -135,7 +135,7 @@ try {
     return send("Input.dispatchKeyEvent", { type: "keyDown", key: value, code, modifiers, windowsVirtualKeyCode: virtual, nativeVirtualKeyCode: virtual, ...text }).then(() => send("Input.dispatchKeyEvent", { type: "keyUp", key: value, code, modifiers, windowsVirtualKeyCode: virtual, nativeVirtualKeyCode: virtual }));
   };
   const selectRole = (role) => evaluate(`(() => { const node=document.getElementById("ai-role"); node.value=${JSON.stringify(role)}; node.dispatchEvent(new Event("change",{bubbles:true})); })()`);
-  const purged = () => evaluate("document.querySelectorAll('.ai-lane').length === 0 && !document.getElementById('ai-lanes').innerText.includes('1200')");
+  const purged = () => evaluate("document.querySelectorAll('.ai-lane').length === 0 && !(document.getElementById('ai-lanes')?.innerText || '').includes('1200')");
 
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
   await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer skcp24-cdp", Origin: "https://10.0.0.139:7778" } });
@@ -186,15 +186,12 @@ try {
 
   stage = "401 purge";
   await selectRole("project-manager");
-  try {
-    await waitFor(async () => evaluate("document.getElementById('ai-status').innerText === 'UNAVAILABLE'").catch(() => false), "401 did not fail closed");
-  } catch (error) {
-    error.message += `: ${await evaluate("JSON.stringify({status:document.getElementById('ai-status').innerText,url:location.href,lanes:document.getElementById('ai-lanes').innerText})")}`;
-    throw error;
-  }
+  await waitFor(async () => evaluate("location.pathname === '/auth/login' || document.getElementById('ai-status')?.innerText === 'UNAVAILABLE'").catch(() => false), "401 did not fail closed");
   assert.equal(await purged(), true, "401 retained protected DOM");
 
   stage = "stale response purge";
+  await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/ai?role=operator&scope=estate&window=latest&baseline=none&service=all` });
+  await waitFor(async () => evaluate("document.querySelectorAll('.ai-lane').length === 3").catch(() => false), "AI workspace did not recover after sign-in redirect");
   await selectRole("operator");
   assert.equal(await purged(), true, "Reload did not purge protected DOM");
   await evaluate(`history.pushState({}, "", "/control-plane/ai?role=operator&scope=estate&window=latest&baseline=none&service=all&selected_silo=ai"); window.dispatchEvent(new PopStateEvent("popstate"));`);

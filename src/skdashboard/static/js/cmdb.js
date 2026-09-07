@@ -206,16 +206,4 @@ document.getElementById("btn-plan").addEventListener("click", async () => {
     toast(`preview only · ${d.counts.created} create · ${d.counts.updated} update · ${auth}`);
   } catch (e) { toast(e.message, true); }
 });
-document.getElementById("btn-apply").addEventListener("click", async () => {
-  if (!window.confirm("Apply the validated declared + local CMDB discovery plan?")) return;
-  try {
-    const r = await fetch("/api/cmdb/apply", { method: "POST", headers: await authHeaders() });
-    const d = await r.json();
-    if (!r.ok || !d.applied) throw new Error(d.error || "CMDB apply was refused");
-    toast(`${d.execution_state} · ${d.counts.created} create · ${d.counts.updated} update`);
-    await load();
-    renderActionState(d);
-  } catch (e) { toast(e.message, true); }
-});
-
 load();

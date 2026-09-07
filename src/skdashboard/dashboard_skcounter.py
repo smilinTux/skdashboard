@@ -268,6 +268,7 @@ def _normalize_snapshot(document: Any) -> tuple[dict, list[dict]]:
         raise SnapshotError("aggregates must be a bounded array")
 
     meta = {
+        "idempotency_key": document["idempotency_key"],
         "lane": lane,
         "node_id": node_id,
         "principal_id": principal_id,
@@ -320,19 +321,41 @@ def _normalize_snapshot(document: Any) -> tuple[dict, list[dict]]:
 def _read_observations(home: Path) -> tuple[list[dict], list[dict], list[str]]:
     root = _data_root(home)
     observation_root = root / "observations"
-    if not observation_root.is_dir():
+    paths = (
+        sorted(observation_root.rglob("*.json"))[:MAX_OBSERVATION_FILES]
+        if observation_root.is_dir()
+        else []
+    )
+    sent_root = root / "sent"
+    if sent_root.is_dir():
+        for principal_root in sorted(sent_root.glob("*/*"))[:MAX_OBSERVATION_FILES]:
+            if principal_root.is_dir() and not principal_root.is_symlink():
+                latest = max(principal_root.glob("*.json"), default=None)
+                if latest is not None:
+                    paths.append(latest)
+    if not paths:
         return [], [], []
 
     rows: list[dict] = []
     observations: list[dict] = []
+    seen_observations: set[tuple[str, str, str, str, str]] = set()
     errors: list[str] = []
-    paths = sorted(observation_root.rglob("*.json"))[:MAX_OBSERVATION_FILES]
     for path in paths:
         try:
             if path.is_symlink() or path.stat().st_size > MAX_OBSERVATION_BYTES:
                 raise SnapshotError("unsafe link or oversized observation")
             document = json.loads(path.read_text(encoding="utf-8"))
             meta, normalized_rows = _normalize_snapshot(document)
+            identity = (
+                meta["idempotency_key"],
+                meta["lane"],
+                meta["node_id"],
+                meta["principal_id"],
+                meta["observed_at_text"],
+            )
+            if identity in seen_observations:
+                continue
+            seen_observations.add(identity)
             observations.append(meta)
             rows.extend(normalized_rows)
         except (OSError, json.JSONDecodeError, SnapshotError) as exc:
@@ -556,6 +579,7 @@ def get_ai_usage(
     available_lanes = sorted({row["lane"] for row in rows})
     requested_lane = filters.get("lane", "harness_reported")
     lane = requested_lane if requested_lane in LANES else "harness_reported"
+    lane_observation_count = sum(item["lane"] == lane for item in observations)
     lane_rows = [row for row in rows if row["lane"] == lane]
     model_rows_all = [row for row in lane_rows if row["view"] == "models"]
     facets = {
@@ -583,22 +607,32 @@ def get_ai_usage(
     expected_nodes = _expected_nodes(lane)
     reporting_nodes = sorted({item["node_id"] for item in collectors})
     missing_nodes = sorted(set(expected_nodes) - set(reporting_nodes))
+    expected_count = max(len(expected_nodes), len(reporting_nodes))
     coverage = {
-        "expected_nodes": len(expected_nodes),
+        "expected_nodes": expected_count,
         "reporting_nodes": len(reporting_nodes),
         "fresh_collectors": sum(item["status"] == "fresh" for item in collectors),
         "delayed_collectors": sum(item["status"] == "delayed" for item in collectors),
         "stale_collectors": sum(item["status"] == "stale" for item in collectors),
         "missing_nodes": missing_nodes,
         "percent": (
-            round(len(set(expected_nodes) & set(reporting_nodes)) / len(expected_nodes) * 100, 1)
-            if expected_nodes
+            round(
+                (
+                    len(set(expected_nodes) & set(reporting_nodes))
+                    if expected_nodes
+                    else len(reporting_nodes)
+                )
+                / expected_count
+                * 100,
+                1,
+            )
+            if expected_count
             else None
         ),
     }
 
     status = "empty"
-    if rows:
+    if lane_observation_count:
         status = "degraded" if errors else "current"
     elif errors:
         status = "degraded"
@@ -629,6 +663,6 @@ def get_ai_usage(
         },
         "collectors": collectors,
         "coverage": coverage,
-        "observation_count": len(observations),
+        "observation_count": lane_observation_count,
         "errors": errors,
     }

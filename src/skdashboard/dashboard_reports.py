@@ -7,8 +7,10 @@ import json
 import os
 import re
 import stat
+import sys
+from argparse import ArgumentParser
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -42,9 +44,22 @@ _HASH_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 MAX_SNAPSHOTS = 500
 MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
 
+_OFFLINE_METRICS = {
+    "skcapstone.fleet": ("fleet.reporting_nodes", None, "reporting"),
+    "skgateway.observed": (
+        "ai.gateway_observation_count",
+        "gateway_observed",
+        "observation_count",
+    ),
+}
+
 
 class ReportSnapshotError(ValueError):
     """Raised when immutable report evidence is invalid or conflicts."""
+
+
+def _utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _canonical(value: object) -> bytes:
@@ -458,6 +473,120 @@ def compare_report_snapshots(current: dict, baseline: dict) -> dict:
     }
 
 
+def _offline_metric(source: dict, *, portfolio_id: str) -> dict | None:
+    mapping = _OFFLINE_METRICS.get(source.get("adapter_id"))
+    if mapping is None or source.get("truth_state") not in {"current", "stale", "partial"}:
+        return None
+    metric_id, lane, field = mapping
+    aggregate = source.get("aggregate")
+    coverage = source.get("coverage")
+    watermark = source.get("watermark")
+    if not isinstance(aggregate, dict) or not isinstance(coverage, dict):
+        return None
+    value = coverage.get(field) if field == "reporting" else aggregate.get(field)
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not isinstance(watermark, dict)
+        or not isinstance(watermark.get("value"), str)
+        or not watermark["value"]
+    ):
+        return None
+
+    from .control_plane_metric_registry import calculate_metric
+
+    errors = [
+        str(error.get("message", "source reported partial evidence"))[:256]
+        for error in source.get("errors", [])
+        if isinstance(error, dict)
+    ]
+    scope = {"portfolio_id": portfolio_id}
+    if lane:
+        scope["measurement_lane"] = lane
+    return calculate_metric(
+        metric_id,
+        {
+            "schema_version": "1.1.0",
+            "definition_version": "1.0.0",
+            "truth_state": source["truth_state"],
+            "numerator": value,
+            "denominator": None,
+            "sample_size": coverage.get("reporting"),
+            "scope": scope,
+            "window": {
+                "start": source["observed_at"],
+                "end": source["projected_at"],
+                "timezone": "UTC",
+                "baseline": None,
+            },
+            "visibility": source["visibility"],
+            "confidence": None,
+            "policy_decision_ref": None,
+            "source": {
+                "owner": source["owner"],
+                "adapter_id": source["adapter_id"],
+                "adapter_version": source["adapter_version"],
+                "observed_at": source["observed_at"],
+                "projected_at": source["projected_at"],
+                "freshness_ttl_seconds": source["ttl_seconds"],
+                "watermarks": [watermark],
+                "evidence_refs": [
+                    f"aggregate:{source['adapter_id']}:{watermark['value']}"
+                ],
+            },
+            "data_quality": {
+                "coverage_numerator": coverage.get("reporting"),
+                "coverage_denominator": coverage.get("expected"),
+                "errors": errors,
+                "exclusions": [],
+                "notes": ["Frozen from the policy-safe aggregate adapter."],
+            },
+        },
+    )
+
+
+def generate_offline_report_snapshot(
+    home: Path,
+    *,
+    portfolio_id: str = "estate",
+    now: datetime | None = None,
+    readers: Mapping[str, object] | None = None,
+) -> dict:
+    """Read real aggregate adapters and persist one immutable operations report."""
+    from .control_plane_adapters import default_readers, project_estate
+
+    instant = now.astimezone(timezone.utc) if now is not None else None
+    estate = project_estate(
+        default_readers(Path(home)) if readers is None else readers,
+        now=instant,
+    )
+    generated_at = instant or datetime.now(timezone.utc)
+    metrics = [
+        metric
+        for source in estate
+        if (metric := _offline_metric(source, portfolio_id=portfolio_id)) is not None
+    ]
+    if not metrics:
+        raise ReportSnapshotError("no supported aggregate evidence is available")
+    snapshot = build_report_snapshot(
+        report_type="daily_operations",
+        audience=["control plane operators"],
+        generated_at=_utc(generated_at),
+        as_of=max(metric["source"]["observed_at"] for metric in metrics),
+        scope={"portfolio_id": portfolio_id},
+        baseline=None,
+        sections=[
+            {
+                "section_id": "operations",
+                "title": "Operations",
+                "metric_results": metrics,
+                "insights": [],
+            }
+        ],
+    )
+    return ReportSnapshotStore(home).put(snapshot)
+
+
 class ReportSnapshotStore:
     """Small immutable local store for offline-created report snapshots."""
 
@@ -632,3 +761,17 @@ class ReportProjectionProvider:
         if currentness_verifier.check_after_owner_read(context).value != "allow":
             raise PermissionError("control-plane decision expired during owner read")
         return snapshot
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = ArgumentParser(description="Create one immutable report from local aggregates")
+    parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--portfolio-id", default="estate")
+    args = parser.parse_args(argv)
+    snapshot = generate_offline_report_snapshot(args.home, portfolio_id=args.portfolio_id)
+    print(snapshot["snapshot_id"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
