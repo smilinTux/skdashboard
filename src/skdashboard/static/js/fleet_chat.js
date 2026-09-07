@@ -104,7 +104,16 @@
 
   function load() {
     fetch("/api/v1/fleet-chat", { headers: { accept: "application/json" } })
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (r) {
+        if (r.status === 401) {
+          var returnTo = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.assign("/auth/login?return_to=" + returnTo);
+          return new Promise(function () {});
+        }
+        if (r.status === 503) throw new Error("HTTP 503; session or source unavailable");
+        if (!r.ok) throw new Error("HTTP " + r.status + "; session or source unavailable");
+        return r.json();
+      })
       .then(function (d) {
         state.messages = d.messages || [];
         renderRail(); renderLog();

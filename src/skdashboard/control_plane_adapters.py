@@ -130,6 +130,7 @@ SPECS = (
             "delayed_collectors",
             "stale_collectors",
         ),
+        ttl_seconds=1_200,
     ),
     AdapterSpec(
         "skgateway.observed",
@@ -610,6 +611,43 @@ def _local_readers(
 
     def usage(lane: str) -> dict:
         raw = dashboard_skcounter.get_ai_usage(home, {"lane": lane})
+        if lane == "gateway_observed" and not raw.get("observation_count"):
+            from .dashboard_observability import collect_gateway
+
+            telemetry = collect_gateway()
+            gateway = telemetry.get("source")
+            if gateway is not None:
+                summary = gateway.get("summary", {})
+                backends = gateway.get("backends", {})
+                expected = len(backends)
+                reporting = sum(
+                    bool(item.get("observed"))
+                    for item in backends.values()
+                    if isinstance(item, dict)
+                )
+                unpriced = summary.get("unpricedRequests", 0)
+                return aggregate_reader(
+                    {
+                        "tokens_total": int(summary.get("totalInputTokens", 0) or 0)
+                        + int(summary.get("totalOutputTokens", 0) or 0),
+                        "cost_usd": summary.get("totalCostUsd")
+                        if not unpriced
+                        else None,
+                        "cost_state": "available" if not unpriced else "unavailable",
+                        "observation_count": int(summary.get("totalRequests", 0) or 0),
+                        "fresh_collectors": reporting,
+                        "delayed_collectors": 0,
+                        "stale_collectors": 0,
+                    },
+                    expected=expected,
+                    reporting=reporting,
+                    observed_at=telemetry.get("observed_at"),
+                    errors=["partial"]
+                    if telemetry.get("errors") or reporting < expected
+                    else [],
+                    has_observations=bool(summary.get("totalRequests")),
+                    watermark_data=gateway,
+                )()
         summary = raw.get("summary")
         tokens = summary.get("tokens") if isinstance(summary, dict) else None
         coverage = raw.get("coverage")
@@ -621,10 +659,17 @@ def _local_readers(
             "delayed_collectors",
             "stale_collectors",
         )
+        tokens = summary.get("tokens") if isinstance(summary, dict) else None
+        total = (
+            tokens.get("total")
+            if isinstance(tokens, dict)
+            else summary.get("total")
+            if isinstance(summary, dict)
+            else None
+        )
         if (
             not isinstance(summary, dict)
-            or not isinstance(tokens, dict)
-            or not isinstance(tokens.get("total"), int)
+            or not isinstance(total, int)
             or "cost_state" not in summary
             or not isinstance(coverage, dict)
             or not all(isinstance(coverage.get(key), int) for key in required_coverage)
@@ -640,19 +685,21 @@ def _local_readers(
         stale_collectors = coverage.get("stale_collectors", 0)
         delayed_collectors = coverage.get("delayed_collectors", 0)
         collector_states = {item.get("status") for item in collectors if item.get("status")}
+        cost_state = summary["cost_state"]
+        if cost_state not in {"estimated", "billed", "mixed", "unavailable"}:
+            raise ValueError
+        cost_usd = summary.get("cost_usd")
+        if cost_state != "unavailable" and not isinstance(cost_usd, (int, float)):
+            raise ValueError
         return aggregate_reader(
             {
-                "tokens_total": tokens["total"],
+                "tokens_total": total,
                 "latency_ms": None,
                 "cache_ratio": summary.get("cache_ratio") if summary.get("cache_ratio") is not None else None,
                 "error_count": None,
                 "denial_count": None,
-                "cost_usd": (
-                    summary.get("cost_usd")
-                    if summary.get("cost_state") != "unavailable"
-                    else None
-                ),
-                "cost_state": summary.get("cost_state", "unavailable"),
+                "cost_usd": cost_usd if cost_state != "unavailable" else None,
+                "cost_state": cost_state,
                 "observation_count": raw.get("observation_count", 0),
                 "fresh_collectors": coverage["fresh_collectors"],
                 "delayed_collectors": delayed_collectors,

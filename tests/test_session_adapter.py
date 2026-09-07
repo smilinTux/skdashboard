@@ -84,11 +84,10 @@ def login(client, return_to=None):
 def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     disabled = TestClient(create_read_only_app(tmp_path), base_url=ORIGIN)
     assert disabled.get("/auth/login").status_code == 404
-    assert "Short-lived CapAuth bearer" in disabled.get("/").text
+    assert disabled.get("/", follow_redirects=False).headers["location"] == "/control-plane/now"
     session = adapter(tmp_path)
     client = TestClient(create_read_only_app(tmp_path, session_adapter=session), base_url=ORIGIN)
-    assert "Sign in" in client.get("/").text
-    assert "Short-lived CapAuth bearer" not in client.get("/").text
+    assert client.get("/", follow_redirects=False).headers["location"] == "/control-plane/now"
     query, response = login(client)
     assert response.status_code == 303
     assert query["code_challenge_method"] == ["S256"]
@@ -97,6 +96,7 @@ def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     cookie = response.headers["set-cookie"]
     assert COOKIE_NAME in cookie and "Secure" in cookie and "HttpOnly" in cookie
     assert "SameSite=strict" in cookie and "Domain=" not in cookie
+    assert "Max-Age=86400" in cookie
     assert "access-" not in cookie and "refresh-" not in cookie
     data = (tmp_path / "state" / "sessions.db").read_bytes()
     assert b"access-1" not in data and b"refresh-1" not in data and b"test-secret" not in data
@@ -119,7 +119,7 @@ def test_app_pages_show_shared_capauth_status_and_identity(tmp_path):
     assert current.status_code == 200
     assert current.json()["authenticator"] == "CapAuth"
     assert current.json()["subject"] == "operator@example.test"
-    assert current.json()["expires_at"] == 29_800
+    assert current.json()["expires_at"] == 87_400
 
 
 def test_auth_status_uses_compact_native_account_disclosure(tmp_path):
@@ -236,6 +236,37 @@ def test_refresh_rotates_server_credentials_and_pep_runs_each_request(tmp_path):
     )
 
 
+def test_denied_refresh_clears_session_and_requests_reauthentication(tmp_path):
+    now = [1_000]
+
+    class DeniedRefresh(Tokens):
+        async def exchange(self, values, *, expected_nonce=None):
+            if values.get("grant_type") == "refresh_token":
+                raise OIDCExchangeError(
+                    "upstream_denied", status_code=400, detail="invalid_grant"
+                )
+            return await super().exchange(values, expected_nonce=expected_nonce)
+
+    session = adapter(tmp_path, clock=lambda: now[0], tokens=DeniedRefresh())
+    client = TestClient(
+        create_read_only_app(
+            tmp_path,
+            session_adapter=session,
+            authorizer=lambda *_: True,
+        ),
+        base_url=ORIGIN,
+    )
+    login(client)
+    now[0] = 1_290
+
+    response = client.get("/api/v1/overview", headers={"Origin": ORIGIN})
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "browser reauthentication is required"
+    assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
+    assert client.get("/auth/session").status_code == 401
+
+
 def test_session_capability_issuer_mints_fresh_internal_bearers(tmp_path):
     session = adapter(tmp_path)
     minted = []
@@ -349,8 +380,7 @@ def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):
     assert response.json()["error"] == "authentication_unavailable"
 
 
-@pytest.mark.parametrize("path", ["/api/v1/overview", "/auth/session"])
-def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path, path):
+def test_process_restart_reenrolls_valid_encrypted_session(tmp_path):
     from types import SimpleNamespace
 
     from capauth import CurrentPolicyRevisions
@@ -386,7 +416,7 @@ def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path, pat
     first.control_plane_bridge = first_bridge
     client = TestClient(create_read_only_app(tmp_path, session_adapter=first), base_url=ORIGIN)
     login(client)
-    assert len(first_bridge._proofs) == 1
+    original_control_plane_handle = next(iter(first_bridge._proofs))
 
     restarted_bridge = bridge()
     restarted = EncryptedSessionAdapter(
@@ -397,27 +427,32 @@ def test_process_restart_expires_session_when_bridge_proof_is_gone(tmp_path, pat
         control_plane_bridge=restarted_bridge,
         clock=lambda: 1_001,
     )
-    app = create_read_only_app(
-        tmp_path,
-        session_adapter=restarted,
-        session_authorizer=restarted_bridge,
+    cookie = client.cookies.get(COOKIE_NAME)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("10.0.0.139", 7778),
+            "path": "/api/v1/overview",
+            "raw_path": b"/api/v1/overview",
+            "query_string": b"",
+            "headers": [
+                (b"cookie", f"{COOKIE_NAME}={cookie}".encode()),
+                (b"origin", ORIGIN.encode()),
+            ],
+        }
     )
-    after_restart = TestClient(app, base_url=ORIGIN)
-    after_restart.cookies.update(client.cookies)
 
-    response = after_restart.get(path, headers={"Origin": ORIGIN})
+    resolved = asyncio.run(restarted.resolve(request))
 
-    assert response.status_code == 401
-    if path == "/api/v1/overview":
-        assert response.json()["message"] == "browser reauthentication is required"
-    else:
-        assert response.json() == {"authenticated": False}
-    assert response.headers["set-cookie"].startswith(f'{COOKIE_NAME}=""')
-    assert "Max-Age=0" in response.headers["set-cookie"]
-    assert COOKIE_NAME not in after_restart.cookies
-    assert after_restart.get("/auth/session").status_code == 401
+    assert resolved.state == "authenticated"
+    assert resolved.control_plane_request is not None
+    assert len(restarted_bridge._proofs) == 1
+    replacement_control_plane_handle = next(iter(restarted_bridge._proofs))
+    assert replacement_control_plane_handle != original_control_plane_handle
     with restarted._connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
 
 
 def test_live_production_bridge_keeps_session_status_current(tmp_path):
@@ -592,9 +627,10 @@ def test_logout_requires_upstream_revocation(tmp_path):
 def test_only_bounded_session_post_route_is_added(tmp_path):
     app = create_read_only_app(tmp_path, session_adapter=adapter(tmp_path))
     posts = {route.path for route in app.routes if "POST" in (route.methods or set())}
-    assert posts == {"/auth/logout"}
-    for path in ("/api/card/x/mutate", "/api/assistant", "/api/cmdb/apply"):
+    assert posts == {"/auth/logout", "/api/assistant"}
+    for path in ("/api/card/x/mutate", "/api/cmdb/apply"):
         assert TestClient(app, base_url=ORIGIN).post(path).status_code == 404
+    assert TestClient(app, base_url=ORIGIN).post("/api/assistant").status_code == 401
 
 
 def test_launcher_session_configuration_is_all_or_nothing(tmp_path, monkeypatch):

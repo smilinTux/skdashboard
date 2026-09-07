@@ -186,10 +186,13 @@ def _card_findings(cards: list, all_ids: set[str]) -> tuple[list[dict], dict[str
     findings = []
     missing_criteria = [card for card in cards if not card.acceptance_criteria]
     orphan_edges = sorted(
-        (card, dependency)
-        for card in cards
-        for dependency in card.dependencies
-        if dependency not in all_ids
+        (
+            (card, dependency)
+            for card in cards
+            for dependency in card.dependencies
+            if dependency not in all_ids
+        ),
+        key=lambda edge: (edge[0].id, edge[1]),
     )
     active_claims = [card for card in cards if card.owner]
     claim_ttl = [card for card in active_claims if not _iso(card.meta.get("claim_expires_at"))]

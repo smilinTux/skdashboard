@@ -1484,10 +1484,114 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    async def economy_workspace(request):
+        """Serve the existing Economy report through the protected read plane."""
+        from .dashboard_economy import get_economy
+
+        filters = {
+            key: request.query_params.get(key, "")
+            for key in ("lane", "node", "client", "provider", "model", "from", "to")
+            if request.query_params.get(key, "")
+        }
+        return JSONResponse(get_economy(home, filters))
+
+    async def fleet_workspace(_request):
+        """Serve Fleet Drift without its alerting side effect."""
+        from .dashboard_fleet import get_drift
+
+        return JSONResponse(get_drift(home, alert=False))
+
+    async def read_only_assistant(request):
+        """Stream report answers while making every assistant action impossible."""
+        from . import dashboard_assistant as assistant
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 -- malformed input gets a normal error
+            body = {}
+        prompt = (body.get("prompt") or "").strip() if isinstance(body, dict) else ""
+        if not prompt:
+            return _error(request, 400, "INVALID_REQUEST", "prompt required")
+        return StreamingResponse(
+            assistant.stream_answer(home, prompt, actor="read-only", capability_ok=False),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
     async def fleet_chat_projection(_request):
         from .fleet_chat import fleet_chat
 
         return JSONResponse(fleet_chat(home), headers={"Cache-Control": "no-store"})
+
+    async def observability(_request):
+        from .dashboard_observability import collect
+
+        return JSONResponse(collect(), headers={"Cache-Control": "no-store"})
+
+    async def legacy_overview(_request):
+        from .dashboard_overview import get_overview_home
+
+        return JSONResponse(get_overview_home(home))
+
+    async def legacy_kanban(_request):
+        from .dashboard_kanban import get_kanban
+
+        return JSONResponse(get_kanban(home))
+
+    async def legacy_card(request):
+        from .dashboard_kanban import get_card
+
+        return JSONResponse(get_card(home, request.path_params["card_id"]))
+
+    async def legacy_itil(request):
+        from . import dashboard_itil
+
+        path = request.path_params.get("resource") or request.url.path.rsplit("/", 1)[-1]
+        if path == "overview": value = dashboard_itil.get_overview(home)
+        elif path == "incidents": value = dashboard_itil.get_incidents(home)
+        elif path == "problems": value = dashboard_itil.get_problems(home)
+        elif path == "changes": value = dashboard_itil.get_changes(home)
+        elif path == "kedb": value = dashboard_itil.search_kedb(home, request.query_params.get("q", ""))
+        else: return _error(request, 404, "NOT_FOUND", "ITIL resource not found")
+        return JSONResponse(value)
+
+    async def legacy_itil_record(request):
+        from . import dashboard_itil
+
+        return JSONResponse(dashboard_itil.get_record(home, request.path_params["kind"], request.path_params["rid"]))
+
+    async def legacy_kedb(request):
+        from . import dashboard_itil
+
+        return JSONResponse(dashboard_itil.search_kedb(home, request.query_params.get("q", "")))
+
+    async def legacy_cmdb(request):
+        from . import dashboard_cmdb
+
+        resource = request.path_params.get("resource") or request.url.path.rsplit("/", 1)[-1]
+        if resource == "overview": value = dashboard_cmdb.get_overview(home)
+        elif resource == "ci": value = dashboard_cmdb.get_ci(home, request.path_params["ci_id"])
+        elif resource == "plan": value = dashboard_cmdb.plan(home, authorization={"evaluated": True, "authorized": False, "reason": "read-only dashboard"})
+        elif resource == "search":
+            params = request.query_params
+            value = dashboard_cmdb.search(home, params.get("q", ""), params.get("limit", "50"), ci_type=params.get("type", ""), node=params.get("node", ""), status=params.get("status", ""), owner=params.get("owner", ""), tag=params.get("tag", ""), staleness=params.get("staleness", ""), source=params.get("source", ""))
+        else: return _error(request, 404, "NOT_FOUND", "CMDB resource not found")
+        return JSONResponse(value)
+
+    async def legacy_cmdb_plan(_request):
+        from . import dashboard_cmdb
+
+        return JSONResponse(dashboard_cmdb.plan(home, authorization={"evaluated": True, "authorized": False, "reason": "read-only dashboard"}))
+
+    async def legacy_operator(_request):
+        from .dashboard_operator import get_operator_cockpit
+
+        return JSONResponse(get_operator_cockpit(home))
+
+    async def legacy_trust(_request):
+        from .dashboard import _trust_graph_dict
+
+        return JSONResponse(_trust_graph_dict(home))
 
     return [
         Route("/api/v1/build-info", build_information),
@@ -1517,12 +1621,41 @@ def routes(
             "/api/v1/gateway/timeseries",
             protected(gateway_timeseries, "skdashboard.read"),
         ),
+        Route("/api/economy", protected(economy_workspace, "skdashboard.read")),
+        Route("/api/v1/fleet/drift", protected(fleet_workspace, "skdashboard.read")),
+        Route("/api/fleet/drift", protected(fleet_workspace, "skdashboard.read")),
+        Route(
+            "/api/assistant",
+            protected(read_only_assistant, "skdashboard.read"),
+            methods=["POST"],
+        ),
         Route(
             "/api/v1/fleet-chat",
             protected(fleet_chat_projection, "skdashboard.read"),
         ),
+        Route("/api/v1/observability", protected(observability, "skdashboard.read")),
+        Route("/api/observability", protected(observability, "skdashboard.read")),
+        Route("/api/overview", protected(legacy_overview, "skdashboard.read")),
+        Route("/api/kanban", protected(legacy_kanban, "skdashboard.read")),
+        Route("/api/card/{card_id}", protected(legacy_card, "skdashboard.read")),
+        Route("/api/itil/overview", protected(legacy_itil, "skdashboard.read")),
+        Route("/api/itil/incidents", protected(legacy_itil, "skdashboard.read")),
+        Route("/api/itil/problems", protected(legacy_itil, "skdashboard.read")),
+        Route("/api/itil/changes", protected(legacy_itil, "skdashboard.read")),
+        Route("/api/itil/kedb", protected(legacy_kedb, "skdashboard.read")),
+        Route("/api/itil/record/{kind}/{rid}", protected(legacy_itil_record, "skdashboard.read")),
+        Route("/api/cmdb/overview", protected(legacy_cmdb, "skdashboard.read")),
+        Route("/api/cmdb/search", protected(legacy_cmdb, "skdashboard.read")),
+        Route("/api/cmdb/ci/{ci_id}", protected(legacy_cmdb, "skdashboard.read")),
+        Route("/api/cmdb/plan", protected(legacy_cmdb_plan, "skdashboard.read")),
+        Route("/api/operator/overview", protected(legacy_operator, "skdashboard.read")),
+        Route("/api/trust/graph", protected(legacy_trust, "skdashboard.read")),
         Route(
             "/api/v1/events",
+            protected(events, "skdashboard.events.read", require_stream_context=True),
+        ),
+        Route(
+            "/api/events",
             protected(events, "skdashboard.events.read", require_stream_context=True),
         ),
         Route("/metrics", protected(metrics, "skdashboard.read")),

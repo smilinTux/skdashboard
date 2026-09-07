@@ -51,6 +51,7 @@ NODE_ID = "chiap08"
 PURPOSE = "project-management-reporting"
 AUDIENCE = "skdashboard"
 CAPABILITY = "skdashboard.read"
+REPORTS_CAPABILITY = "skdashboard.reports.read"
 EVENTS_CAPABILITY = "skdashboard.events.read"
 TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
@@ -68,12 +69,60 @@ AUTHENTICATED_BINDINGS = frozenset(
         (CAPABILITY, GATEWAY_TARGET),
         (CAPABILITY, GATEWAY_TIMESERIES_TARGET),
         (CAPABILITY, RELIABILITY_TARGET),
+        (CAPABILITY, "/api/v1/schedule/forecasts"),
+        (CAPABILITY, "/api/v1/architecture/projection"),
+        (CAPABILITY, "/api/v1/governance/projection"),
+        (CAPABILITY, "/api/v1/reports/projection"),
         (CAPABILITY, BOARD_TARGET),
+        (CAPABILITY, "/api/v1/fleet/summary"),
+        (CAPABILITY, "/api/v1/fleet/drift"),
+        (CAPABILITY, "/api/v1/economy/summary"),
         (CAPABILITY, FLEET_CHAT_TARGET),
+        (CAPABILITY, "/api/v1/observability"),
+        (CAPABILITY, "/api/assistant"),
+        (CAPABILITY, "/metrics"),
+        (CAPABILITY, "/api/v1/reports/{snapshot_id}"),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
     }
 )
 AUTHENTICATED_TARGETS = frozenset(target for _capability, target in AUTHENTICATED_BINDINGS)
+# Browser compatibility routes use the same read authority as their canonical
+# projections. Keep this mapping centralized so a stale alias cannot turn a
+# valid session into a misleading 503.
+TARGET_ALIASES = {
+    "/api/overview": TARGET,
+    "/api/kanban": BOARD_TARGET,
+    "/api/economy": "/api/v1/economy/summary",
+    "/api/fleet/drift": "/api/v1/fleet/drift",
+    "/api/observability": "/api/v1/observability",
+    "/api/events": EVENTS_TARGET,
+    "/api/cmdb/overview": TARGET,
+    "/api/cmdb/search": TARGET,
+    "/api/cmdb/ci/{ci_id}": TARGET,
+    "/api/cmdb/plan": TARGET,
+}
+
+
+def canonical_target(target: str) -> str:
+    """Return the governed target for a browser compatibility route."""
+
+    if target.startswith("/api/cmdb/ci/"):
+        return TARGET
+    if target.startswith("/api/card/"):
+        return TARGET
+    if target.startswith("/api/itil/"):
+        return TARGET
+    if target in {"/api/operator/overview", "/api/trust/graph"}:
+        return TARGET
+    if target.startswith("/api/v1/reports/") and target != "/api/v1/reports/projection":
+        return "/api/v1/reports/{snapshot_id}"
+    return TARGET_ALIASES.get(target, target)
+
+
+def canonical_capability(capability: str) -> str:
+    """Map documented read aliases to the approved dashboard grant."""
+
+    return CAPABILITY if capability == REPORTS_CAPABILITY else capability
 RESOURCE_TYPE = "skcoord.card_store.project_snapshot"
 EVENTS_RESOURCE_TYPE = "tenant"
 MAX_OPERATOR_PROOFS = 1024
@@ -285,8 +334,8 @@ class InProcessOperatorBridge:
                 purpose=PURPOSE,
                 allowed_origin=origin,
                 revisions=revisions,
-                ttl_seconds=8 * 60 * 60,
-                idle_seconds=30 * 60,
+                ttl_seconds=24 * 60 * 60,
+                idle_seconds=24 * 60 * 60,
             )
             cookie, csrf = material.take()
             proofs[capability] = (cookie, csrf, device, owner_revision)
@@ -306,7 +355,7 @@ class InProcessOperatorBridge:
             (
                 candidate
                 for candidate, target in AUTHENTICATED_BINDINGS
-                if target == request.url.path
+                if target == canonical_target(request.url.path)
             ),
             None,
         )
@@ -344,6 +393,8 @@ class InProcessOperatorBridge:
         authorizer,
         invocation_factory,
     ):
+        capability = canonical_capability(capability)
+        target = canonical_target(target)
         if (capability, target) not in AUTHENTICATED_BINDINGS:
             return None
         proof = getattr(session, "control_plane_request", None)
@@ -741,10 +792,7 @@ def compose_live_control_plane(
     )
 
     def invocation_factory(request, capability: str, target: str) -> ControlPlaneInvocationV1:
-        if (
-            capability,
-            target,
-        ) not in AUTHENTICATED_BINDINGS or request.url.path != target:
+        if (capability, target) not in AUTHENTICATED_BINDINGS or canonical_target(request.url.path) != target:
             raise PermissionError("control-plane invocation is outside the exact binding")
         origin = _approved_request_origin(request)
         return ControlPlaneInvocationV1(
@@ -796,6 +844,7 @@ __all__ = [
     "AUTHENTICATED_TARGETS",
     "BOARD_TARGET",
     "CAPABILITY",
+    "REPORTS_CAPABILITY",
     "EVENTS_CAPABILITY",
     "FLEET_CHAT_TARGET",
     "EVENTS_TARGET",
