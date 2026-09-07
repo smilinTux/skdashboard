@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-- Render truthful latency, cache, denial, and error aggregates for the separate
-  harness-reported and gateway-observed AI lanes while leaving unavailable
-  measurements explicitly unknown.
+- Render truthful token, cost, and cache aggregates for the separate
+  harness-reported and gateway-observed AI lanes while leaving unobserved
+  latency, denial, and request-error measurements explicitly unknown.
 - Complete the provider-neutral, read-only assistant gateway boundary with typed scope, fail-closed validation, and bounded streaming.
 - Make Portfolio presentation filters truthful and keep workspace navigation within the read-only accessibility contract.
 

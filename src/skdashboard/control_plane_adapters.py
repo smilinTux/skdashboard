@@ -611,6 +611,7 @@ def _local_readers(
     def usage(lane: str) -> dict:
         raw = dashboard_skcounter.get_ai_usage(home, {"lane": lane})
         summary = raw.get("summary")
+        tokens = summary.get("tokens") if isinstance(summary, dict) else None
         coverage = raw.get("coverage")
         collectors = raw.get("collectors")
         required_coverage = (
@@ -622,7 +623,8 @@ def _local_readers(
         )
         if (
             not isinstance(summary, dict)
-            or "total" not in summary
+            or not isinstance(tokens, dict)
+            or not isinstance(tokens.get("total"), int)
             or "cost_state" not in summary
             or not isinstance(coverage, dict)
             or not all(isinstance(coverage.get(key), int) for key in required_coverage)
@@ -640,14 +642,16 @@ def _local_readers(
         collector_states = {item.get("status") for item in collectors if item.get("status")}
         return aggregate_reader(
             {
-                "tokens_total": summary.get("total", 0),
-                "latency_ms": summary.get("duration_ms") if summary.get("duration_ms") is not None else None,
+                "tokens_total": tokens["total"],
+                "latency_ms": None,
                 "cache_ratio": summary.get("cache_ratio") if summary.get("cache_ratio") is not None else None,
-                "error_count": len(raw.get("errors", [])),
-                "denial_count": raw.get("denial_count") if isinstance(raw.get("denial_count"), int) else None,
-                "cost_usd": summary.get("cost_usd")
-                if summary.get("cost_state") == "available"
-                else None,
+                "error_count": None,
+                "denial_count": None,
+                "cost_usd": (
+                    summary.get("cost_usd")
+                    if summary.get("cost_state") != "unavailable"
+                    else None
+                ),
                 "cost_state": summary.get("cost_state", "unavailable"),
                 "observation_count": raw.get("observation_count", 0),
                 "fresh_collectors": coverage["fresh_collectors"],
