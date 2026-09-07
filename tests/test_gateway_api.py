@@ -1,10 +1,11 @@
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from skdashboard.gateway_api import _per_model_snapshot, parse_query, project
+from skdashboard.gateway_api import _default_provider, _per_model_snapshot, parse_query, project
 from skdashboard.node_coverage import node_coverage
 
 
@@ -105,6 +106,76 @@ def test_malformed_and_empty_states_are_distinct():
     partial = project([{"_gateway_malformed": True}], query, timeseries=False)
     assert partial["state"] == "partial"
     assert partial["coverage"]["malformed"] == 1
+
+
+def test_provider_normalizes_canonical_gateway_aggregate_snapshot(tmp_path, monkeypatch):
+    root = tmp_path / "skcounter"
+    source = root / "observations/gateway/chiap01/skgateway/source.json"
+    source.parent.mkdir(parents=True)
+    observation = {
+        "schema_version": "skcounter.snapshot.v1",
+        "measurement_lane": "gateway_observed",
+        "node_id": "chiap01",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "payload_hash": "a" * 64,
+        "aggregates": [
+            {
+                "view": "models",
+                "bucket_start": "2026-09-07T00:00:00Z",
+                "client": "skgateway",
+                "provider": "zai",
+                "model": "glm-4.6",
+                "agent": "anonymous",
+                "tokens": {"input": 34, "output": 100, "total": 134},
+                "message_count": 2,
+            },
+            {
+                "view": "models",
+                "bucket_start": "2026-09-07T00:00:00Z",
+                "client": "skgateway",
+                "provider": "openai",
+                "model": "gpt-5",
+                "agent": "codex",
+                "tokens": {"input": 10, "output": 20, "total": 30},
+                "message_count": 1,
+            },
+        ],
+    }
+    raw = json.dumps(observation, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    source.write_bytes(raw)
+    index = root / "observation-index/latest.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "measurement_lane": "gateway_observed",
+                        "view": "models",
+                        "bucket_start": "2026-09-07T00:00:00Z",
+                        "source_path": "observations/gateway/chiap01/skgateway/source.json",
+                        "source_sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("SKCOUNTER_DATA_DIR", str(root))
+
+    rows = _default_provider(tmp_path, {})
+    result = project(rows, parse_query(_request()), timeseries=False)
+
+    assert rows[0]["schema_version"] == "skcounter.snapshot.v1"
+    assert rows[0]["payload_hash"] == "a" * 64
+    assert rows[0]["aggregates"] == observation["aggregates"]
+    assert result["coverage"] == {"returned": 1, "examined": 1, "malformed": 0}
+    assert result["watermark"] == "a" * 64
+    assert result["models"][0]["model"] == "glm-4.6"
+    assert {row["model"] for row in result["summary"]["daily_token_rows"]} == {
+        "glm-4.6",
+        "gpt-5",
+    }
+    assert result["summary"]["daily_token_rows"][0]["node"] == "chiap01"
 
 
 def test_malformed_nested_gateway_facts_are_omitted_without_exception():

@@ -27,7 +27,14 @@ ALLOWED_FILTERS = frozenset({"model", "backend", "provider", "node", "client", "
 ALLOWED_ROLES = frozenset({"operator", "viewer", "auditor"})
 MAX_NODE_FIELD_LENGTH = 128
 NODE_TEXT_FIELDS = frozenset(
-    {"backend", "served_model", "transport_profile", "runtime_revision", "version", "gateway_version"}
+    {
+        "backend",
+        "served_model",
+        "transport_profile",
+        "runtime_revision",
+        "version",
+        "gateway_version",
+    }
 )
 CONFIGURATION_DRIFT_STATES = frozenset({"clean", "drifted", "unknown"})
 
@@ -160,8 +167,47 @@ def _default_provider(home: Path, query: dict[str, Any]) -> list[dict[str, Any]]
             continue
         if observation.get("measurement_lane") != "gateway_observed":
             continue
-        observations.append(observation)
+        observations.append(_normalize_observation(observation, entry))
     return observations
+
+
+def _normalize_observation(observation: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the canonical SKCounter snapshot without changing legacy facts input."""
+    if "facts" in observation or observation.get("schema_version") != "skcounter.snapshot.v1":
+        return observation
+    aggregates = observation.get("aggregates")
+    if not isinstance(aggregates, list):
+        return observation
+    matches = [
+        {**row, "node": observation.get("node_id")}
+        for row in aggregates
+        if isinstance(row, dict)
+        and row.get("view") == entry.get("view")
+        and row.get("bucket_start") == entry.get("bucket_start")
+    ]
+    if not matches:
+        return observation
+    dimensions = {
+        plural: sorted(
+            {value for row in matches if isinstance((value := row.get(singular)), str) and value}
+        )
+        for singular, plural in (
+            ("model", "models"),
+            ("provider", "providers"),
+            ("client", "clients"),
+            ("agent", "apps"),
+        )
+    }
+    node = observation.get("node_id")
+    dimensions["nodes"] = [node] if isinstance(node, str) and node else []
+    return {
+        **observation,
+        "facts": {
+            "breakdowns": dimensions,
+            "daily_token_rows": matches,
+            "gateway": {"backend_health": {}, "expected_nodes": dimensions["nodes"]},
+        },
+    }
 
 
 def _unknown(reason: str) -> dict[str, str]:
@@ -177,9 +223,7 @@ def _facts_are_well_formed(facts: Any) -> bool:
         not (
             isinstance(values, list)
             and all(
-                isinstance(value, str)
-                and bool(value)
-                and len(value) <= MAX_NODE_FIELD_LENGTH
+                isinstance(value, str) and bool(value) and len(value) <= MAX_NODE_FIELD_LENGTH
                 for value in values
             )
             or isinstance(values, dict)
@@ -233,11 +277,7 @@ def _facts_are_well_formed(facts: Any) -> bool:
             or not isinstance(detail, dict)
             or any(
                 value is not None
-                and (
-                    not isinstance(value, str)
-                    or not value
-                    or len(value) > MAX_NODE_FIELD_LENGTH
-                )
+                and (not isinstance(value, str) or not value or len(value) > MAX_NODE_FIELD_LENGTH)
                 for field, value in detail.items()
                 if field in NODE_TEXT_FIELDS
             )
@@ -472,9 +512,7 @@ def _matches(observation: dict[str, Any], filters: dict[str, str]) -> bool:
             ):
                 return False
             continue
-        values = (
-            breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
-        )
+        values = breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
         if not isinstance(values, list) or expected not in values:
             return False
     return True

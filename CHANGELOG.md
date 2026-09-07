@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Normalize canonical SKCounter gateway aggregate snapshots for the existing
+  read-only summary and timeseries projections.
 - Add a fail-closed projection for transported SKCounter gateway indexes into
   the read-only dashboard data root.
 - Render truthful token, cost, and cache aggregates for the separate
