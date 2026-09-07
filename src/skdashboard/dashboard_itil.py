@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -136,8 +137,62 @@ class ReliabilityProjectionProvider:
         return projection
 
 
+def _gateway_snapshot(home: Path) -> dict | None:
+    """Read one protected, immutable gateway reliability snapshot, fail closed."""
+    configured = os.environ.get("SKGATEWAY_RELIABILITY_SNAPSHOT")
+    path = Path(configured).expanduser() if configured else Path(home).expanduser() / "skgateway" / "reliability.json"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+            return None
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or document.get("source") != "skgateway":
+            return None
+        observations = document.get("observations")
+        if not isinstance(observations, dict):
+            return None
+        # A snapshot is usable only when its evidence digest is present.  Never
+        # manufacture healthy or zero values for an absent observation.
+        digest = document.get("snapshot_hash")
+        if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest.lower()):
+            return None
+        return document
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _gateway_metrics(home: Path) -> list[dict]:
+    snapshot = _gateway_snapshot(home)
+    ids = (("gateway.request_success", "Gateway request success", "count", "success"),
+           ("gateway.request_error", "Gateway request errors", "count", "error"),
+           ("gateway.rate_limited_429", "Gateway HTTP 429 responses", "count", "rate_limited_429"),
+           ("gateway.timeouts", "Gateway timeouts", "count", "timeouts"),
+           ("gateway.latency_percentiles", "Gateway latency percentiles", "milliseconds", "latency_percentiles"),
+           ("gateway.slo_state", "Gateway SLO state", "state", "slo_state"),
+           ("gateway.rollback_triggers", "Gateway rollback triggers", "count", "rollback_triggers"))
+    if snapshot is None:
+        return [_metric(mid, label, value=None, unit=unit, numerator=None, denominator=None,
+                        sample_size=0, window="unknown", classification="skgateway_observed",
+                        exclusions=["Protected SKGateway observation unavailable."],
+                        legacy_coverage={}, evidence_refs=[]) for mid, label, unit, key in ids]
+    obs = snapshot["observations"]
+    window = snapshot.get("window", "unknown")
+    freshness = snapshot.get("freshness", "unknown")
+    refs = [f"skgateway.observed:{snapshot['snapshot_hash']}"]
+    result = []
+    for mid, label, unit, key in ids:
+        value = obs.get(key)
+        if value is None or isinstance(value, (dict, list)) and not value:
+            value = None
+        result.append(_metric(mid, label, value=value, unit=unit, numerator=None, denominator=None,
+                              sample_size=snapshot.get("sample_size", 0) if isinstance(snapshot.get("sample_size", 0), int) else 0,
+                              window=f"{window}; freshness={freshness}", classification="skgateway_observed",
+                              exclusions=[] if value is not None else ["Observation missing in protected snapshot."],
+                              legacy_coverage={}, evidence_refs=refs))
+    return result
+
+
 def get_reliability_projection(home: Path, query: dict) -> dict:
-    """Build one bounded read-only reliability projection from folded ITIL records."""
+    """Build one bounded read-only reliability projection from ITIL and gateway lanes."""
     mgr = _mgr(home)
     incidents = mgr.list_incidents()
     problems = mgr.list_problems()
@@ -451,19 +506,34 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
     if not source:
         for metric in metrics:
             metric.update(value=None, truth_state="unknown", numerator=None, denominator=None)
-    watermark = hashlib.sha256(
+    gateway_metrics = _gateway_metrics(home)
+    metrics.extend(gateway_metrics)
+    # Keep source watermarks independently attributable.  The projection hash
+    # may bind both lanes, but an ITIL watermark must never change merely
+    # because a gateway snapshot arrived (or vice versa).
+    itil_watermark = hashlib.sha256(
         json.dumps(source, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    gateway_ref = next(
+        (ref for metric in gateway_metrics for ref in metric["evidence_refs"]),
+        None,
+    )
+    projection_watermark = hashlib.sha256(
+        json.dumps({"itil": itil_watermark, "gateway": gateway_ref}, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return {
         "schema_version": "1.0.0",
         "projection_id": "reliability-latest",
-        "projection_hash": f"sha256:{watermark}",
-        "source_owner": "SKCapstone ITIL",
+        "projection_hash": f"sha256:{projection_watermark}",
+        "source_owner": "SKCapstone ITIL and SKGateway (separate evidence lanes)",
         "scope": dict(query),
         "observed_at": now.isoformat(),
         "truth_state": "current" if source else "unknown",
         "visibility": {"state": "visible", "authorization": "authorized"},
-        "source_watermarks": [{"source": "skcoord.itil", "value": f"sha256:{watermark}"}],
+        "source_watermarks": [
+            {"source": "skcoord.itil", "value": f"sha256:{itil_watermark}"},
+            {"source": "skgateway.observed", "value": gateway_ref or "unavailable"},
+        ],
         "metrics": metrics,
         "items": items,
         "display_limit": 200,
