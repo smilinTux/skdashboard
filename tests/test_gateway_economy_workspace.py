@@ -15,16 +15,16 @@ ROOT = Path(__file__).parents[1]
 ORIGIN = "https://10.0.0.139:7778"
 
 
-def test_safe_economy_uses_only_protected_assets_and_queries(tmp_path):
+def test_safe_gateway_economy_uses_only_protected_assets_and_queries(tmp_path):
     client = TestClient(
         create_read_only_app(tmp_path, authorizer=lambda bearer, *_: bearer == "reader"),
         base_url=ORIGIN,
     )
-    page = client.get("/economy")
+    page = client.get("/gateway/economy")
     assert page.status_code == 200
     assert "Gateway Economy" in page.text
     assert page.headers["cache-control"] == "no-store"
-    assert client.post("/economy").status_code == 405
+    assert client.post("/gateway/economy").status_code == 405
     for asset in ("js/gateway_client.js", "js/gateway_economy.js", "css/gateway_economy.css"):
         assert client.get(f"/static/{asset}").status_code == 200
     assert client.get("/api/economy").status_code == 401
@@ -34,6 +34,19 @@ def test_safe_economy_uses_only_protected_assets_and_queries(tmp_path):
     assert client.get(target).status_code == 401
     assert client.get(target, headers={"Authorization": "Bearer invalid"}).status_code == 403
     assert client.get(target, headers={"Authorization": "Bearer reader"}).status_code == 503
+
+
+def test_economy_entrypoint_uses_full_workspace(tmp_path):
+    client = TestClient(create_read_only_app(tmp_path), base_url=ORIGIN)
+
+    page = client.get("/economy")
+
+    assert page.status_code == 200
+    assert "AI Usage filters" in page.text
+    assert "Autopilot cost" in page.text
+    assert "Joule economy" in page.text
+    assert "Gateway Economy" not in page.text
+    assert 'src="/static/js/economy.js"' in page.text
 
 
 def test_economy_link_remains_on_safe_runtime(tmp_path):
