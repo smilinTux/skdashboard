@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
+from .node_coverage import node_coverage
+
 SCHEMA_VERSION = "skcounter.snapshot.v1"
 LANES = frozenset({"harness_reported", "gateway_observed"})
 VIEWS = frozenset(
@@ -820,21 +822,10 @@ def get_ai_usage(
 
     collectors = _collectors(observations, lane, now)
     expected_nodes = _expected_nodes(lane)
-    reporting_nodes = sorted({item["node_id"] for item in collectors})
-    missing_nodes = sorted(set(expected_nodes) - set(reporting_nodes))
-    coverage = {
-        "expected_nodes": len(expected_nodes),
-        "reporting_nodes": len(reporting_nodes),
-        "fresh_collectors": sum(item["status"] == "fresh" for item in collectors),
-        "delayed_collectors": sum(item["status"] == "delayed" for item in collectors),
-        "stale_collectors": sum(item["status"] == "stale" for item in collectors),
-        "missing_nodes": missing_nodes,
-        "percent": (
-            round(len(set(expected_nodes) & set(reporting_nodes)) / len(expected_nodes) * 100, 1)
-            if expected_nodes
-            else None
-        ),
-    }
+    coverage = node_coverage(
+        expected_nodes,
+        {item["node_id"]: item["status"] for item in collectors},
+    )
 
     status = "degraded" if index["status"] in {"unavailable", "changing"} else "empty"
     if rows:

@@ -12,6 +12,8 @@ from typing import Any, Callable
 
 from starlette.responses import Response
 
+from .node_coverage import node_coverage
+
 SCHEMA = "skdashboard.gateway.v1"
 MAX_WINDOW_SECONDS = 24 * 60 * 60
 MAX_ROWS = 200
@@ -483,12 +485,23 @@ def project(
         common["summary"] = facts
         common["models"] = _per_model_snapshot(facts) if isinstance(facts, dict) else []
         common["nodes"] = _per_node_snapshot(selected, now)
+        coverage = node_coverage(
+            (node["node_id"] for node in common["nodes"]),
+            {
+                node["node_id"]: node["telemetry_state"]
+                for node in common["nodes"]
+                if node["telemetry_state"] != "missing"
+            },
+        )
         common["node_totals"] = {
-            "named": len(common["nodes"]),
-            "current": sum(node["telemetry_state"] == "current" for node in common["nodes"]),
-            "stale": sum(node["telemetry_state"] == "stale" for node in common["nodes"]),
-            "missing": sum(node["telemetry_state"] == "missing" for node in common["nodes"]),
-            "unknown": sum(node["telemetry_state"] == "unknown" for node in common["nodes"]),
+            "named": coverage["expected_nodes"],
+            "current": coverage["fresh_collectors"],
+            "stale": coverage["stale_collectors"],
+            "missing": len(coverage["missing_nodes"]),
+            "unknown": coverage["reporting_nodes"]
+            - coverage["fresh_collectors"]
+            - coverage["delayed_collectors"]
+            - coverage["stale_collectors"],
         }
     return common
 
