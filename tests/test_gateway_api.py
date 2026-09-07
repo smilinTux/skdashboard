@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from skdashboard.gateway_api import _per_model_snapshot, parse_query, project
 from skdashboard.node_coverage import node_coverage
 
@@ -227,3 +229,36 @@ def test_malformed_node_inventory_fails_closed_as_partial():
     assert result["state"] == "partial"
     assert result["nodes"] == []
     assert result["coverage"]["malformed"] == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("backend", {}),
+        ("served_model", []),
+        ("transport_profile", True),
+        ("runtime_revision", ""),
+        ("version", "x" * 129),
+        ("gateway_version", False),
+        ("configuration_drift", "healthy"),
+    ],
+)
+def test_malformed_node_detail_values_fail_closed(field, value):
+    observed = datetime.now(timezone.utc) - timedelta(seconds=5)
+    facts = {
+        "breakdowns": {"models": [], "nodes": ["chiap01"]},
+        "gateway": {
+            "backend_health": {},
+            "nodes": {"chiap01": {field: value}},
+        },
+    }
+
+    result = project(
+        [{"observed_at": observed.isoformat(), "payload_hash": "d" * 64, "facts": facts}],
+        parse_query(_request()),
+        timeseries=False,
+    )
+
+    assert result["state"] == "partial"
+    assert result["nodes"] == []
+    assert result["summary"] is None

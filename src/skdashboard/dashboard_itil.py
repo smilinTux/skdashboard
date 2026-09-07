@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .dashboard_skcounter import get_ai_usage
+
 logger = logging.getLogger("skcapstone.dashboard.itil")
 
 # SLA resolution targets in minutes (mirrors ITILManager.check_sla_breaches).
@@ -144,6 +146,7 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
     changes = mgr.list_changes()
     kedb = mgr.search_kedb("")
     now = _now()
+    node_coverage = get_ai_usage(home, {"lane": "gateway_observed"}, now=now)["coverage"]
     cutoff = now.timestamp() - 7 * 86400
 
     recent = []
@@ -473,6 +476,7 @@ def get_reliability_projection(home: Path, query: dict) -> dict:
             "changes": len(changes),
             "kedb": len(kedb),
         },
+        "node_coverage": node_coverage,
         "errors": []
         if source
         else [{"code": "SOURCE_UNKNOWN", "message": "No folded ITIL records are available."}],

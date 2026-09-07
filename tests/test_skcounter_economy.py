@@ -12,7 +12,9 @@ import pytest
 
 from skdashboard import dashboard_skcounter
 from skdashboard.dashboard import create_app
+from skdashboard.dashboard_itil import get_reliability_projection
 from skdashboard.dashboard_skcounter import get_ai_usage
+from skdashboard.gateway_api import parse_query, project
 
 DIGEST = "a" * 64
 
@@ -424,6 +426,78 @@ def test_gateway_coverage_uses_its_own_eligible_node_inventory(
         "stale_collectors": 0,
         "missing_nodes": [],
         "percent": 100.0,
+    }
+
+
+def test_economy_fleet_and_reliability_share_actual_node_totals(
+    data_root, tmp_path, monkeypatch
+):
+    now = datetime.now(timezone.utc)
+    observed = now.isoformat().replace("+00:00", "Z")
+    _write(
+        data_root,
+        "gateway.json",
+        _snapshot(
+            lane="gateway_observed",
+            node="chiap01",
+            principal="skgateway",
+            observed=observed,
+        ),
+    )
+    monkeypatch.setenv("SKCOUNTER_EXPECTED_GATEWAY_NODES", "chiap01,chiap02")
+
+    class EmptyManager:
+        def list_incidents(self):
+            return []
+
+        def list_problems(self):
+            return []
+
+        def list_changes(self):
+            return []
+
+        def search_kedb(self, _query):
+            return []
+
+    monkeypatch.setattr("skdashboard.dashboard_itil._mgr", lambda _home: EmptyManager())
+    monkeypatch.setattr("skdashboard.dashboard_itil._now", lambda: now)
+    economy = get_ai_usage(tmp_path, {"lane": "gateway_observed"}, now=now)
+    reliability = get_reliability_projection(tmp_path, {})
+
+    request = type(
+        "Request",
+        (),
+        {
+            "query_params": {},
+            "state": type("State", (), {"gateway_role": "viewer", "gateway_scope": "fleet"})(),
+        },
+    )()
+    fleet = project(
+        [
+            {
+                "observed_at": observed,
+                "payload_hash": "a" * 64,
+                "facts": {
+                    "breakdowns": {"models": [], "nodes": ["chiap01"]},
+                    "gateway": {
+                        "backend_health": {},
+                        "expected_nodes": ["chiap01", "chiap02"],
+                        "nodes": {"chiap01": {"configuration_drift": "clean"}},
+                    },
+                },
+            }
+        ],
+        parse_query(request),
+        timeseries=False,
+    )
+
+    assert reliability["node_coverage"] == economy["coverage"]
+    assert fleet["node_totals"] == {
+        "named": economy["coverage"]["expected_nodes"],
+        "current": economy["coverage"]["fresh_collectors"],
+        "stale": economy["coverage"]["stale_collectors"],
+        "missing": len(economy["coverage"]["missing_nodes"]),
+        "unknown": 0,
     }
 
 
