@@ -11,7 +11,11 @@ def test_now_page_offers_one_click_accessible_ai_operator_brief() -> None:
     assert 'id="ai-analyze-button"' in html
     assert 'id="ai-analysis"' in html
     assert 'aria-live="polite"' in html
+    assert 'id="ai-analysis-alert"' in html
+    assert 'role="alert"' in html
     assert "/api/v1/now/ai-brief" in javascript
     assert "Recommended next steps" in javascript
     assert "Proposals only; no action was taken." in javascript
+    assert "The LLM is not configured, cannot be reached" in javascript
     assert ".ai-analysis" in css
+    assert ".ai-analysis-alert" in css
