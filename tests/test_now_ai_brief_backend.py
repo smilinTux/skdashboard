@@ -12,7 +12,7 @@ from skdashboard.control_plane_api import routes
 
 class FakeAssistant:
     def chat(self, messages, **kwargs):
-        assert kwargs["max_tokens"] == 600
+        assert kwargs["max_tokens"] == 1200
         assert kwargs["response_schema"]["title"] == "NowOperatorBrief"
         facts = json.loads(messages[1]["content"].split("\n", 1)[1])["facts"]
         assert len(facts) <= dashboard_assistant.MAX_NOW_FACTS

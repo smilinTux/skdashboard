@@ -94,7 +94,7 @@ def now_operator_brief(overview: dict, actor: str = "operator") -> dict:
             actor=actor,
             card_id="4e9bdbe3",
             require_retrieval_traces=False,
-            max_tokens=600,
+            max_tokens=1200,
             response_schema=NowOperatorBrief.model_json_schema(),
         )
     )

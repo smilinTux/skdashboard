@@ -14,9 +14,10 @@ def test_now_page_offers_one_click_accessible_ai_operator_brief() -> None:
     assert 'id="ai-analysis-alert"' in html
     assert 'role="alert"' in html
     assert "/api/v1/now/ai-brief" in javascript
-    assert "timeoutMs: 45000" in javascript
+    assert "sk-m-public" not in javascript
+    assert "timeoutMs: 50000" in javascript
     assert "Recommended next steps" in javascript
     assert "Proposals only; no action was taken." in javascript
-    assert "The LLM is not configured, cannot be reached" in javascript
+    assert "configured SKGateway dashboard route" in javascript
     assert ".ai-analysis" in css
     assert ".ai-analysis-alert" in css
