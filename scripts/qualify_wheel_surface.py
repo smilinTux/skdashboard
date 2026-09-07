@@ -29,6 +29,7 @@ REQUIRED_ROUTES = {
     "/api/v1/fleet/drift",
     "/api/v1/economy/summary",
     "/api/v1/observability",
+    "/api/v1/now/ai-brief",
     "/api/assistant",
 }
 

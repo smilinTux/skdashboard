@@ -891,6 +891,24 @@ def routes(
             ),
         )
 
+    async def now_ai_brief(request):
+        from .dashboard_assistant import now_operator_brief
+
+        overview_response = await overview(request)
+        if overview_response.status_code != 200:
+            return overview_response
+        try:
+            aggregate = json.loads(overview_response.body)
+            return JSONResponse(now_operator_brief(aggregate, actor="now-operator"))
+        except Exception:
+            return _error(
+                request,
+                503,
+                "NOW_AI_UNAVAILABLE",
+                "the NOW operator brief is temporarily unavailable",
+                retryable=True,
+            )
+
     async def schedule(request):
         allowed = {
             "role",
@@ -1625,6 +1643,7 @@ def routes(
         Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
+        Route("/api/v1/now/ai-brief", protected(now_ai_brief, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
         Route(
             "/api/v1/schedule/forecasts",

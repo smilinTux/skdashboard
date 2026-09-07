@@ -17,6 +17,8 @@
 
 ## [Unreleased]
 
+- Add one-click, typed AI analysis to NOW with current conditions, risks,
+  anomalies, ranked next-step proposals, source freshness, and uncertainty.
 - Restore the complete dashboard navigation, Fleet, Economy, observability,
   reporting, CMDB, Kanban, and provider-neutral Assistant surface on current
   main, and reject built wheels that omit required routes or packaged assets.

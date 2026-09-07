@@ -121,7 +121,7 @@ class AssistantStreamChunk(BaseModel):
     id: str = Field(min_length=1, max_length=256)
     object: Literal["chat.completion.chunk"]
     created: int
-    model: Literal[DASHBOARD_ASSISTANT_ROUTE]
+    model: str = Field(min_length=1, max_length=256)
     choices: list[AssistantChoice] = Field(min_length=1, max_length=4)
 
 
@@ -201,11 +201,14 @@ class AssistantClient:
             raise OutageError("Gateway is unreachable", "outage",
                               self._audit(actor, card_id, error=type(exc).__name__)) from exc
 
-    def chat(self, messages: list[dict], actor: str = "operator", card_id: str | None = None) -> str:
+    def chat(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
+             *, require_retrieval_traces: bool = True) -> str:
         """Collect a fully validated stream; the wire request always has stream=true."""
-        return "".join(self.chat_stream(messages, actor=actor, card_id=card_id))
+        return "".join(self.chat_stream(messages, actor=actor, card_id=card_id,
+                                        require_retrieval_traces=require_retrieval_traces))
 
-    def chat_stream(self, messages: list[dict], actor: str = "operator", card_id: str | None = None):
+    def chat_stream(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
+                    *, require_retrieval_traces: bool = True):
         response = self._urlopen(self._request(messages, actor, card_id), actor, card_id)
         try:
             provenance = self._provenance(response, actor, card_id)
@@ -233,7 +236,7 @@ class AssistantClient:
                 except Exception as exc:
                     raise ResponseValidationError("Malformed assistant stream", "validation_error",
                         self._audit(actor, card_id, error=type(exc).__name__)) from exc
-                if chunk.model != DASHBOARD_ASSISTANT_ROUTE:
+                if chunk.model not in {DASHBOARD_ASSISTANT_ROUTE, provenance.model_served}:
                     self._fail("route_drift", actor, card_id)
                 choice = chunk.choices[0]
                 if choice.finish_reason:
@@ -245,7 +248,7 @@ class AssistantClient:
                     self._fail("response_too_large", actor, card_id)
             if not terminal_finished or not done_seen:
                 self._fail("incomplete_stream", actor, card_id)
-            if not provenance.retrieval_traces:
+            if require_retrieval_traces and not provenance.retrieval_traces:
                 self._fail("missing_retrieval_trace", actor, card_id)
             yield from tokens
         finally:
@@ -258,10 +261,13 @@ class AssistantClient:
     def _provenance(self, response, actor: str, card_id: str | None) -> AssistantProvenance:
         headers = response.headers
         try:
-            traces = json.loads(headers["X-SK-Retrieval-Traces"])
+            traces = json.loads(headers.get("X-SK-Retrieval-Traces", "[]"))
+            rail = headers.get("X-SK-Rail")
             provenance = AssistantProvenance(model_served=headers["X-SK-Model-Served"],
-                backend_id=headers["X-SK-Backend-Id"], route_used=headers["X-SK-Route-Used"],
-                egress_profile=headers["X-SK-Egress-Profile"], retrieval_traces=traces,
+                backend_id=headers.get("X-SK-Backend-Id") or headers["X-SK-Backend"],
+                route_used=headers.get("X-SK-Route-Used") or headers["X-SK-Logical-Route"],
+                egress_profile=headers.get("X-SK-Egress-Profile") or
+                ("local-only" if rail == "local" else rail), retrieval_traces=traces,
                 timestamp=datetime.now(timezone.utc).isoformat())
         except Exception as exc:
             raise ResponseValidationError("Missing typed response provenance", "provenance_missing",

@@ -65,6 +65,7 @@ SESSION_STATUS_TARGET = "/auth/session"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
+        (CAPABILITY, "/api/v1/now/ai-brief"),
         (CAPABILITY, SCHEDULE_TARGET),
         (CAPABILITY, GATEWAY_TARGET),
         (CAPABILITY, GATEWAY_TIMESERIES_TARGET),
