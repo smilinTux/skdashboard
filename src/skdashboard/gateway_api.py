@@ -168,10 +168,19 @@ def _facts_are_well_formed(facts: Any) -> bool:
         return False
     breakdowns = facts.get("breakdowns", {})
     if not isinstance(breakdowns, dict) or any(
-        not isinstance(values, list)
-        or any(
-            not isinstance(value, str) or not value or len(value) > MAX_NODE_FIELD_LENGTH
-            for value in values
+        not (
+            isinstance(values, list)
+            and all(
+                isinstance(value, str)
+                and bool(value)
+                and len(value) <= MAX_NODE_FIELD_LENGTH
+                for value in values
+            )
+            or isinstance(values, dict)
+            and set(values) == {"unavailable"}
+            and isinstance(values["unavailable"], str)
+            and bool(values["unavailable"].strip())
+            and len(values["unavailable"]) <= MAX_NODE_FIELD_LENGTH
         )
         for values in breakdowns.values()
     ):
@@ -265,7 +274,8 @@ def _per_model_snapshot(facts: dict[str, Any]) -> list[dict[str, Any]]:
     capacity = facts.get("capacity", {})
     queue = facts.get("queue", {})
 
-    names = set(breakdowns.get("models", [])) if isinstance(breakdowns, dict) else set()
+    model_names = breakdowns.get("models", []) if isinstance(breakdowns, dict) else []
+    names = set(model_names) if isinstance(model_names, list) else set()
     if isinstance(daily, list):
         names.update(
             row.get("model") for row in daily if isinstance(row, dict) and row.get("model")
@@ -449,8 +459,10 @@ def _matches(observation: dict[str, Any], filters: dict[str, str]) -> bool:
         "rail": "rails",
     }
     for key, expected in filters.items():
-        values = breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
-        if expected not in values:
+        values = (
+            breakdowns.get(aliases[key], []) if isinstance(breakdowns, dict) else []
+        )
+        if not isinstance(values, list) or expected not in values:
             return False
     return True
 
