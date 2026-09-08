@@ -626,13 +626,10 @@ def _local_readers(
             gateway = telemetry.get("source")
             if gateway is not None:
                 summary = gateway.get("summary", {})
-                backends = gateway.get("backends", {})
-                expected = len(backends)
-                reporting = sum(
-                    bool(item.get("observed"))
-                    for item in backends.values()
-                    if isinstance(item, dict)
-                )
+                coverage = raw.get("coverage", {})
+                expected = coverage.get("expected_nodes", 1)
+                expected = expected if isinstance(expected, int) and expected > 0 else 1
+                reporting = 1
                 unpriced = summary.get("unpricedRequests", 0)
                 return aggregate_reader(
                     {
