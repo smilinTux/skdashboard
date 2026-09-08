@@ -597,7 +597,11 @@ def _read_acknowledged_snapshots(root: Path) -> tuple[list[dict], list[dict], li
     if sent_root.is_dir():
         for principal_root in sorted(sent_root.glob("*/*"))[:MAX_INDEX_SOURCES]:
             if principal_root.is_dir() and not principal_root.is_symlink():
-                latest = max(principal_root.glob("*.json"), default=None)
+                latest = max(
+                    principal_root.glob("*.json"),
+                    key=lambda path: path.stat().st_mtime_ns,
+                    default=None,
+                )
                 if latest is not None:
                     paths.append(latest)
 
