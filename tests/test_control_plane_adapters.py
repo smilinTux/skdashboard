@@ -352,7 +352,8 @@ def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry
     assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
     assert by_id["skgateway.observed"]["aggregate"]["tokens_total"] == 100
     assert by_id["skgateway.observed"]["aggregate"]["observation_count"] == 9
-    assert by_id["skgateway.observed"]["truth_state"] == "partial"
+    assert by_id["skgateway.observed"]["coverage"] == {"expected": 1, "reporting": 1}
+    assert by_id["skgateway.observed"]["truth_state"] == "current"
 
 
 def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Path) -> None:
@@ -380,7 +381,10 @@ def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Pa
                 "totalCostUsd": 0,
                 "unpricedRequests": 12,
             },
-            "backends": {"a": {"observed": True}},
+            "backends": {
+                **{f"seen-{index}": {"observed": True} for index in range(3)},
+                **{f"idle-{index}": {"observed": False} for index in range(6)},
+            },
         },
         "errors": [],
     }
