@@ -19,6 +19,15 @@ from starlette.routing import Route
 from .build_info import build_information
 from .dashboard_economy_provider import EconomyProjectionProvider
 from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
+from .workload_isolation import (
+    BoundedWorkload,
+    WorkloadError,
+    WorkloadRequestTooLarge,
+    WorkloadResponseTooLarge,
+    WorkloadSaturated,
+    WorkloadTimedOut,
+    WorkloadLimits,
+)
 
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
@@ -633,6 +642,7 @@ def routes(
     governance_provider=None,
     economy_provider=None,
     report_provider=None,
+    insight_provider=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -690,6 +700,56 @@ def routes(
                 require_stream_context=require_stream_context,
             )
         )
+
+    report_workload = BoundedWorkload(
+        "reports",
+        WorkloadLimits(
+            max_concurrency=2,
+            max_queue_depth=2,
+            timeout_seconds=5.0,
+            max_request_bytes=16 * 1024,
+            max_response_bytes=512 * 1024,
+        ),
+    )
+    insight_workload = BoundedWorkload(
+        "insights",
+        WorkloadLimits(
+            max_concurrency=2,
+            max_queue_depth=2,
+            timeout_seconds=5.0,
+            max_request_bytes=64 * 1024,
+            max_response_bytes=512 * 1024,
+        ),
+    )
+
+    async def insights(request):
+        if insight_provider is None:
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the authorized insight projection is unavailable", retryable=True)
+        try:
+            raw = await request.body()
+            if len(raw) > insight_workload.limits.max_request_bytes:
+                raise WorkloadRequestTooLarge("insight request exceeds its byte ceiling")
+            query = json.loads(raw)
+            allowed = {"question", "scope", "window", "intent", "metric_families", "baseline"}
+            if (not isinstance(query, dict) or set(query) != allowed or not isinstance(query["question"], str) or not query["question"].strip() or "matter_id" in query or (isinstance(query.get("scope"), dict) and "matter_id" in query["scope"]) or query.get("metric_families") != ["portfolio"]):
+                return _error(request, 400, "INVALID_INSIGHT_QUERY", "unsupported insight query")
+            context = getattr(request.state, "control_plane_decision", None)
+            verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+            if context is None or verifier is None:
+                return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the authorized insight projection is unavailable", retryable=True)
+            projection = await insight_workload.run(
+                insight_provider.read, context, query, home,
+                currentness_verifier=verifier, request_bytes=len(raw),
+            )
+            serialized = json.dumps(projection, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            etag = f'"{hashlib.sha256(serialized).hexdigest()}"'
+            return Response(serialized, media_type="application/json", headers={"ETag": etag})
+        except json.JSONDecodeError:
+            return _error(request, 400, "INVALID_INSIGHT_QUERY", "request must be JSON")
+        except WorkloadRequestTooLarge:
+            return _error(request, 413, "REQUEST_TOO_LARGE", "insight request exceeds its byte ceiling")
+        except (WorkloadResponseTooLarge, WorkloadSaturated, WorkloadTimedOut, WorkloadError, RuntimeError):
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "insight workload is unavailable", retryable=True)
 
     async def health(request):
         raw = health_reader(home)
@@ -1349,7 +1409,11 @@ def routes(
                 retryable=True,
             )
         try:
-            projection = report_provider.read(context, query, home, currentness_verifier=verifier)
+            projection = await report_workload.run(
+                report_provider.read, context, query, home,
+                currentness_verifier=verifier,
+                request_bytes=len(json.dumps(query, separators=(",", ":"))),
+            )
         except KeyError:
             return _error(
                 request,
@@ -1357,6 +1421,8 @@ def routes(
                 "REPORT_NOT_FOUND",
                 "the immutable report snapshot was not found",
             )
+        except (RuntimeError, WorkloadError):
+            return _error(request, 503, "REPORTS_UNAVAILABLE", "the immutable report store is unavailable", retryable=True)
         except ValueError:
             return _error(
                 request,
@@ -1393,8 +1459,11 @@ def routes(
                 retryable=True,
             )
         try:
-            snapshot = report_provider.read_snapshot(
-                context, snapshot_id, home, currentness_verifier=verifier
+            snapshot = await report_workload.run(
+                report_provider.read_snapshot,
+                context, snapshot_id, home,
+                currentness_verifier=verifier,
+                request_bytes=len(snapshot_id.encode()),
             )
         except KeyError:
             return _error(
@@ -1480,6 +1549,8 @@ def routes(
             f"skdashboard_control_plane_requests_total {counters['requests']}",
             "# HELP skdashboard_control_plane_denied_total Denied control-plane requests.",
             "# TYPE skdashboard_control_plane_denied_total counter",
+            f'skdashboard_workload_active{{workload="insight"}} {insight_workload.snapshot()["active"]}',
+            f'skdashboard_workload_active{{workload="report"}} {report_workload.snapshot()["active"]}',
             f"skdashboard_control_plane_denied_total {counters['denied']}",
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
@@ -1493,6 +1564,7 @@ def routes(
         Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
+        Route("/api/v1/insights/query", protected(insights, "skdashboard.insights.query",), methods=["POST"]),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
         Route(
             "/api/v1/schedule/forecasts",
