@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import inspect
@@ -14,44 +13,18 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from jsonschema import Draft202012Validator, FormatChecker
-from referencing import Registry, Resource
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from .workload_isolation import (
-    INSIGHT_LIMITS,
-    REPORT_LIMITS,
-    BoundedWorkload,
-    WorkloadError,
-    WorkloadRequestTooLarge,
-    WorkloadResponseTooLarge,
-    WorkloadSaturated,
-    WorkloadTimedOut,
-)
+from .build_info import build_information
+from .dashboard_economy_provider import EconomyProjectionProvider
+from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
 
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
 TENANT_RESOURCE_TYPE = "tenant"
-ALLOWED_BROWSER_ORIGINS = frozenset({"https://10.0.0.139:7778", "https://100.81.238.58:7778"})
 SSE_CURRENTNESS_SECONDS = 1
-INSIGHT_INTENTS = frozenset({"brief", "explain", "compare", "forecast_explanation", "draft_report"})
-INSIGHT_METRIC_FAMILIES = frozenset(
-    {"portfolio", "flow", "reliability", "delivery", "architecture", "ai", "economy", "governance", "experience"}
-)
-INSIGHT_SCOPE_KEYS = frozenset(
-    {
-        "portfolio_id",
-        "project_id",
-        "product_id",
-        "service_id",
-        "team_id",
-        "node_id",
-        "environment",
-        "measurement_lane",
-    }
-)
 
 
 class ControlPlaneInvocationFactory(Protocol):
@@ -67,7 +40,12 @@ def _now() -> str:
 def _error(request, status: int, code: str, message: str, *, retryable: bool = False):
     request_id = request.headers.get("x-request-id", "")[:128] or uuid4().hex
     return JSONResponse(
-        {"code": code, "message": message, "retryable": retryable, "request_id": request_id},
+        {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "request_id": request_id,
+        },
         status_code=status,
     )
 
@@ -172,7 +150,7 @@ def _page(request, owner: str, items: list[dict], errors: list[str], *, observed
     next_offset = offset + len(page_items)
     result["page"] = {
         "limit": limit,
-        "next_cursor": _encode_cursor(next_offset) if next_offset < len(items) else None,
+        "next_cursor": (_encode_cursor(next_offset) if next_offset < len(items) else None),
         "has_more": next_offset < len(items),
     }
     return result
@@ -265,9 +243,15 @@ def _capauth_authorize(home: Path, bearer: str, capability: str, target: str) ->
 def _clear_decision(request) -> None:
     verifier = getattr(request.state, "control_plane_currentness_verifier", None)
     try:
-        from capauth import ControlPlaneCurrentnessVerifier
+        from capauth import (
+            ControlPlaneCurrentnessVerifier,
+            OperatorSessionCurrentnessVerifier,
+        )
 
-        if type(verifier) is ControlPlaneCurrentnessVerifier:
+        if type(verifier) in {
+            ControlPlaneCurrentnessVerifier,
+            OperatorSessionCurrentnessVerifier,
+        }:
             verifier.close()
     except Exception:
         pass
@@ -420,72 +404,21 @@ def _stream_policy_boundary(context) -> str:
 
 
 class _StreamAuthority:
-    """Keep one signed CapAuth decision current for a protected SSE iterator."""
+    """Keep protected SSE fail closed until CapAuth exposes a stream contract."""
 
     def __init__(self, authorizer, context, verifier, boundary) -> None:
-        self._authorizer = authorizer
-        self._context = context
-        self._verifier = verifier
+        del authorizer, context
         self._boundary = boundary
-        self._capauth = verifier._authorizer
-        self._presented = verifier._presented
-        self._request = verifier._request
-        self._prior = verifier._prior
-        self._receipt = None
+        self._verifier = verifier
 
     def check(self) -> bool:
-        from capauth import DecisionState, join_policy_decisions
-
-        context = self._context
-        if context is None or datetime.now(timezone.utc) >= context.expires_at:
-            self.close()
-            return False
-        try:
-            first = self._authorizer._owner_decision(context.binding, self._prior)
-            if self._verifier is not None:
-                verifier, self._verifier = self._verifier, None
-                allowed = (
-                    verifier.check_before_owner_read(context) is DecisionState.ALLOW
-                    and verifier.check_after_owner_read(context) is DecisionState.ALLOW
-                )
-                verifier.close()
-                if not allowed:
-                    raise ValueError
-            else:
-                current = self._capauth.revalidate_current(
-                    self._presented, self._request, self._prior, self._receipt
-                )
-                self._receipt = None
-                if current is not self._prior:
-                    raise ValueError
-            second = self._authorizer._owner_decision(context.binding, self._prior)
-            if (
-                first is None
-                or first != second
-                or join_policy_decisions(context.binding, self._prior, second)
-                != context.joined_decision
-                or _stream_policy_boundary(context) != self._boundary
-            ):
-                raise ValueError
-            self._receipt = self._capauth._mint_currentness_receipts(
-                self._presented, self._request, self._prior, count=1
-            )[0]
-        except Exception:
-            self.close()
-            return False
-        return True
+        self.close()
+        return False
 
     def close(self) -> None:
         verifier, self._verifier = self._verifier, None
         if verifier is not None:
             verifier.close()
-        if self._receipt is not None:
-            self._capauth.discard_currentness_receipts((self._receipt,))
-            self._receipt = None
-        self._presented = None
-        self._request = None
-        self._prior = None
-        self._context = None
 
 
 def _protected_handler(
@@ -498,6 +431,7 @@ def _protected_handler(
     counters,
     session_resolver=None,
     session_capability_issuer=None,
+    session_authorizer=None,
     require_stream_context=False,
 ):
     async def wrapped(request):
@@ -509,15 +443,35 @@ def _protected_handler(
             response.headers["Cache-Control"] = "no-store"
             return response
         header = request.headers.get("authorization", "")
-        if session_capability_issuer is not None and header:
+        if (session_capability_issuer is not None or session_authorizer is not None) and header:
             counters["denied"] += 1
             response = _error(request, 401, "UNAUTHORIZED", "a browser bearer is not accepted")
             response.headers["Cache-Control"] = "no-store"
             return response
+        session_authority = None
         if session_resolver is not None and not header:
             try:
                 resolved = await session_resolver(request)
                 state = getattr(resolved, "state", None)
+                if state == "reauth_required":
+                    from .session_adapter import COOKIE_NAME
+
+                    counters["denied"] += 1
+                    response = _error(
+                        request,
+                        401,
+                        "UNAUTHORIZED",
+                        "browser reauthentication is required",
+                    )
+                    response.delete_cookie(
+                        COOKIE_NAME,
+                        path="/",
+                        secure=True,
+                        httponly=True,
+                        samesite="strict",
+                    )
+                    response.headers["Cache-Control"] = "no-store"
+                    return response
                 if state in {"corrupt", "unavailable"}:
                     counters["denied"] += 1
                     response = _error(
@@ -530,7 +484,19 @@ def _protected_handler(
                     response.headers["Retry-After"] = "5"
                     response.headers["Cache-Control"] = "no-store"
                     return response
-                if session_capability_issuer is None:
+                if session_authorizer is not None and state == "authenticated":
+                    session_authority = session_authorizer(
+                        request,
+                        resolved,
+                        capability,
+                        request.url.path,
+                        decision_authorizer,
+                        invocation_factory,
+                    )
+                    if inspect.isawaitable(session_authority):
+                        session_authority = await session_authority
+                    bearer = None
+                elif session_capability_issuer is None:
                     bearer = getattr(resolved, "access_token", resolved)
                 elif state == "authenticated":
                     bearer = session_capability_issuer(
@@ -546,29 +512,34 @@ def _protected_handler(
                 bearer = None
             if bearer:
                 header = f"Bearer {bearer}"
-        if not header.startswith("Bearer ") or header.count(" ") != 1:
+        if session_authority is None and (
+            not header.startswith("Bearer ") or header.count(" ") != 1
+        ):
             counters["denied"] += 1
             response = _error(request, 401, "UNAUTHORIZED", "a bearer capability is required")
             response.headers["Cache-Control"] = "no-store"
             return response
-        bearer = header[7:]
-        if not bearer or len(bearer.encode()) > MAX_BEARER_BYTES:
+        bearer = header[7:] if session_authority is None else ""
+        if session_authority is None and (not bearer or len(bearer.encode()) > MAX_BEARER_BYTES):
             counters["denied"] += 1
             response = _error(request, 401, "UNAUTHORIZED", "the bearer capability is invalid")
             response.headers["Cache-Control"] = "no-store"
             return response
         if decision_authorizer is not None:
-            try:
-                authority = _typed_context(
-                    request,
-                    bearer,
-                    capability,
-                    request.url.path,
-                    decision_authorizer=decision_authorizer,
-                    invocation_factory=invocation_factory,
-                )
-            except Exception:
-                authority = None
+            if session_authority is not None:
+                authority = session_authority
+            else:
+                try:
+                    authority = _typed_context(
+                        request,
+                        bearer,
+                        capability,
+                        request.url.path,
+                        decision_authorizer=decision_authorizer,
+                        invocation_factory=invocation_factory,
+                    )
+                except Exception:
+                    authority = None
             if authority is None:
                 counters["denied"] += 1
                 response = _error(
@@ -657,10 +628,11 @@ def routes(
     reliability_provider=None,
     session_resolver=None,
     session_capability_issuer=None,
+    session_authorizer=None,
     architecture_provider=None,
     governance_provider=None,
+    economy_provider=None,
     report_provider=None,
-    insight_provider=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -672,30 +644,10 @@ def routes(
         or architecture_provider is not None
         or governance_provider is not None
         or report_provider is not None
-        or insight_provider is not None
     ) and decision_authorizer is None:
         raise ValueError("owner projection requires typed control-plane authorization")
     hits: dict[str, deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
-    insight_workload = BoundedWorkload("insight", INSIGHT_LIMITS)
-    report_workload = BoundedWorkload("report", REPORT_LIMITS)
-    insight_schema_root = Path(__file__).parent / "contracts" / "v1.1.0"
-    insight_schema = json.loads(
-        (insight_schema_root / "control-plane-insight.v1.1.0.schema.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    insight_registry = Registry().with_resources(
-        [
-            (document["$id"], Resource.from_contents(document))
-            for path in insight_schema_root.glob("*.json")
-            for document in [json.loads(path.read_text(encoding="utf-8"))]
-            if "$id" in document
-        ]
-    )
-    insight_validator = Draft202012Validator(
-        insight_schema, registry=insight_registry, format_checker=FormatChecker()
-    )
     authorize = authorizer or (
         lambda bearer, capability, target: _capauth_authorize(home, bearer, capability, target)
     )
@@ -709,7 +661,11 @@ def routes(
                 recent.popleft()
             if len(recent) >= 120:
                 response = _error(
-                    request, 429, "RATE_LIMITED", "read rate limit exceeded", retryable=True
+                    request,
+                    429,
+                    "RATE_LIMITED",
+                    "read rate limit exceeded",
+                    retryable=True,
                 )
                 response.headers["Retry-After"] = "60"
                 return response
@@ -730,6 +686,7 @@ def routes(
                 counters=counters,
                 session_resolver=session_resolver,
                 session_capability_issuer=session_capability_issuer,
+                session_authorizer=session_authorizer,
                 require_stream_context=require_stream_context,
             )
         )
@@ -800,44 +757,72 @@ def routes(
             lane = request.query_params.get("measurement_lane", "harness_reported")
             if lane not in dashboard_skcounter.LANES:
                 raise ValueError("measurement_lane is invalid")
-            raw = dashboard_skcounter.get_ai_usage(
-                home,
-                {
-                    "lane": lane,
-                    "from": request.query_params.get("from", ""),
-                    "to": request.query_params.get("to", ""),
-                },
-            )
-            summary = raw.get("summary", {})
-            coverage = raw.get("coverage", {})
-            cost = summary.get("cost_usd") if summary.get("cost_state") == "available" else None
-            items = [
-                {
-                    "measurement_lane": raw.get("selected_lane"),
-                    "available_lanes": raw.get("available_lanes", []),
-                    "tokens": {
-                        key: summary.get(key, 0) for key in dashboard_skcounter.TOKEN_FIELDS
-                    },
-                    "cost_usd": cost,
-                    "cost_state": summary.get("cost_state", "unavailable"),
-                    "collectors": raw.get("collectors", []),
-                    "expected_nodes": coverage.get("expected_nodes", 0),
-                    "reporting_nodes": coverage.get("reporting_nodes", 0),
-                    "missing_nodes": coverage.get("missing_nodes", []),
-                }
-            ]
-            return _response(
-                request,
-                _page(
-                    request,
-                    "skcounter",
-                    items,
-                    [str(x) for x in raw.get("errors", [])],
-                    observed_at=raw.get("generated_at"),
-                ),
-            )
+            if "from" in request.query_params or "to" in request.query_params:
+                raise ValueError("time range filters are not supported by the governed projection")
         except ValueError as exc:
             return _error(request, 400, "INVALID_QUERY", str(exc))
+
+        from .control_plane_scope import ProtectedScopeDenied, ScopeQueryError, parse_now_scope
+
+        try:
+            query = parse_now_scope(request.query_params)
+        except ProtectedScopeDenied:
+            return _error(
+                request,
+                403,
+                "PROTECTED_SCOPE_DENIED",
+                "protected scope is not available",
+            )
+        except ScopeQueryError as exc:
+            return _error(request, 400, "INVALID_SCOPE", str(exc))
+
+        from skcoord.authorized_card_snapshot import AuthorizedCardScopeV1
+
+        query = AuthorizedCardScopeV1(
+            role=query.role,
+            scope=query.scope,
+            window=query.window,
+            baseline=query.baseline,
+            service=query.service,
+        )
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        if verifier is not None:
+            provider = economy_provider or EconomyProjectionProvider()
+            projection = provider.read(context, query, home, currentness_verifier=verifier)
+        elif economy_provider is not None:
+            projection = economy_provider.read(context, query, home)
+        else:
+            projection = {
+                "schema_version": "economy-projection/v1",
+                "scope": {"role": query.role, "scope": query.scope, "window": query.window,
+                          "baseline": query.baseline, "service": query.service},
+                "items": [],
+                "freshness": {"truth_state": "unavailable", "observed_at": None, "projected_at": _now(), "age_seconds": 0},
+                "errors": [{"code": "ECONOMY_UNAVAILABLE", "message": "Economy provider is not configured", "retryable": True}],
+            }
+        return _response(request, projection)
+
+    def bind_gateway_grants(request):
+        context = getattr(request.state, "control_plane_decision", None)
+        request.state.gateway_role = "viewer"
+        # The typed decision already fences the exact authorized resource set.
+        # The projection scope is a public query dimension, not that opaque ID.
+        request.state.gateway_scope = "estate" if context is not None else "fleet"
+
+    async def gateway(request):
+        from .gateway_api import handlers
+
+        bind_gateway_grants(request)
+        summary, _timeseries = handlers(home)
+        return await summary(request)
+
+    async def gateway_timeseries(request):
+        from .gateway_api import handlers
+
+        bind_gateway_grants(request)
+        _summary, timeseries = handlers(home)
+        return await timeseries(request)
 
     async def overview(request):
         from .control_plane_adapters import default_readers, project_estate
@@ -923,6 +908,16 @@ def routes(
         ) != len(pairs):
             return _error(request, 400, "INVALID_SCHEDULE_SCOPE", "unsupported schedule scope")
         query = dict(pairs)
+        if not query:
+            query = {
+                "role": "project-manager",
+                "scope": "estate",
+                "window": "latest",
+                "baseline": "none",
+                "service": "all",
+                "lens": "roadmap",
+                "timezone": "UTC",
+            }
         if (
             query.get("role")
             not in {"project-manager", "operator", "architect", "service", "team"}
@@ -944,12 +939,21 @@ def routes(
                 "the authorized schedule projection is unavailable",
                 retryable=True,
             )
-        projection = schedule_provider.read(
-            context,
-            query,
-            home,
-            currentness_verifier=verifier,
-        )
+        try:
+            projection = schedule_provider.read(
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+            )
+        except Exception:
+            return _error(
+                request,
+                503,
+                "SCHEDULE_UNAVAILABLE",
+                "the authorized schedule projection is unavailable",
+                retryable=True,
+            )
         if not isinstance(projection, dict):
             return _error(request, 503, "SCHEDULE_UNAVAILABLE", "invalid schedule projection")
         serialized = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
@@ -963,31 +967,90 @@ def routes(
 
         allowed = {"role", "scope", "window", "baseline", "service", "lens", "timezone"}
         pairs = list(request.query_params.multi_items())
-        if any(key not in allowed or not value or len(value) > 128 for key, value in pairs) or len({key for key, _value in pairs}) != len(pairs):
+        if any(key not in allowed or not value or len(value) > 128 for key, value in pairs) or len(
+            {key for key, _value in pairs}
+        ) != len(pairs):
             return _error(request, 400, "INVALID_SCHEDULE_SCOPE", "unsupported schedule scope")
         query = dict(pairs)
-        if query.get("role") not in {"project-manager", "operator", "architect", "service", "team"} or query.get("scope") != "estate" or query.get("window") != "latest" or query.get("baseline") != "none" or query.get("service") != "all" or query.get("lens") not in {"roadmap", "gantt", "flow"} or not query.get("timezone"):
+        if (
+            query.get("role")
+            not in {"project-manager", "operator", "architect", "service", "team"}
+            or query.get("scope") != "estate"
+            or query.get("window") != "latest"
+            or query.get("baseline") != "none"
+            or query.get("service") != "all"
+            or query.get("lens") not in {"roadmap", "gantt", "flow"}
+            or not query.get("timezone")
+        ):
             return _error(request, 400, "INVALID_SCHEDULE_SCOPE", "unsupported schedule scope")
         context = getattr(request.state, "control_plane_decision", None)
         verifier = getattr(request.state, "control_plane_currentness_verifier", None)
         if schedule_forecast_provider is None or context is None or verifier is None:
-            return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "the authorized schedule forecast is unavailable", retryable=True)
+            return _error(
+                request,
+                503,
+                "SCHEDULE_FORECAST_UNAVAILABLE",
+                "the authorized schedule forecast is unavailable",
+                retryable=True,
+            )
         try:
             if verifier.check_before_owner_read(context) is not DecisionState.ALLOW:
-                return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "the authorized schedule forecast is unavailable", retryable=True)
-            result = schedule_forecast_provider.read(context, query, home, currentness_verifier=verifier)
+                return _error(
+                    request,
+                    503,
+                    "SCHEDULE_FORECAST_UNAVAILABLE",
+                    "the authorized schedule forecast is unavailable",
+                    retryable=True,
+                )
+            result = schedule_forecast_provider.read(
+                context, query, home, currentness_verifier=verifier
+            )
             if verifier.check_after_owner_read(context) is not DecisionState.ALLOW:
-                return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "the authorized schedule forecast is unavailable", retryable=True)
+                return _error(
+                    request,
+                    503,
+                    "SCHEDULE_FORECAST_UNAVAILABLE",
+                    "the authorized schedule forecast is unavailable",
+                    retryable=True,
+                )
         except Exception:
-            return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "the authorized schedule forecast is unavailable", retryable=True)
+            return _error(
+                request,
+                503,
+                "SCHEDULE_FORECAST_UNAVAILABLE",
+                "the authorized schedule forecast is unavailable",
+                retryable=True,
+            )
         allowed_keys = {
-            "schema_version", "artifact_kind", "state", "abstention_reason", "method", "calculation_owner",
-            "method_discrimination", "cohort", "scope", "history_window", "sample_periods", "period_cadence_days",
-            "remaining_work", "iterations", "seed", "assumptions", "exclusions", "individual_ranking_prohibited",
-            "completion_quantiles_periods", "milestone_confidence", "writes_owner_records",
+            "schema_version",
+            "artifact_kind",
+            "state",
+            "abstention_reason",
+            "method",
+            "calculation_owner",
+            "method_discrimination",
+            "cohort",
+            "scope",
+            "history_window",
+            "sample_periods",
+            "period_cadence_days",
+            "remaining_work",
+            "iterations",
+            "seed",
+            "assumptions",
+            "exclusions",
+            "individual_ranking_prohibited",
+            "completion_quantiles_periods",
+            "milestone_confidence",
+            "writes_owner_records",
         }
         if not isinstance(result, dict):
-            return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "invalid schedule forecast")
+            return _error(
+                request,
+                503,
+                "SCHEDULE_FORECAST_UNAVAILABLE",
+                "invalid schedule forecast",
+            )
         quantiles = result.get("completion_quantiles_periods")
         exclusions = result.get("exclusions")
         typed = (
@@ -998,12 +1061,22 @@ def routes(
             and result.get("state") in {"ready", "abstained"}
             and isinstance(result.get("cohort"), str)
             and isinstance(result.get("scope"), str)
-            and result.get("method_discrimination") == {"throughput_forecast": "probabilistic aggregate flow in periods", "date_critical_path": "not calculated or blended by this artifact"}
+            and result.get("method_discrimination")
+            == {
+                "throughput_forecast": "probabilistic aggregate flow in periods",
+                "date_critical_path": "not calculated or blended by this artifact",
+            }
             and isinstance(result.get("history_window"), dict)
             and set(result["history_window"]) == {"start", "end"}
-            and all(value is None or isinstance(value, str) for value in result["history_window"].values())
+            and all(
+                value is None or isinstance(value, str)
+                for value in result["history_window"].values()
+            )
             and isinstance(result.get("sample_periods"), int)
-            and (result.get("period_cadence_days") is None or isinstance(result.get("period_cadence_days"), int))
+            and (
+                result.get("period_cadence_days") is None
+                or isinstance(result.get("period_cadence_days"), int)
+            )
             and isinstance(result.get("remaining_work"), int)
             and isinstance(result.get("iterations"), int)
             and isinstance(result.get("seed"), int)
@@ -1011,15 +1084,47 @@ def routes(
             and isinstance(result.get("assumptions"), list)
             and all(isinstance(item, str) for item in result["assumptions"])
             and isinstance(exclusions, list)
-            and all(isinstance(item, dict) and set(item) == {"period_id", "timing_basis", "reason"} and all(isinstance(value, str) for value in item.values()) for item in exclusions)
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"period_id", "timing_basis", "reason"}
+                and all(isinstance(value, str) for value in item.values())
+                for item in exclusions
+            )
             and isinstance(quantiles, dict)
             and set(quantiles) == {"p50", "p85", "p95"}
             and all(value is None or isinstance(value, int) for value in quantiles.values())
         )
-        ready = typed and result.get("state") == "ready" and result.get("abstention_reason") is None and all(type(value) is int for value in quantiles.values()) and quantiles["p50"] <= quantiles["p85"] <= quantiles["p95"] and (result.get("milestone_confidence") is None or isinstance(result.get("milestone_confidence"), float) and 0 <= result["milestone_confidence"] <= 1)
-        abstained = typed and result.get("state") == "abstained" and isinstance(result.get("abstention_reason"), str) and bool(result["abstention_reason"]) and result.get("milestone_confidence") is None and all(value is None for value in quantiles.values())
-        if result.get("writes_owner_records") is not False or set(result) - allowed_keys or not (ready or abstained):
-            return _error(request, 503, "SCHEDULE_FORECAST_UNAVAILABLE", "invalid schedule forecast")
+        ready = (
+            typed
+            and result.get("state") == "ready"
+            and result.get("abstention_reason") is None
+            and all(type(value) is int for value in quantiles.values())
+            and quantiles["p50"] <= quantiles["p85"] <= quantiles["p95"]
+            and (
+                result.get("milestone_confidence") is None
+                or isinstance(result.get("milestone_confidence"), float)
+                and 0 <= result["milestone_confidence"] <= 1
+            )
+        )
+        abstained = (
+            typed
+            and result.get("state") == "abstained"
+            and isinstance(result.get("abstention_reason"), str)
+            and bool(result["abstention_reason"])
+            and result.get("milestone_confidence") is None
+            and all(value is None for value in quantiles.values())
+        )
+        if (
+            result.get("writes_owner_records") is not False
+            or set(result) - allowed_keys
+            or not (ready or abstained)
+        ):
+            return _error(
+                request,
+                503,
+                "SCHEDULE_FORECAST_UNAVAILABLE",
+                "invalid schedule forecast",
+            )
         return _response(request, result)
 
     async def reliability(request):
@@ -1058,12 +1163,21 @@ def routes(
                 "the authorized reliability projection is unavailable",
                 retryable=True,
             )
-        projection = reliability_provider.read(
-            context,
-            query,
-            home,
-            currentness_verifier=verifier,
-        )
+        try:
+            projection = reliability_provider.read(
+                context,
+                query,
+                home,
+                currentness_verifier=verifier,
+            )
+        except Exception as exc:
+            return _error(
+                request,
+                503,
+                "RELIABILITY_UNAVAILABLE",
+                f"the authorized reliability projection is unavailable: {type(exc).__name__}",
+                retryable=True,
+            )
         if not isinstance(projection, dict):
             return _error(
                 request,
@@ -1188,90 +1302,6 @@ def routes(
             return Response(status_code=304, headers={"ETag": etag})
         return Response(serialized, media_type="application/json", headers={"ETag": etag})
 
-    def _workload_failure(request, error, *, unavailable_code: str):
-        if isinstance(error, WorkloadRequestTooLarge):
-            return _error(request, 413, "REQUEST_TOO_LARGE", str(error))
-        if isinstance(error, WorkloadResponseTooLarge):
-            return _error(request, 503, unavailable_code, "the bounded workload response is unavailable", retryable=True)
-        if isinstance(error, WorkloadSaturated):
-            response = _error(request, 429, "WORKLOAD_SATURATED", str(error), retryable=True)
-            response.headers["Retry-After"] = "1"
-            return response
-        if isinstance(error, WorkloadTimedOut):
-            return _error(request, 503, "WORKLOAD_TIMEOUT", str(error), retryable=True)
-        return _error(request, 503, unavailable_code, "the bounded workload provider is unavailable", retryable=True)
-
-    async def insights(request):
-        if insight_provider is None:
-            return _error(
-                request,
-                503,
-                "INSIGHTS_UNAVAILABLE",
-                "the governed insight provider is unavailable",
-                retryable=True,
-            )
-        content_length = request.headers.get("content-length")
-        try:
-            if content_length is not None and int(content_length) > INSIGHT_LIMITS.max_request_bytes:
-                raise WorkloadRequestTooLarge("workload request exceeds its byte ceiling")
-            body = bytearray()
-            async for chunk in request.stream():
-                body.extend(chunk)
-                if len(body) > INSIGHT_LIMITS.max_request_bytes:
-                    raise WorkloadRequestTooLarge(
-                        "workload request exceeds its byte ceiling"
-                    )
-            raw = bytes(body)
-            query = json.loads(raw)
-            if not isinstance(query, dict) or set(query) - {
-                "question", "scope", "window", "intent", "metric_families", "baseline"
-            }:
-                raise ValueError
-            scope = query.get("scope")
-            families = query.get("metric_families")
-            if (
-                not isinstance(query.get("question"), str)
-                or not 1 <= len(query["question"]) <= 2000
-                or not isinstance(scope, dict)
-                or not scope
-                or set(scope) - INSIGHT_SCOPE_KEYS
-                or any(not isinstance(value, str) or not value or len(value) > 128 for value in scope.values())
-                or query.get("intent") not in INSIGHT_INTENTS
-                or not isinstance(families, list)
-                or not 1 <= len(families) <= 16
-                or len(set(families)) != len(families)
-                or any(family not in INSIGHT_METRIC_FAMILIES for family in families)
-                or not isinstance(query.get("window"), dict)
-                or (query.get("baseline") is not None and (not isinstance(query["baseline"], str) or len(query["baseline"]) > 128))
-            ):
-                raise ValueError
-        except WorkloadRequestTooLarge as error:
-            return _workload_failure(request, error, unavailable_code="INSIGHTS_UNAVAILABLE")
-        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-            return _error(request, 400, "INVALID_INSIGHT_QUERY", "the insight query is invalid")
-
-        context = getattr(request.state, "control_plane_decision", None)
-        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
-        if context is None or verifier is None:
-            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the authorized insight provider is unavailable", retryable=True)
-        try:
-            result = await insight_workload.run(
-                insight_provider.read,
-                context,
-                query,
-                home,
-                currentness_verifier=verifier,
-                request_bytes=len(raw),
-            )
-            insight_validator.validate(result)
-        except asyncio.CancelledError:
-            raise
-        except WorkloadError as error:
-            return _workload_failure(request, error, unavailable_code="INSIGHTS_UNAVAILABLE")
-        except Exception:
-            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "the governed insight result is unavailable", retryable=True)
-        return _response(request, result)
-
     async def reports(request):
         allowed = {
             "role",
@@ -1319,37 +1349,20 @@ def routes(
                 retryable=True,
             )
         try:
-            request_bytes = len(
-                json.dumps(query, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            )
-            projection = await report_workload.run(
-                report_provider.read,
-                context,
-                query,
-                home,
-                currentness_verifier=verifier,
-                request_bytes=request_bytes,
-            )
+            projection = report_provider.read(context, query, home, currentness_verifier=verifier)
         except KeyError:
             return _error(
-                request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
+                request,
+                404,
+                "REPORT_NOT_FOUND",
+                "the immutable report snapshot was not found",
             )
-        except WorkloadError as error:
-            return _workload_failure(request, error, unavailable_code="REPORTS_UNAVAILABLE")
         except ValueError:
             return _error(
                 request,
                 503,
                 "REPORTS_UNAVAILABLE",
                 "the immutable report store is unavailable",
-                retryable=True,
-            )
-        except Exception:
-            return _error(
-                request,
-                503,
-                "REPORTS_UNAVAILABLE",
-                "the bounded report provider is unavailable",
                 retryable=True,
             )
         if not isinstance(projection, dict):
@@ -1364,7 +1377,10 @@ def routes(
         snapshot_id = request.path_params.get("snapshot_id", "")
         if len(snapshot_id) > 96:
             return _error(
-                request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
+                request,
+                404,
+                "REPORT_NOT_FOUND",
+                "the immutable report snapshot was not found",
             )
         context = getattr(request.state, "control_plane_decision", None)
         verifier = getattr(request.state, "control_plane_currentness_verifier", None)
@@ -1377,31 +1393,22 @@ def routes(
                 retryable=True,
             )
         try:
-            snapshot = await report_workload.run(
-                report_provider.read_snapshot,
-                context,
-                snapshot_id,
-                home,
-                currentness_verifier=verifier,
-                request_bytes=len(snapshot_id.encode("utf-8")),
+            snapshot = report_provider.read_snapshot(
+                context, snapshot_id, home, currentness_verifier=verifier
             )
         except KeyError:
             return _error(
-                request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
+                request,
+                404,
+                "REPORT_NOT_FOUND",
+                "the immutable report snapshot was not found",
             )
-        except WorkloadError as error:
-            return _workload_failure(request, error, unavailable_code="REPORTS_UNAVAILABLE")
         except ValueError:
             return _error(
-                request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
-            )
-        except Exception:
-            return _error(
                 request,
-                503,
-                "REPORTS_UNAVAILABLE",
-                "the bounded report provider is unavailable",
-                retryable=True,
+                404,
+                "REPORT_NOT_FOUND",
+                "the immutable report snapshot was not found",
             )
         if not isinstance(snapshot, dict):
             return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report snapshot")
@@ -1475,30 +1482,28 @@ def routes(
             "# TYPE skdashboard_control_plane_denied_total counter",
             f"skdashboard_control_plane_denied_total {counters['denied']}",
         ]
-        for workload in (insight_workload, report_workload):
-            snapshot = workload.snapshot()
-            for key in (
-                "active", "admitted", "accepted", "completed", "saturated", "timed_out",
-                "cancelled", "failed", "request_too_large", "response_too_large",
-            ):
-                lines.append(
-                    f'skdashboard_workload_{key}{{workload="{workload.name}"}} {snapshot[key]}'
-                )
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    async def fleet_chat_projection(_request):
+        from .fleet_chat import fleet_chat
+
+        return JSONResponse(fleet_chat(home), headers={"Cache-Control": "no-store"})
+
     return [
+        Route("/api/v1/build-info", build_information),
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
-        Route("/api/v1/schedule/forecasts", protected(schedule_forecasts, "skdashboard.read")),
-        Route("/api/v1/reliability/projection", protected(reliability, "skdashboard.read")),
-        Route("/api/v1/architecture/projection", protected(architecture, "skdashboard.read")),
-        Route("/api/v1/governance/projection", protected(governance, "skdashboard.read")),
         Route(
-            "/api/v1/insights/query",
-            protected(insights, "skdashboard.insights.query"),
-            methods=["POST"],
+            "/api/v1/schedule/forecasts",
+            protected(schedule_forecasts, "skdashboard.read"),
         ),
+        Route("/api/v1/reliability/projection", protected(reliability, "skdashboard.read")),
+        Route(
+            "/api/v1/architecture/projection",
+            protected(architecture, "skdashboard.read"),
+        ),
+        Route("/api/v1/governance/projection", protected(governance, "skdashboard.read")),
         Route("/api/v1/reports/projection", protected(reports, "skdashboard.read")),
         Route(
             "/api/v1/reports/{snapshot_id}",
@@ -1507,6 +1512,15 @@ def routes(
         Route("/api/v1/board/summary", protected(board, "skdashboard.read")),
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
+        Route("/api/v1/gateway/summary", protected(gateway, "skdashboard.read")),
+        Route(
+            "/api/v1/gateway/timeseries",
+            protected(gateway_timeseries, "skdashboard.read"),
+        ),
+        Route(
+            "/api/v1/fleet-chat",
+            protected(fleet_chat_projection, "skdashboard.read"),
+        ),
         Route(
             "/api/v1/events",
             protected(events, "skdashboard.events.read", require_stream_context=True),
