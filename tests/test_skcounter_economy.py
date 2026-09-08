@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -192,14 +193,18 @@ def test_acknowledged_edge_store_reads_only_latest_snapshot(tmp_path, monkeypatc
     sent = root / "sent" / "chiap08" / "jarvis"
     sent.mkdir(parents=True)
     monkeypatch.setenv("SKCOUNTER_DATA_DIR", str(root))
-    (sent / "2026-08-23T110000Z-old.json").write_text(
+    old = sent / "z-old-hash.json"
+    old.write_text(
         json.dumps(_snapshot(observed="2026-08-23T11:00:00Z", aggregates=[_aggregate(total=100)])),
         encoding="utf-8",
     )
-    (sent / "2026-08-23T120000Z-new.json").write_text(
+    new = sent / "a-new-hash.json"
+    new.write_text(
         json.dumps(_snapshot(observed="2026-08-23T12:00:00Z", aggregates=[_aggregate(total=250)])),
         encoding="utf-8",
     )
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
 
     result = get_ai_usage(
         tmp_path,
