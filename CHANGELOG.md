@@ -2,7 +2,6 @@
 
 ## [Unreleased]
 
-- Add bounded workload isolation primitives with explicit admission, timeout, and response-size limits for read-plane providers.
 - Normalize canonical SKCounter gateway aggregate snapshots for the existing
   read-only summary and timeseries projections.
 - Add a fail-closed projection for transported SKCounter gateway indexes into
