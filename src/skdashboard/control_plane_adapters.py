@@ -884,6 +884,8 @@ def _local_readers(
 
     def skperf_aggregate() -> dict:
         """Read approved benchmark aggregates from SKPerf data when available."""
+        from .skperf_aggregate import AGGREGATE_SCHEMA_VERSION
+
         perf_home = home / "skperf"
         perf_data_path = perf_home / "data" / "aggregate.json"
 
@@ -896,11 +898,20 @@ def _local_readers(
             if not isinstance(perf_data, dict):
                 raise ValueError("SKPerf data malformed")
 
+            if (
+                perf_data.get("schema_version") != AGGREGATE_SCHEMA_VERSION
+                or perf_data.get("population") != "approved_benchmarks"
+                or not isinstance(perf_data.get("source_sha256"), str)
+                or len(perf_data["source_sha256"]) != 64
+                or any(character not in "0123456789abcdef" for character in perf_data["source_sha256"])
+            ):
+                raise ValueError("SKPerf aggregate provenance malformed")
+
             regressions = perf_data.get("regressions", 0)
             capacity_pressure = perf_data.get("capacity_pressure", 0.0)
             reporting = perf_data.get("reporting_benchmarks", 0)
             expected = perf_data.get("expected_benchmarks", reporting)
-            observed_at = perf_data.get("observed_at", default_observed_at)
+            observed_at = perf_data.get("produced_at")
             errors = perf_data.get("errors", [])
 
             if not isinstance(regressions, int) or not isinstance(capacity_pressure, (int, float)):
@@ -918,7 +929,7 @@ def _local_readers(
                 errors=errors[:1] if errors else [],
                 has_observations=reporting > 0,
                 observed_at=observed_at,
-                watermark_data=perf_data_path.name,
+                watermark_data=perf_data["source_sha256"],
             )()
         except PermissionError:
             raise

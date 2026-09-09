@@ -840,11 +840,15 @@ def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
     aggregate_path = perf_data_path / "aggregate.json"
 
     perf_data = {
+        "schema_version": "skperf.aggregate@1.0.0",
+        "population": "approved_benchmarks",
+        "produced_at": NOW.isoformat(),
+        "source_observed_at": NOW.isoformat(),
+        "source_sha256": "a" * 64,
         "regressions": 3,
         "capacity_pressure": 0.75,
         "reporting_benchmarks": 8,
         "expected_benchmarks": 10,
-        "observed_at": NOW.isoformat(),
         "errors": ["benchmark_timeout"],
     }
     aggregate_path.write_text(json.dumps(perf_data))
