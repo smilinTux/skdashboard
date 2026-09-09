@@ -850,32 +850,48 @@ def _local_readers(
             from skcoord.cmdb import CMDBManager
 
             manager = CMDBManager(home.expanduser())
-            all_cis = manager.list_cis()
-            service_cis = [ci for ci in all_cis[:MAX_SOURCE_ITEMS] if ci.ci_type == "service"]
+            service_cis = manager.list_cis(ci_type="service")
+            if len(service_cis) > MAX_SOURCE_ITEMS:
+                raise ValueError("service population exceeds item limit")
 
-            services_count = len(service_cis)
-            releases_count = 0
-            errors = []
-
-            for ci in service_cis:
-                if ci.attributes.get("release_version") or ci.attributes.get("deployed_at"):
-                    releases_count += 1
-                if not ci.owner:
-                    errors.append("service_without_owner")
-
-            has_observations = services_count > 0
+            release_keys = {
+                "release_version",
+                "deployed_at",
+                "observed_at",
+                "active_state",
+                "container_status",
+            }
+            releases = [
+                ci
+                for ci in service_cis
+                if isinstance(ci.attributes, dict)
+                and any(ci.attributes.get(key) is not None for key in release_keys)
+            ]
+            provenance = [
+                {
+                    "id": ci.id,
+                    "status": ci.status,
+                    "release": {
+                        key: str(ci.attributes.get(key))[:128]
+                        if ci.attributes.get(key) is not None
+                        else None
+                        for key in sorted(release_keys)
+                    },
+                }
+                for ci in service_cis
+            ]
 
             return aggregate_reader(
                 {
-                    "services": services_count,
-                    "releases": releases_count,
+                    "services": len(service_cis),
+                    "releases": len(releases),
                 },
-                expected=services_count,
-                reporting=services_count,
-                errors=errors[:1] if errors else [],
-                has_observations=has_observations,
+                expected=len(service_cis),
+                reporting=len(releases),
+                errors=["missing_release_observation"] if len(releases) < len(service_cis) else [],
+                has_observations=bool(service_cis),
                 observed_at=default_observed_at,
-                watermark_data=f"cmdb-service-fold:{len(service_cis)}",
+                watermark_data=provenance,
             )()
         except PermissionError:
             raise

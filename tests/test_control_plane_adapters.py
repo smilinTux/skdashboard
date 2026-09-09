@@ -810,9 +810,57 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
 
         assert result["aggregate"]["services"] == 3
         assert result["aggregate"]["releases"] == 2
+        assert result["coverage"] == {"expected": 3, "reporting": 2}
+        assert result["observed_at"] == NOW.isoformat().replace("+00:00", "Z")
         assert result["truth_state"] == "partial"
         assert len(result["errors"]) == 1
         assert result["errors"][0]["code"] == "SOURCE_PARTIAL"
+
+
+def test_service_release_adapter_distinguishes_empty_population_from_failure(
+    tmp_path: Path,
+) -> None:
+    with patch("skcoord.cmdb.CMDBManager") as mock_cmdb:
+        mock_cmdb.return_value.list_cis.return_value = []
+        reader = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcapstone.service_release"]
+
+        result = next(
+            item
+            for item in project_estate(
+                {"skcapstone.service_release": Reader(payload=reader())}, now=NOW
+            )
+            if item["adapter_id"] == "skcapstone.service_release"
+        )
+
+    assert result["truth_state"] == "unknown"
+    assert result["coverage"] == {"expected": 0, "reporting": 0}
+    assert result["aggregate"] is None
+    assert result["errors"] == []
+
+
+def test_service_release_adapter_watermark_covers_deployment_health(tmp_path: Path) -> None:
+    service_ci = Mock(
+        id="service-1",
+        ci_type="service",
+        status="operational",
+        attributes={"active_state": "active", "observed_at": "2020-01-01T00:00:00Z"},
+    )
+    with patch("skcoord.cmdb.CMDBManager") as mock_cmdb:
+        mock_cmdb.return_value.list_cis.return_value = [service_ci]
+        reader = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcapstone.service_release"]
+        current = reader()
+        service_ci.status = "degraded"
+        service_ci.attributes["active_state"] = "failed"
+        degraded = reader()
+
+    assert current["observed_at"] == NOW.isoformat()
+    assert degraded["observed_at"] == NOW.isoformat()
+    assert current["watermark"] != degraded["watermark"]
+    assert current["coverage"] == {"expected": 1, "reporting": 1}
 
 
 def test_service_release_adapter_fails_closed_on_cmdb_error(tmp_path: Path) -> None:
