@@ -1,5 +1,10 @@
 # Changelog
 
+- **Card `5a71c2e2`: SKRSI target and experiment visibility.** Added bounded,
+  authorization-aware aggregate projections and responsive overview widgets
+  with revision, cohort, freshness, missingness, sample, evaluator, and
+  evidence metadata. Protected source payload fields remain outside the API.
+
 ## [Unreleased]
 
 - Normalize canonical SKCounter gateway aggregate snapshots for the existing
