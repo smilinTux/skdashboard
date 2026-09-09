@@ -22,7 +22,7 @@ async function load() {
   let d;
   try {
     const [drift, gateway] = await Promise.allSettled([
-      getJSON("/api/fleet/drift"),
+      getJSON("/api/v1/fleet/drift"),
       readGateway(gatewayFilters(location.search), undefined, "summary"),
     ]);
     if (drift.status !== "fulfilled") throw drift.reason;
@@ -33,9 +33,54 @@ async function load() {
     return;
   }
   renderErrors(d.errors || []);
+  renderProvenance(d.provenance || {});
   renderKPI(d.summary || {});
   renderNodes(d.nodes || []);
   renderSkipped(d.skipped || []);
+  renderWorkers(d.worker_runtime || {});
+  renderInference(d.inference_runtime || {});
+}
+
+function renderProvenance(source) {
+  document.getElementById("fl-provenance").textContent =
+    `${source.owner || "SKCapstone Fleet"} · ${source.population || "published node inventory"} · ${source.truth_state || "unknown"} · ${source.coverage?.graded ?? 0} of ${source.coverage?.known ?? 0} graded`;
+}
+
+function renderWorkers(runtime) {
+  const workers = runtime.workers || [];
+  const summary = runtime.summary || {};
+  const tile = (label, value) => `<div class="kpi"><div class="l">${esc(label)}</div><div class="n">${esc(value ?? 0)}</div></div>`;
+  document.getElementById("fl-runtime-kpi").innerHTML =
+    tile("Running", summary.running) + tile("Recently stale", summary.stale) +
+    tile("Nodes reporting", `${summary.reporting_hosts ?? 0} / ${summary.known_hosts ?? 0}`) +
+    tile("Old beats excluded", summary.omitted_old_beats);
+  document.getElementById("fl-runtime-nodes").innerHTML = (runtime.nodes || []).map((node) =>
+    `<div class="fl-stat-row"><strong>${esc(node.host)}</strong><span>${esc(node.running)} running · ${esc(node.stale)} stale</span><span>${esc(node.lanes.join(", ") || "idle")}</span><span>${node.latest_age_seconds == null ? "no recent beat" : `${esc(node.latest_age_seconds)}s ago`}</span></div>`
+  ).join("") || `<div class="emptymsg">No fleet nodes configured.</div>`;
+  document.getElementById("fl-runtime-lanes").innerHTML = (runtime.lanes || []).map((lane) =>
+    `<div class="fl-stat-row"><strong>${esc(lane.lane)}</strong><span>${esc(lane.running)} running</span><span>${esc(lane.stale)} stale</span></div>`
+  ).join("") || `<div class="emptymsg">No active lanes.</div>`;
+  document.getElementById("fl-workers").innerHTML = workers.length
+    ? workers.map((w) => `<div class="fl-node sev-${w.truth_state === "current" ? "ok" : "skip"}">
+      <div class="fl-head"><span class="fl-name">${esc(w.name)}</span><span class="fl-role">${esc(w.host || "unknown host")}</span>
+      <span class="fl-sev g-${w.truth_state === "current" ? "ok" : "skip"}">${esc(w.truth_state.toUpperCase())}</span></div>
+      <div class="fl-reason">${esc(w.task_id)} · ${esc(w.task_title || "title unavailable")} · lane ${esc(w.lane)} · heartbeat ${esc(w.age_seconds)}s old · elapsed ${w.elapsed_seconds == null ? "unknown" : `${esc(w.elapsed_seconds)}s`}</div>
+    </div>`).join("")
+    : `<div class="emptymsg">No claimed fleet worker has reported.</div>`;
+}
+
+function renderInference(runtime) {
+  const sources = runtime.sources || [];
+  document.getElementById("fl-inference").innerHTML = sources.length
+    ? sources.map((source) => {
+      const summary = source.summary || {};
+      const models = Array.isArray(source.models) ? source.models : Object.keys(source.models || {});
+      const backends = Object.keys(source.backends || {});
+      return `<div class="fl-node sev-ok"><div class="fl-head"><span class="fl-name">${esc(source.source)}</span>
+        <span class="fl-role">${esc(source.truth_state || "unknown")}</span></div>
+        <div class="fl-reason">models ${esc(models.join(", ") || "not attributed")} · backends ${esc(backends.join(", ") || "not attributed")} · running ${esc(summary.running ?? summary.activeRequests ?? 0)} · queued ${esc(summary.queued ?? 0)}</div></div>`;
+    }).join("")
+    : `<div class="emptymsg">Inference telemetry unavailable.</div>`;
 }
 
 function text(value) {

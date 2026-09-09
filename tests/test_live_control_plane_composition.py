@@ -32,6 +32,7 @@ from skdashboard.live_control_plane import (
     TARGET,
     InProcessOperatorBridge,
     LiveControlPlaneConfig,
+    canonical_target,
     compose_file_backed_live_control_plane,
     compose_live_control_plane,
 )
@@ -40,6 +41,15 @@ from skdashboard.read_only import _read_exact_value_free_config, create_read_onl
 ORIGIN = sorted(ALLOWED_BROWSER_ORIGINS)[0]
 RESOURCE_ID = "authorized-card-set:sha256:" + "a" * 64
 POLICY_REVISION = "b" * 64
+
+
+def test_browser_compatibility_routes_use_canonical_read_targets() -> None:
+    assert canonical_target("/api/kanban") == BOARD_TARGET
+    assert canonical_target("/api/cmdb/overview") == TARGET
+    assert canonical_target("/api/economy") == "/api/v1/economy/summary"
+    assert canonical_target("/api/fleet/drift") == "/api/v1/fleet/drift"
+    assert canonical_target("/api/v1/reports/snapshot-1") == "/api/v1/reports/{snapshot_id}"
+    assert canonical_target("/api/events") == EVENTS_TARGET
 
 
 def config(tmp_path: Path, *, board="https://legacy.example/board") -> LiveControlPlaneConfig:
@@ -375,7 +385,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     from skcoord.card import Card, Column, Kind
     from test_control_plane_decision_context import Signer
 
-    from skdashboard import control_plane_adapters, control_plane_quality
+    from skdashboard import control_plane_adapters
 
     now = datetime.now(timezone.utc)
     principal = Principal(
@@ -510,6 +520,16 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     for capability, target, resource_type, resource_id in (
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, entry.resource_id),
         (CAPABILITY, RELIABILITY_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/schedule/forecasts", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/architecture/projection", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/governance/projection", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/reports/projection", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/fleet/summary", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/economy/summary", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/observability", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/assistant", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/metrics", RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, "/api/v1/reports/{snapshot_id}", RESOURCE_TYPE, entry.resource_id),
         (CAPABILITY, FLEET_CHAT_TARGET, RESOURCE_TYPE, entry.resource_id),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ):
@@ -544,12 +564,6 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
         )
 
     monkeypatch.setattr(control_plane_adapters, "default_readers", lambda _home: {})
-    monkeypatch.setattr(control_plane_adapters, "project_estate", lambda _readers: [])
-    monkeypatch.setattr(
-        control_plane_quality,
-        "project_data_quality",
-        lambda _items: {"projection_type": "data_quality", "truth_state": "current"},
-    )
     session = SimpleNamespace(resolve=resolve_session, routes=lambda: [])
     app = create_read_only_app(
         tmp_path,
@@ -571,10 +585,31 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     assert gateway.json()["unavailable_reason"] == "source_unavailable"
     overview = client.get("/api/v1/overview", headers=headers)
     schedule = client.get(SCHEDULE_TARGET, headers=headers)
+    reports = client.get(
+        "/api/v1/reports/projection?role=project-manager&scope=estate&window=latest&baseline=none&service=all&report_type=all",
+        headers=headers,
+    )
+    governance = client.get(
+        "/api/v1/governance/projection?role=governance&scope=estate&window=latest&baseline=none&service=all",
+        headers=headers,
+    )
+    reliability = client.get(
+        "/api/v1/reliability/projection?role=operator&scope=estate&window=latest&baseline=none&service=all",
+        headers=headers,
+    )
+    architecture = client.get(
+        "/api/v1/architecture/projection?role=architect&scope=estate&window=latest&baseline=none&service=all&environment=all",
+        headers=headers,
+    )
 
     assert overview.status_code == 200, overview.text
     assert overview.json()["items"]
     assert schedule.status_code == 200, schedule.text
+    assert reports.status_code == 200, reports.text
+    assert governance.status_code == 200, governance.text
+    assert reliability.status_code == 503, reliability.text
+    assert reliability.json()["code"] == "RELIABILITY_UNAVAILABLE"
+    assert architecture.status_code == 200, architecture.text
     schedule_projection = schedule.json()
     assert schedule_projection["items"][0]["item_id"] == source.id
     assert schedule_projection["items"][0]["title"] == source.title
@@ -632,6 +667,16 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
         "/models",
         "/fleet",
     )
+    expected_paths = {
+        "/cockpit": "/control-plane/now",
+        "/cmdb": "/cmdb",
+        "/board": "/board",
+        "/assistant": "/assistant",
+        "/trust": "/control-plane/governance",
+        "/models": "/control-plane/ai",
+        "/economy": "/economy",
+        "/fleet": "/control-plane/fleet",
+    }
     app = create_read_only_app(tmp_path, legacy_board_url=board)
     client = TestClient(app, base_url=ORIGIN)
 
@@ -658,16 +703,18 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     for response in pages.values():
         assert 'href="/economy"' in response.text
         for path in legacy_paths:
-            expected = board if path == "/board" else f"{legacy_origin}{path}"
+            expected = expected_paths[path]
             assert f'href="{expected}"' in response.text
-            assert f'href="{path}"' not in response.text
+            if expected != path:
+                assert f'href="{path}"' not in response.text
     for asset in ("overview.js", "projects.js"):
         rewritten = client.get(f"/static/js/{asset}")
         for path in legacy_paths:
-            assert f'href="{path}"' not in rewritten.text
-    assert board in javascript.text
-    assert f'href="{legacy_origin}/cockpit"' in javascript.text
-    assert f'href="{legacy_origin}/cmdb"' in javascript.text
+            if expected_paths[path] != path:
+                assert f'href="{path}"' not in rewritten.text
+    assert board not in javascript.text
+    assert f'href="{legacy_origin}/cockpit"' not in javascript.text
+    assert f'href="{legacy_origin}/cmdb"' not in javascript.text
     for asset in ("overview.js", "projects.js", "schedule.js"):
         script = client.get(f"/static/js/{asset}")
         assert script.status_code == 200
@@ -678,9 +725,9 @@ def test_read_only_runtime_serves_now_portfolio_schedule_static_and_external_boa
     assert helper.status_code == 200
     assert "/api/auth/capability" not in helper.text
     assert "localStorage" not in helper.text
-    assert client.get("/static/js/api.js").status_code == 404
-    assert client.get("/static/js/editor.js").status_code == 404
-    assert client.get("/board").status_code == 404
+    assert client.get("/static/js/api.js").status_code == 200
+    assert client.get("/static/js/editor.js").status_code == 200
+    assert client.get("/board", follow_redirects=False).status_code == 200
     assert client.post("/api/card/example/mutate").status_code == 404
     route_paths = {route.path for route in app.routes}
     assert {

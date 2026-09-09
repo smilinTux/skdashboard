@@ -63,8 +63,9 @@ def test_every_estate_population_has_bounded_typed_metadata() -> None:
     for item in items:
         assert item["schema_version"] == SCHEMA_VERSION
         assert item["owner"]
-        assert item["query_budget"] == {"max_items": 1, "timeout_ms": 1_000}
-        assert item["ttl_seconds"] == 60
+        spec = next(value for value in SPECS if value.adapter_id == item["adapter_id"])
+        assert item["query_budget"] == {"max_items": 1, "timeout_ms": spec.timeout_ms}
+        assert item["ttl_seconds"] == spec.ttl_seconds
         assert item["classification"] in {"internal", "confidential"}
         assert item["truth_state"] == "unavailable"
         assert item["aggregate"] is None
@@ -262,6 +263,140 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
     assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.25
     assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
     assert by_id["skjoule.wallet"]["aggregate"] == {"total_supply": 7, "active_agents": 1}
+
+    harness_spec = next(spec for spec in SPECS if spec.adapter_id == "skcounter.harness")
+    gateway_spec = next(spec for spec in SPECS if spec.adapter_id == "skgateway.observed")
+    assert harness_spec.ttl_seconds == 1_200
+    assert gateway_spec.ttl_seconds == 60
+
+
+def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry(
+    tmp_path: Path,
+) -> None:
+    empty = {
+        "generated_at": NOW.isoformat(),
+        "summary": {
+            "tokens": {"total": 0},
+            "cost_usd": 0.0,
+            "cost_state": "unavailable",
+        },
+        "coverage": {
+            "expected_nodes": 0,
+            "reporting_nodes": 0,
+            "fresh_collectors": 0,
+            "delayed_collectors": 0,
+            "stale_collectors": 0,
+        },
+        "collectors": [],
+        "observation_count": 0,
+        "errors": [],
+    }
+    harness = {
+        **empty,
+        "summary": {
+            "tokens": {"total": 125},
+            "cost_usd": 1.75,
+            "cost_state": "estimated",
+        },
+        "coverage": {**empty["coverage"], "expected_nodes": 1, "reporting_nodes": 1,
+                     "fresh_collectors": 1},
+        "collectors": [{"last_seen": NOW.isoformat(), "status": "fresh"}],
+        "observation_count": 1,
+    }
+    telemetry = {
+        "observed_at": NOW.isoformat(),
+        "errors": ["vllm: source unavailable"],
+        "sources": [
+            {"source": "vllm", "summary": {"running": 2, "queued": 1}},
+            {
+                "source": "skgateway",
+                "summary": {
+                    "totalRequests": 9,
+                    "totalInputTokens": 80,
+                    "totalOutputTokens": 20,
+                    "totalCostUsd": 0.5,
+                    "unpricedRequests": 0,
+                },
+                "backends": {"a": {"observed": True}, "b": {"observed": False}},
+            },
+        ],
+    }
+
+    with (
+        patch(
+            "skdashboard.dashboard_skcounter.get_ai_usage",
+            side_effect=lambda _home, filters: (
+                harness if filters["lane"] == "harness_reported" else empty
+            ),
+        ),
+        patch(
+            "skdashboard.dashboard_observability.collect_gateway",
+            return_value={
+                "observed_at": telemetry["observed_at"],
+                "source": telemetry["sources"][1],
+                "errors": [],
+            },
+        ),
+    ):
+        readers = _local_readers(tmp_path, board_data={})
+        items = project_estate(
+            {
+                key: Reader(payload=readers[key]())
+                for key in ("skcounter.harness", "skgateway.observed")
+            },
+            now=NOW,
+        )
+
+    by_id = {item["adapter_id"]: item for item in items}
+    assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.75
+    assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
+    assert by_id["skgateway.observed"]["aggregate"]["tokens_total"] == 100
+    assert by_id["skgateway.observed"]["aggregate"]["observation_count"] == 9
+    assert by_id["skgateway.observed"]["coverage"] == {"expected": 1, "reporting": 1}
+    assert by_id["skgateway.observed"]["truth_state"] == "current"
+
+
+def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Path) -> None:
+    stale = {
+        "generated_at": NOW.isoformat(),
+        "summary": {"tokens": {"total": 1}, "cost_usd": 0.0, "cost_state": "unavailable"},
+        "coverage": {
+            "expected_nodes": 1,
+            "reporting_nodes": 1,
+            "fresh_collectors": 0,
+            "delayed_collectors": 0,
+            "stale_collectors": 1,
+        },
+        "collectors": [{"last_seen": "2026-01-01T00:00:00Z", "status": "stale"}],
+        "observation_count": 1,
+        "errors": [],
+    }
+    live = {
+        "observed_at": NOW.isoformat(),
+        "source": {
+            "summary": {
+                "totalRequests": 12,
+                "totalInputTokens": 80,
+                "totalOutputTokens": 20,
+                "totalCostUsd": 0,
+                "unpricedRequests": 12,
+            },
+            "backends": {
+                **{f"seen-{index}": {"observed": True} for index in range(3)},
+                **{f"idle-{index}": {"observed": False} for index in range(6)},
+            },
+        },
+        "errors": [],
+    }
+    with (
+        patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=stale),
+        patch("skdashboard.dashboard_observability.collect_gateway", return_value=live),
+    ):
+        result = _local_readers(tmp_path, board_data={})["skgateway.observed"]()
+
+    assert result["aggregate"]["observation_count"] == 12
+    assert result["aggregate"]["tokens_total"] == 100
+    assert result["coverage"] == {"expected": 1, "reporting": 1}
 
 
 def test_overview_etag_ignores_delivery_clocks_but_changes_with_source() -> None:

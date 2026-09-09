@@ -40,13 +40,20 @@ def test_route_inventory_is_read_only(tmp_path: Path) -> None:
         (getattr(route, "path", ""), tuple(sorted(getattr(route, "methods", ()) or ())))
         for route in app.routes
     }
-    assert not any("POST" in methods for _, methods in routes)
+    assert {("POST",)} == {
+        methods
+        for path, methods in routes
+        if path == "/api/assistant"
+    }
+    assert not any("POST" in methods and path != "/api/assistant" for path, methods in routes)
     assert {"127.0.0.1", "10.0.0.139", "100.81.238.58"} == ALLOWED_BIND_HOSTS
 
 
 def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    assert client.get("/").status_code == 200
+    root = client.get("/", follow_redirects=False)
+    assert root.status_code == 307
+    assert root.headers["location"] == "/control-plane/now"
     workspaces = {
         "now": "overview",
         "portfolio": "projects",
@@ -64,8 +71,16 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
         assert 'from "./api.js"' not in script.text
         assert 'from "./read_only_api.js"' in script.text
         assert client.get(f"/static/css/{asset}.css").status_code == 200
+    for route, asset in (("assistant", "assistant"), ("economy", "economy"), ("fleet", "fleet")):
+        assert client.get(f"/{route}").status_code == 200
+        assert client.get(f"/static/css/{asset}.css").status_code == 200
+        script = client.get(f"/static/js/{asset}.js")
+        assert script.status_code == 200
+        assert 'from "./api.js"' not in script.text
+        assert 'from "./read_only_api.js"' in script.text
     assert client.get("/.well-known/skworld-module.json").status_code == 200
     manifest = client.get("/.well-known/skworld-module.json").json()
+    assert manifest["entry"]["url"].endswith("/control-plane/now")
     assert manifest["health"].endswith("/api/v1/health")
     assert manifest["auth"] == {
         "audience": "skdashboard",
@@ -87,20 +102,19 @@ def test_approved_surfaces_exist_and_legacy_privilege_is_absent(tmp_path: Path) 
         "/api/auth/capability",
         "/api/card/x/mutate",
         "/api/card/x/queue-ai",
-        "/api/assistant",
         "/api/cmdb/apply",
         "/api/cmdb/seed",
         "/api/models/advertise",
-        "/static/assistant.html",
         "/static/cmdb.html",
         "/static/models.html",
-        "/static/js/api.js",
-        "/static/js/assistant.js",
-        "/static/js/cmdb.js",
-        "/static/js/ai_compose.js",
     ):
         assert client.get(path).status_code == 404
         assert client.post(path).status_code == 404
+    for asset in ("js/api.js", "js/ai_compose.js", "js/cmdb.js", "js/detail_panel.js", "js/editor.js", "js/board.js", "vendor/Sortable.min.js"):
+        assert client.get(f"/static/{asset}").status_code == 200
+    assert client.get("/api/economy", headers=headers).status_code == 200
+    assert client.get("/api/fleet/drift", headers=headers).status_code == 200
+    assert client.post("/api/assistant", json={}, headers=headers).status_code == 400
 
 
 def test_exact_https_origins_redirect_hsts_and_public_host_denial(
@@ -353,20 +367,56 @@ def test_workspace_routes_are_truthful_read_only_entrypoints(tmp_path: Path) -> 
 
     assert matters.status_code == tasks.status_code == queue.status_code == 307
     assert matters.headers["location"].endswith("selected_silo=legal")
-    assert tasks.headers["location"] == "https://legacy.example/board"
-    assert queue.headers["location"] == "https://legacy.example/board"
+    assert tasks.headers["location"] == "/board"
+    assert queue.headers["location"] == "/board"
     assert all(
         response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue)
     )
 
 
-def test_queue_routes_fail_closed_without_authorized_board_source(tmp_path: Path) -> None:
+def test_board_and_cmdb_routes_serve_their_own_modules(tmp_path: Path) -> None:
+    client = TestClient(create_read_only_app(tmp_path, authorizer=lambda *_: True), base_url=LAN_ORIGIN)
+
+    board = client.get("/board")
+    cmdb = client.get("/cmdb")
+
+    assert board.status_code == 200
+    assert "SKDashboard" in board.text and "Board" in board.text
+    assert "/static/js/board.js" in board.text
+    assert cmdb.status_code == 200
+    assert "SKDashboard" in cmdb.text and "CMDB" in cmdb.text
+    assert "/static/js/cmdb.js" in cmdb.text
+
+
+def test_legacy_module_api_paths_are_protected_and_present(tmp_path: Path) -> None:
+    client = TestClient(create_read_only_app(tmp_path, authorizer=lambda *_: True), base_url=LAN_ORIGIN)
+    headers = {"Authorization": "Bearer test"}
+    for path in (
+        "/api/overview",
+        "/api/kanban",
+        "/api/itil/overview",
+        "/api/itil/incidents",
+        "/api/itil/problems",
+        "/api/itil/changes",
+        "/api/cmdb/overview",
+        "/api/cmdb/plan",
+        "/api/trust/graph",
+        "/api/operator/overview",
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code in (200, 500), path
+
+    anonymous = TestClient(create_read_only_app(tmp_path), base_url=LAN_ORIGIN)
+    assert anonymous.get("/api/kanban").status_code == 401
+
+
+def test_queue_routes_use_the_local_board_without_external_host_dependency(tmp_path: Path) -> None:
     client = TestClient(create_read_only_app(tmp_path), base_url=LAN_ORIGIN)
 
     for path in ("/tasks", "/work-queue"):
-        response = client.get(path)
-        assert response.status_code == 503
-        assert "No authorized legacy board source is configured" in response.text
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == "/board"
 
 
 def test_runtime_authorizer_and_config_drift_fail_closed(tmp_path: Path) -> None:

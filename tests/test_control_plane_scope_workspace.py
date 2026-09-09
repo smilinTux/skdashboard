@@ -135,7 +135,7 @@ def test_browser_contract_is_bounded_read_only_and_accessible() -> None:
     assert "responseMatches(response, context)" in overview
     assert "epoch !== loadEpoch" in overview
     assert "PopStateEvent" in qualifier
-    assert "401 revocation did not fail closed" in qualifier
+    assert "401 revocation did not redirect to sign-in" in qualifier
     assert "403 revocation did not fail closed" in qualifier
     assert "Response scope did not match" in qualifier
     assert "Expired view did not fail closed" in qualifier
