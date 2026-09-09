@@ -153,6 +153,8 @@ def test_every_node_lands_in_exactly_one_bucket(fleet_tree) -> None:
         "warn": 1,
         "info": 1,
         "ok": 1,
+        "expected_reporters": 7,
+        "reporting_nodes": 6,
     }
 
 

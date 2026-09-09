@@ -276,7 +276,16 @@ def collect_drift(paths=None) -> dict:
     payload: dict = {
         "nodes": [],
         "skipped": [],
-        "summary": {"graded": 0, "skipped": 0, "error": 0, "warn": 0, "info": 0, "ok": 0},
+        "summary": {
+            "graded": 0,
+            "skipped": 0,
+            "error": 0,
+            "warn": 0,
+            "info": 0,
+            "ok": 0,
+            "expected_reporters": 0,
+            "reporting_nodes": 0,
+        },
         "errors": [],
     }
     try:
@@ -326,6 +335,10 @@ def collect_drift(paths=None) -> dict:
     summary = payload["summary"]
     summary["graded"] = len(payload["nodes"])
     summary["skipped"] = len(payload["skipped"])
+    summary["expected_reporters"] = len(views)
+    summary["reporting_nodes"] = len(payload["nodes"]) + sum(
+        row["reason_code"] != "no_inventory" for row in payload["skipped"]
+    )
     for node in payload["nodes"]:
         summary[node["severity"]] += 1
     payload["provenance"] = {
