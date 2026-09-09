@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import threading
+
 from starlette.testclient import TestClient
 
 from skdashboard import visibility
@@ -56,7 +59,9 @@ def test_every_view_returns_complete_evidence_bound_metadata(tmp_path):
 
 def test_evidence_hash_binds_metadata_and_rows():
     baseline = visibility.project("trends", [], target_revision="v1", cohort="all")
-    changed_revision = visibility.project("trends", [], target_revision="v2", cohort="all")
+    changed_revision = visibility.project(
+        "trends", [], target_revision="v2", cohort="all"
+    )
     changed_rows = visibility.project(
         "trends",
         [{"metric": "throughput", "value": 2}],
@@ -90,7 +95,9 @@ def test_http_authorization_and_scope_fail_closed(tmp_path):
     client = TestClient(app)
     assert client.get("/api/visibility/trends?role=viewer").status_code == 403
     assert client.get("/api/visibility/trends?role=owner").status_code == 403
-    assert client.get("/api/visibility/trends?role=auditor&matter_id=x").status_code == 400
+    assert (
+        client.get("/api/visibility/trends?role=auditor&matter_id=x").status_code == 400
+    )
     assert client.get("/api/visibility/not-a-view?role=auditor").status_code == 404
     assert provider_calls == []
     assert client.get("/api/visibility/trends?role=auditor").status_code == 200
@@ -159,3 +166,138 @@ def test_overview_renders_responsive_visibility_widgets(tmp_path):
     assert script.status_code == 200
     assert "/api/visibility/" in script.text
     assert "evidence_hash" in script.text
+    assert "Provider evidence failed closed" in script.text
+
+
+def test_provider_timeout_and_overload_fail_closed_with_redacted_evidence(tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+    notifications = []
+
+    def provider(_kind):
+        entered.set()
+        release.wait(1)
+        return supplied_projection()
+
+    client = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=provider,
+            visibility_authorizer=lambda _request, _role: True,
+            visibility_notifier=notifications.append,
+            visibility_timeout_seconds=0.02,
+            visibility_max_concurrency=1,
+            visibility_max_queue=0,
+            visibility_retries=0,
+        )
+    )
+    timed_out = client.get("/api/visibility/trends?role=viewer")
+    assert entered.is_set()
+    overloaded = client.get("/api/visibility/trends?role=viewer")
+    release.set()
+
+    assert timed_out.status_code == overloaded.status_code == 503
+    assert timed_out.json()["error"] == "visibility_provider_timeout"
+    assert overloaded.json()["error"] == "visibility_provider_overloaded"
+    assert all(item["escalation"] == "notification_only" for item in notifications)
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "evidence" / "skrsi-visibility" / "terminal.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["code"] for record in records] == [
+        "visibility_provider_timeout",
+        "visibility_provider_overloaded",
+    ]
+    assert "secret" not in json.dumps(records).lower()
+
+
+def test_provider_retry_replay_stale_and_malformed_fail_closed(tmp_path):
+    attempts = 0
+
+    def retry_provider(_kind):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("secret upstream detail")
+        return supplied_projection()
+
+    client = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=retry_provider,
+            visibility_authorizer=lambda _request, _role: True,
+            visibility_retries=1,
+        )
+    )
+    assert client.get("/api/visibility/trends?role=viewer").status_code == 200
+    assert attempts == 2
+
+    outcomes = iter(({"freshness": "stale", "secret": "hidden"}, []))
+    replay = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=lambda _kind: next(outcomes),
+            visibility_authorizer=lambda _request, _role: True,
+            visibility_retries=0,
+        )
+    )
+    stale = replay.get("/api/visibility/trends?role=viewer")
+    malformed = replay.get("/api/visibility/trends?role=viewer")
+    assert stale.status_code == 503
+    assert stale.json()["error"] == "visibility_provider_stale"
+    assert malformed.status_code == 422
+    assert malformed.json()["error"] == "visibility_provider_malformed"
+    assert "hidden" not in stale.text
+    assert "hidden" not in malformed.text
+
+
+def test_contract_malformed_mappings_emit_one_redacted_notification_and_record(
+    tmp_path,
+):
+    notifications = []
+    outcomes = []
+    for protected in ("row-protected-value", "metadata-protected-value"):
+        supplied = supplied_projection()
+        if protected.startswith("row"):
+            supplied["rows"] = [{"metric": "throughput", "details": protected}]
+        else:
+            supplied["missingness"] = {protected: "not-an-integer"}
+        outcomes.append(supplied)
+
+    client = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=lambda _kind: outcomes.pop(0),
+            visibility_authorizer=lambda _request, _role: True,
+            visibility_notifier=notifications.append,
+        )
+    )
+    responses = [
+        client.get("/api/visibility/trends?role=viewer"),
+        client.get("/api/visibility/trends?role=viewer"),
+    ]
+    assert all(response.status_code == 422 for response in responses)
+    assert all(
+        response.json()["error"] == "visibility_provider_malformed"
+        for response in responses
+    )
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "evidence" / "skrsi-visibility" / "terminal.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(records) == len(notifications) == 2
+    assert all(record["code"] == "visibility_provider_malformed" for record in records)
+    assert all(item["escalation"] == "notification_only" for item in notifications)
+    serialized = json.dumps(
+        {
+            "responses": [item.json() for item in responses],
+            "records": records,
+            "notifications": notifications,
+        }
+    )
+    assert "row-protected-value" not in serialized
+    assert "metadata-protected-value" not in serialized

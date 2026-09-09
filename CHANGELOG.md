@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Card `ae365315`: bound SKRSI visibility provider execution with explicit
+  timeout, concurrency, queue, and retry limits. Timeout, overload, stale, and
+  malformed outcomes now fail closed with redacted terminal evidence and
+  notification-only escalation.
+
 - **Card `5a71c2e2`: SKRSI target and experiment visibility.** Added bounded,
   authorization-aware aggregate projections and responsive overview widgets
   with revision, cohort, freshness, missingness, sample, evaluator, and

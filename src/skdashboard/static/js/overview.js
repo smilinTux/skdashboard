@@ -50,7 +50,7 @@ async function loadVisibility() {
   try {
     const data = await Promise.all(views.map((v) => getJSON(`/api/visibility/${v}?role=viewer`)));
     root.innerHTML = data.map((d) => `<article class="card"><strong>${esc(d.kind.replaceAll("_", " "))}</strong><div>revision: ${esc(d.target_revision)}</div><div>cohort: ${esc(d.cohort)} | freshness: ${esc(d.freshness)}</div><div>missing: ${esc(JSON.stringify(d.missingness))} | samples: ${d.sample_size}</div><div>evaluator: ${esc(d.evaluator_version)}</div><code>${esc(d.evidence_hash)}</code></article>`).join("");
-  } catch (e) { root.textContent = `Visibility unavailable: ${e.message}`; }
+  } catch (e) { root.textContent = `Visibility unavailable. Provider evidence failed closed: ${e.message}`; }
 }
 
 const QUALITY_ICON = {
