@@ -204,24 +204,35 @@ function renderEstate(items) {
     const sources = silo.adapters.map((adapter) => byId.get(adapter));
     return (!currentContext.selected_silo || silo.id === currentContext.selected_silo)
       && (!currentContext.truth || combinedState(sources) === currentContext.truth);
+  }).sort((a, b) => {
+    const rank = { unreachable: 0, unavailable: 1, stale: 2, partial: 3, unknown: 4, current: 5, not_applicable: 6 };
+    return rank[combinedState(a.adapters.map((adapter) => byId.get(adapter)))] - rank[combinedState(b.adapters.map((adapter) => byId.get(adapter)))];
   });
   rows.innerHTML = visible.map((silo) => {
     const sources = silo.adapters.map((adapter) => byId.get(adapter));
     const state = combinedState(sources);
     const owners = [...new Set(sources.map((item) => item.owner))].join(" + ");
     const visibility = sources.some((item) => item.visibility.state === "policy_filtered") ? "Policy filtered" : "Visible";
+    const reasons = sources.map((item) => {
+      const provenance = (item.safe_provenance || []).map((entry) => `${entry.code}: ${entry.message}`).join("; ");
+      return `${item.adapter_id}: ${provenance || (item.truth_state === "current" ? "Current" : "No reason supplied")}`;
+    });
+    const required = sources.filter((item) => item.required !== false).length;
+    const optional = sources.length - required;
     const metricSource = silo.metricSource || silo.adapters[0];
     const metricSourceHere = silo.adapters.includes(metricSource);
     estateEvidence.set(silo.id, { ...silo, sources, state, owners, visibility, metricSource, metricSourceHere });
     return `<tr data-silo="${esc(silo.id)}" data-source-count="${sources.length}">
       <td><strong>${esc(silo.label)}</strong><small>Owner: ${esc(owners)}</small></td>
       <td><span class="truth-badge ${esc(state)}"><b aria-hidden="true">${QUALITY_ICON[state]}</b>${esc(state.replace("_", " "))}</span><small>${esc(visibility)}</small></td>
+      <td class="now-reason"><strong>${state === "current" ? "Current" : "Why not current"}</strong>${reasons.map((reason) => `<small>${esc(reason)}</small>`).join("")}</td>
+      <td><span class="source-count">${required} required · ${optional} optional</span><small>${sources.map((item) => esc(item.adapter_id)).join(", ")}</small></td>
       <td><strong>${esc(signalFor(silo.id, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
       <td><span class="mono">${esc(silo.metric)}</span><small>definition only; result not projected</small><small>scope estate; window latest; ${esc(contextLabel())}; registry source ${esc(metricSource)}${metricSourceHere ? "" : "; source observation appears in another silo"}</small><small>${esc(coverageFor(sources))}</small></td>
       <td><strong>Unknown</strong><small>No comparable baseline is projected</small></td>
       <td><button class="quality-preview-button estate-evidence-button" type="button" data-silo="${esc(silo.id)}" aria-label="Evidence for ${esc(silo.label)}">Evidence</button></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
   const sourceCount = [...estateEvidence.values()].reduce((total, value) => total + value.sources.length, 0);
   document.getElementById("estate-count").textContent = `${visible.length} silos | ${sourceCount} sources`;
   rows.querySelectorAll(".estate-evidence-button").forEach((button) => button.addEventListener("click", () => openEstateEvidence(button.dataset.silo, button)));
@@ -361,7 +372,7 @@ function clearScopedForTransition() {
   }
   document.getElementById("estate-evidence-body").replaceChildren();
   document.getElementById("quality-preview-body").replaceChildren();
-  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="6"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
+  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="7"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
   document.getElementById("estate-count").textContent = "Loading";
   document.getElementById("quality-summary").innerHTML = `<div class="spinner" aria-label="Loading data quality"></div>`;
   document.getElementById("quality-issues").replaceChildren();
