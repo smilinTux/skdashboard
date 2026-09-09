@@ -239,7 +239,9 @@ def _pir_draft(chg) -> str:
 
     pr = chg.prepared_pr or {}
     if pr.get("url"):
-        lines.append(f"Prepared PR: {pr['url']} (branch {pr.get('branch') or 'unknown'})")
+        lines.append(
+            f"Prepared PR: {pr['url']} (branch {pr.get('branch') or 'unknown'})"
+        )
 
     validation = chg.validation or {}
     if validation:
@@ -347,7 +349,9 @@ def _get_agent_status(home: Path) -> dict:
                 "seeds": m.sync.seed_count,
                 "status": m.sync.status.value,
             },
-            "connectors": [{"platform": c.platform, "active": c.active} for c in m.connectors],
+            "connectors": [
+                {"platform": c.platform, "active": c.active} for c in m.connectors
+            ],
             "home": str(m.home),
         }
     except Exception as exc:
@@ -476,7 +480,9 @@ def _daemon_base_url(daemon_port: int | None = None) -> str:
     try:
         port = int(configured_port)
     except ValueError:
-        logger.warning("Invalid SKCAPSTONE_DAEMON_PORT=%r; falling back to 7777", configured_port)
+        logger.warning(
+            "Invalid SKCAPSTONE_DAEMON_PORT=%r; falling back to 7777", configured_port
+        )
         port = 7777
     return f"http://127.0.0.1:{port}"
 
@@ -570,7 +576,9 @@ def _get_daemon_json(home: Path, daemon_port: int | None = None) -> dict:
     }
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"{ollama_host}/api/tags"), timeout=2):
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{ollama_host}/api/tags"), timeout=2
+        ):
             backend_health["ollama"] = True
     except Exception as exc:
         logger.debug("Ollama probe failed (not available): %s", exc)
@@ -779,6 +787,11 @@ def create_app(
     control_plane_report_provider=None,
     visibility_provider=None,
     visibility_authorizer=None,
+    visibility_notifier=None,
+    visibility_timeout_seconds=1.0,
+    visibility_max_concurrency=2,
+    visibility_max_queue=2,
+    visibility_retries=1,
 ):
     """Build the Starlette ASGI app for the dashboard.
 
@@ -795,7 +808,12 @@ def create_app(
     import asyncio
 
     from starlette.applications import Starlette
-    from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+    from starlette.responses import (
+        HTMLResponse,
+        JSONResponse,
+        RedirectResponse,
+        StreamingResponse,
+    )
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
 
@@ -805,6 +823,16 @@ def create_app(
     from . import dashboard_operator as dop
     from . import queue_authz
     from .surface_registry import resolve_card_id
+    from .visibility_execution import VisibilityProviderBoundary, VisibilityUnavailable
+
+    visibility_boundary = VisibilityProviderBoundary(
+        home,
+        timeout_seconds=visibility_timeout_seconds,
+        max_concurrency=visibility_max_concurrency,
+        max_queue=visibility_max_queue,
+        retries=visibility_retries,
+        notifier=visibility_notifier,
+    )
 
     def _cmdb():
         from . import dashboard_cmdb as dc
@@ -828,9 +856,15 @@ def create_app(
         role = request.query_params.get("role", "viewer")
         try:
             visibility.authorize(role)
-            if visibility_authorizer is None or not visibility_authorizer(request, role):
+            if visibility_authorizer is None or not visibility_authorizer(
+                request, role
+            ):
                 raise PermissionError("visibility authorization denied")
-            supplied = visibility_provider(kind) if visibility_provider is not None else {}
+            supplied = (
+                visibility_boundary.invoke(kind, visibility_provider)
+                if visibility_provider is not None
+                else {}
+            )
             if not isinstance(supplied, Mapping):
                 raise ValueError("visibility provider returned a malformed projection")
             return _json(
@@ -847,8 +881,15 @@ def create_app(
             )
         except PermissionError:
             return JSONResponse({"error": "visibility_forbidden"}, status_code=403)
+        except VisibilityUnavailable as exc:
+            return JSONResponse(
+                {"error": exc.evidence["code"], "evidence": exc.evidence},
+                status_code=exc.status_code,
+            )
         except (TypeError, ValueError):
-            return JSONResponse({"error": "invalid_visibility_projection"}, status_code=422)
+            return JSONResponse(
+                {"error": "invalid_visibility_projection"}, status_code=422
+            )
 
     static_dir = Path(__file__).parent / "static"
     if (
@@ -863,15 +904,24 @@ def create_app(
         from .dashboard_architecture import ArchitectureProjectionProvider
 
         control_plane_architecture_provider = ArchitectureProjectionProvider()
-    if control_plane_economy_provider is None and control_plane_decision_authorizer is not None:
+    if (
+        control_plane_economy_provider is None
+        and control_plane_decision_authorizer is not None
+    ):
         from .dashboard_economy_provider import EconomyProjectionProvider
 
         control_plane_economy_provider = EconomyProjectionProvider()
-    if control_plane_governance_provider is None and control_plane_decision_authorizer is not None:
+    if (
+        control_plane_governance_provider is None
+        and control_plane_decision_authorizer is not None
+    ):
         from .dashboard_governance import GovernanceProjectionProvider
 
         control_plane_governance_provider = GovernanceProjectionProvider()
-    if control_plane_report_provider is None and control_plane_decision_authorizer is not None:
+    if (
+        control_plane_report_provider is None
+        and control_plane_decision_authorizer is not None
+    ):
         from .dashboard_reports import ReportProjectionProvider
 
         control_plane_report_provider = ReportProjectionProvider()
@@ -1052,7 +1102,8 @@ def create_app(
         return _json(
             {
                 "capability": os.environ.get("SKAI_QUEUE_TOKEN") or None,
-                "actor": os.environ.get("SKAI_OPERATOR_ACTOR", "").strip() or "unattributed",
+                "actor": os.environ.get("SKAI_OPERATOR_ACTOR", "").strip()
+                or "unattributed",
             }
         )
 
@@ -1079,7 +1130,9 @@ def create_app(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        actor = request.headers.get("x-sk-actor") or body.pop("actor", None) or "dashboard"
+        actor = (
+            request.headers.get("x-sk-actor") or body.pop("actor", None) or "dashboard"
+        )
         decision = _capability_gate(
             request, resource=card_id, capability=_CAP_CARD_MUTATE, actor=actor
         )
@@ -1087,7 +1140,9 @@ def create_app(
             return _gate_deny(decision["reason"])
         result = dk.apply_mutation(home, card_id, action, actor, **body)
         if result.get("ok"):
-            dk.BUS.publish({"type": "card_changed", "id": card_id, "actor": actor}, public=True)
+            dk.BUS.publish(
+                {"type": "card_changed", "id": card_id, "actor": actor}, public=True
+            )
         return _json(result)
 
     def _queue_gate(request, *, resource, mode, actor):
@@ -1135,7 +1190,9 @@ def create_app(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        requester = request.headers.get("x-sk-actor") or body.get("requester") or "operator"
+        requester = (
+            request.headers.get("x-sk-actor") or body.get("requester") or "operator"
+        )
         mode = body.get("mode", "propose")
         decision = _queue_gate(request, resource=card_id, mode=mode, actor=requester)
         if not decision["ok"]:
@@ -1191,7 +1248,9 @@ def create_app(
         section 7. A named alias for :func:`_capability_gate` (same body, same
         return shape) kept so the change routes read as change.* PEPs.
         """
-        return _capability_gate(request, resource=resource, capability=capability, actor=actor)
+        return _capability_gate(
+            request, resource=resource, capability=capability, actor=actor
+        )
 
     def _change_actor(request) -> str:
         """Resolve the authenticated actor for a change.* PEP.
@@ -1283,7 +1342,9 @@ def create_app(
         verified_actor = consent_plane.resolve_consent_actor(request)
         if not verified_actor.get("verified"):
             return Response(
-                json.dumps({"error": "a verified CapAuth operator session is required"}),
+                json.dumps(
+                    {"error": "a verified CapAuth operator session is required"}
+                ),
                 status_code=401,
                 media_type="application/json",
             )
@@ -1302,7 +1363,9 @@ def create_app(
         cab_decision = str(body.get("decision") or "").strip().lower()
         if cab_decision not in {"approved", "rejected", "abstain"}:
             return Response(
-                json.dumps({"error": "decision must be approved, rejected, or abstain"}),
+                json.dumps(
+                    {"error": "decision must be approved, rejected, or abstain"}
+                ),
                 status_code=400,
                 media_type="application/json",
             )
@@ -1325,13 +1388,17 @@ def create_app(
             )
 
         supplied_conditions = str(body.get("conditions") or "").strip()
-        audit_prefix = f"verified operator {actor_id}; session {verified_actor['session']}"
+        audit_prefix = (
+            f"verified operator {actor_id}; session {verified_actor['session']}"
+        )
         conditions = (
             f"{audit_prefix}; conditions: {supplied_conditions}"
             if supplied_conditions
             else audit_prefix
         )
-        _persist_change_consent(request, mgr, rid=rid, capability="change.cab_vote", decision=gate)
+        _persist_change_consent(
+            request, mgr, rid=rid, capability="change.cab_vote", decision=gate
+        )
         vote = mgr.submit_cab_vote(
             rid,
             agent=actor_id,
@@ -1340,7 +1407,9 @@ def create_app(
             subject="human",
         )
         chg = mgr._fold_record(mgr.changes_dir, rid, Change)
-        dk.BUS.publish({"type": "card_changed", "id": chg.id, "actor": actor_id}, public=True)
+        dk.BUS.publish(
+            {"type": "card_changed", "id": chg.id, "actor": actor_id}, public=True
+        )
         return _json(
             {
                 "submitted": True,
@@ -1416,7 +1485,9 @@ def create_app(
             checks=result["checks"],
         )
         chg = mgr._fold_record(mgr.changes_dir, rid, Change)
-        dk.BUS.publish({"type": "card_changed", "id": chg.id, "actor": actor}, public=True)
+        dk.BUS.publish(
+            {"type": "card_changed", "id": chg.id, "actor": actor}, public=True
+        )
         return _json(
             {
                 "validated": True,
@@ -1460,12 +1531,19 @@ def create_app(
 
         if body.get("unschedule"):
             was_scheduled = (
-                mgr._fold_record(mgr.changes_dir, rid, Change).status.value == "scheduled"
+                mgr._fold_record(mgr.changes_dir, rid, Change).status.value
+                == "scheduled"
             )
-            mgr._append_event(mgr.changes_dir, rid, actor, "unschedule", note=body.get("note", ""))
+            mgr._append_event(
+                mgr.changes_dir, rid, actor, "unschedule", note=body.get("note", "")
+            )
             chg = mgr._fold_record(mgr.changes_dir, rid, Change)
-            dk.BUS.publish({"type": "card_changed", "id": chg.id, "actor": actor}, public=True)
-            return _json({"unscheduled": was_scheduled, "id": chg.id, "status": chg.status.value})
+            dk.BUS.publish(
+                {"type": "card_changed", "id": chg.id, "actor": actor}, public=True
+            )
+            return _json(
+                {"unscheduled": was_scheduled, "id": chg.id, "status": chg.status.value}
+            )
 
         deploy_mode = body.get("deploy_mode") or "confirm"
         if deploy_mode != "confirm":
@@ -1487,7 +1565,9 @@ def create_app(
 
             return Response(
                 json.dumps(
-                    {"error": "window_start and window_end are required unless asap is true"}
+                    {
+                        "error": "window_start and window_end are required unless asap is true"
+                    }
                 ),
                 status_code=400,
                 media_type="application/json",
@@ -1523,7 +1603,9 @@ def create_app(
                 status_code=409,
                 media_type="application/json",
             )
-        dk.BUS.publish({"type": "card_changed", "id": chg.id, "actor": actor}, public=True)
+        dk.BUS.publish(
+            {"type": "card_changed", "id": chg.id, "actor": actor}, public=True
+        )
         return _json(
             {
                 "scheduled": True,
@@ -1648,12 +1730,16 @@ def create_app(
             from starlette.responses import Response
 
             return Response(
-                json.dumps({"error": "a PIR note is required to verify a deployed change"}),
+                json.dumps(
+                    {"error": "a PIR note is required to verify a deployed change"}
+                ),
                 status_code=400,
                 media_type="application/json",
             )
 
-        mgr._append_event(mgr.changes_dir, rid, actor, "status", to="verified", note=note)
+        mgr._append_event(
+            mgr.changes_dir, rid, actor, "status", to="verified", note=note
+        )
         chg = mgr._fold_record(mgr.changes_dir, rid, Change)
         if chg.status.value != "verified":
             from starlette.responses import Response
@@ -1673,7 +1759,9 @@ def create_app(
                 status_code=409,
                 media_type="application/json",
             )
-        dk.BUS.publish({"type": "card_changed", "id": chg.id, "actor": actor}, public=True)
+        dk.BUS.publish(
+            {"type": "card_changed", "id": chg.id, "actor": actor}, public=True
+        )
         return _json(
             {
                 "verified": True,
@@ -1709,7 +1797,9 @@ def create_app(
             return err
 
         chg = mgr._fold_record(mgr.changes_dir, rid, Change)
-        return _json({"id": chg.id, "status": chg.status.value, "draft": _pir_draft(chg)})
+        return _json(
+            {"id": chg.id, "status": chg.status.value, "draft": _pir_draft(chg)}
+        )
 
     async def api_surface_suggest(request):
         """Generalized suggestions for ANY fleet surface: resolve (surface, id)
@@ -1721,10 +1811,14 @@ def create_app(
         item_id = request.path_params["id"]
         card_id = resolve_card_id(surface, item_id)
         if card_id is None:
-            return _json({"error": f"unknown surface/id: {surface}/{item_id}", "suggestions": []})
+            return _json(
+                {"error": f"unknown surface/id: {surface}/{item_id}", "suggestions": []}
+            )
         use_llm = request.query_params.get("llm", "1") != "0"
         timeout = 35.0 if use_llm else 1.0
-        return _json(ar.suggest_next_steps(home, card_id, use_llm=use_llm, timeout=timeout))
+        return _json(
+            ar.suggest_next_steps(home, card_id, use_llm=use_llm, timeout=timeout)
+        )
 
     async def api_surface_queue(request):
         """Generalized 'queue AI to work an item' for ANY fleet surface."""
@@ -1817,7 +1911,9 @@ def create_app(
         import urllib.request
 
         try:
-            with urllib.request.urlopen(f"{_gateway_admin}/admin/models", timeout=3) as r:
+            with urllib.request.urlopen(
+                f"{_gateway_admin}/admin/models", timeout=3
+            ) as r:
                 return _json(json.loads(r.read().decode("utf-8")))
         except Exception as exc:  # gateway down: empty catalog, never 500 the page
             return _json({"object": "list", "data": [], "error": str(exc)})
@@ -1846,7 +1942,9 @@ def create_app(
         try:
             parsed = json.loads(raw or b"{}")
             enabled = parsed.get("enabled", [])
-            if not isinstance(enabled, list) or not all(isinstance(x, str) for x in enabled):
+            if not isinstance(enabled, list) or not all(
+                isinstance(x, str) for x in enabled
+            ):
                 raise ValueError("enabled must be a list of strings")
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1983,16 +2081,21 @@ def create_app(
         Route("/assistant", _page("assistant.html")),
         Route("/cockpit", cockpit_page),
         Route("/api/itil/overview", lambda r: _json(di.get_overview(home))),
-        Route("/api/operator/overview", lambda r: _json(dop.get_operator_cockpit(home))),
+        Route(
+            "/api/operator/overview", lambda r: _json(dop.get_operator_cockpit(home))
+        ),
         Route("/api/itil/incidents", lambda r: _json(di.get_incidents(home))),
         Route("/api/itil/problems", lambda r: _json(di.get_problems(home))),
         Route("/api/itil/changes", lambda r: _json(di.get_changes(home))),
         Route(
-            "/api/itil/kedb", lambda r: _json(di.search_kedb(home, r.query_params.get("q", "")))
+            "/api/itil/kedb",
+            lambda r: _json(di.search_kedb(home, r.query_params.get("q", ""))),
         ),
         Route(
             "/api/itil/record/{kind}/{rid}",
-            lambda r: _json(di.get_record(home, r.path_params["kind"], r.path_params["rid"])),
+            lambda r: _json(
+                di.get_record(home, r.path_params["kind"], r.path_params["rid"])
+            ),
         ),
         Route("/cmdb", _page("cmdb.html")),
         Route("/api/cmdb/overview", lambda r: _json(_cmdb().get_overview(home))),
@@ -2017,7 +2120,8 @@ def create_app(
             ),
         ),
         Route(
-            "/api/cmdb/ci/{ci_id}", lambda r: _json(_cmdb().get_ci(home, r.path_params["ci_id"]))
+            "/api/cmdb/ci/{ci_id}",
+            lambda r: _json(_cmdb().get_ci(home, r.path_params["ci_id"])),
         ),
         Route("/api/cmdb/apply", api_cmdb_apply, methods=["POST"]),
         Route("/api/cmdb/seed", api_cmdb_seed, methods=["POST"]),
