@@ -1221,6 +1221,52 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
     assert result["truth_state"] == "current"
 
 
+def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(tmp_path: Path) -> None:
+    observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
+    observations.parent.mkdir(parents=True)
+    observations.write_text(
+        json.dumps(
+            {
+                "observed_at": NOW.isoformat(),
+                "conditions": [
+                    {"status": True, "polarity": "problem_when_true"},
+                    {"status": False, "polarity": "problem_when_false"},
+                    {"status": True, "polarity": "problem_when_false"},
+                ],
+            }
+        )
+    )
+
+    reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
+    result = next(
+        item
+        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        if item["adapter_id"] == "atlas.conditions"
+    )
+
+    assert result["truth_state"] == "current"
+    assert result["coverage"] == {"expected": 3, "reporting": 3}
+    assert result["aggregate"] == {"open_conditions": 2, "ready_actions": 0}
+    assert result["watermark"]["value"].startswith("sha256:")
+
+
+def test_atlas_conditions_adapter_treats_empty_snapshot_as_observed_zero(tmp_path: Path) -> None:
+    observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
+    observations.parent.mkdir(parents=True)
+    observations.write_text(json.dumps({"observed_at": NOW.isoformat(), "conditions": []}))
+
+    reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
+    result = next(
+        item
+        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        if item["adapter_id"] == "atlas.conditions"
+    )
+
+    assert result["truth_state"] == "current"
+    assert result["coverage"] == {"expected": 0, "reporting": 0}
+    assert result["aggregate"] == {"open_conditions": 0, "ready_actions": 0}
+
+
 def test_atlas_missing_timestamp_uses_source_mtime(tmp_path: Path) -> None:
     observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
     observations.parent.mkdir(parents=True)

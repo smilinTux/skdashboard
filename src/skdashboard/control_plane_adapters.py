@@ -998,16 +998,17 @@ def _local_readers(
 
             observations_data = None
             source_path = None
+            source_digest = None
             source_observed_at = None
 
             if operator_observations_path.exists():
                 source_path = operator_observations_path
-                observations_data, _, source_observed_at, _ = _read_json_snapshot(
+                observations_data, source_digest, source_observed_at, _ = _read_json_snapshot(
                     operator_observations_path
                 )
             elif fleet_observations_path.exists():
                 source_path = fleet_observations_path
-                observations_data, _, source_observed_at, _ = _read_json_snapshot(
+                observations_data, source_digest, source_observed_at, _ = _read_json_snapshot(
                     fleet_observations_path
                 )
             else:
@@ -1037,19 +1038,34 @@ def _local_readers(
             ready_actions = 0
             errors = []
 
+            reporting = 0
             for condition in conditions:
                 if not isinstance(condition, dict):
                     continue
-                status = condition.get("status", "Unknown").lower()
-                if status in {"open", "degraded", "failed"}:
+                raw_status = condition.get("status", "Unknown")
+                if not isinstance(raw_status, (str, bool)):
+                    raise ValueError("Atlas condition status malformed")
+                status = raw_status.lower() if isinstance(raw_status, str) else raw_status
+                known = isinstance(status, bool) or status != "unknown"
+                if known:
+                    reporting += 1
+                polarity = condition.get("polarity")
+                firing = (
+                    status in {"open", "degraded", "failed"}
+                    or (status is True and polarity == "problem_when_true")
+                    or (status is False and polarity == "problem_when_false")
+                )
+                if firing:
                     open_conditions += 1
-                if condition.get("ready_for_action") is True:
+                if known and condition.get("ready_for_action") is True:
                     ready_actions += 1
 
-                if status == "unknown":
+                if not known:
                     errors.append("unknown_condition_state")
 
-            has_observations = len(conditions) > 0
+            # An existing, valid empty snapshot is an observed zero. A missing
+            # snapshot is handled above as unavailable and can never look healthy.
+            has_observations = True
 
             return aggregate_reader(
                 {
@@ -1057,13 +1073,11 @@ def _local_readers(
                     "ready_actions": ready_actions,
                 },
                 expected=len(conditions),
-                reporting=len(
-                    [c for c in conditions if isinstance(c, dict) and c.get("status") != "Unknown"]
-                ),
+                reporting=reporting,
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
                 observed_at=observations_data.get("observed_at", source_observed_at),
-                watermark_data=source_path.name if source_path else "unknown",
+                watermark_data=f"{source_path.name}:{source_digest}",
             )()
         except PermissionError:
             raise
