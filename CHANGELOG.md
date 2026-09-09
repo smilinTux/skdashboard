@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Card `2d2a6d4d`: link the canonical SKRSI project and define SELF as
+  Systematic Evaluation, Learning, and Feedback in visibility documentation.
+
 - Card `ae365315`: bound SKRSI visibility provider execution with explicit
   timeout, concurrency, queue, and retry limits. Timeout, overload, stale, and
   malformed outcomes now fail closed with redacted terminal evidence and
