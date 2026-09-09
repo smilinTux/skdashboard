@@ -1,5 +1,9 @@
 # SKRSI visibility provider bounds
 
+SKRSI means **SK Recursive SELF Improvement**, where SELF is **Systematic
+Evaluation, Learning, and Feedback**. The canonical project definition lives
+in the [SKRSI repository](https://github.com/smilinTux/skrsi).
+
 The dashboard authorizes the role and validates the requested visibility scope
 before provider access. Provider execution then uses a fixed worker count, a
 bounded admission queue, an explicit per-attempt timeout, and one bounded retry
