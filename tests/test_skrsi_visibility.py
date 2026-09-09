@@ -32,7 +32,13 @@ def test_every_view_returns_complete_evidence_bound_metadata(tmp_path):
         requested.append(kind)
         return supplied_projection()
 
-    client = TestClient(create_app(tmp_path, visibility_provider=provider))
+    client = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=provider,
+            visibility_authorizer=lambda _request, _role: True,
+        )
+    )
     for kind in sorted(visibility.VIEWS):
         response = client.get(f"/api/visibility/{kind}?role=viewer")
         assert response.status_code == 200
@@ -91,6 +97,20 @@ def test_http_authorization_and_scope_fail_closed(tmp_path):
     assert provider_calls == ["trends"]
 
 
+def test_http_requires_authorizer_before_provider_access(tmp_path):
+    provider_calls = []
+
+    def provider(kind):
+        provider_calls.append(kind)
+        return supplied_projection()
+
+    response = TestClient(create_app(tmp_path, visibility_provider=provider)).get(
+        "/api/visibility/trends?role=viewer"
+    )
+    assert response.status_code == 403
+    assert provider_calls == []
+
+
 def test_protected_or_unbounded_payloads_never_serialize(tmp_path):
     protected_fields = (
         "secret",
@@ -105,16 +125,26 @@ def test_protected_or_unbounded_payloads_never_serialize(tmp_path):
     for field in protected_fields:
         supplied = supplied_projection()
         supplied["rows"] = [{"metric": "throughput", field: "protected-value"}]
-        client = TestClient(create_app(tmp_path, visibility_provider=lambda _kind, s=supplied: s))
+        client = TestClient(
+            create_app(
+                tmp_path,
+                visibility_provider=lambda _kind, s=supplied: s,
+                visibility_authorizer=lambda _request, _role: True,
+            )
+        )
         response = client.get("/api/visibility/trends?role=viewer")
         assert response.status_code == 422
         assert "protected-value" not in response.text
 
     supplied = supplied_projection()
     supplied["rows"] = [{"metric": "throughput", "details": "arbitrary payload"}]
-    response = TestClient(create_app(tmp_path, visibility_provider=lambda _kind: supplied)).get(
-        "/api/visibility/trends?role=viewer"
-    )
+    response = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=lambda _kind: supplied,
+            visibility_authorizer=lambda _request, _role: True,
+        )
+    ).get("/api/visibility/trends?role=viewer")
     assert response.status_code == 422
     assert "arbitrary payload" not in response.text
 

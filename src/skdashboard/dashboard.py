@@ -828,7 +828,7 @@ def create_app(
         role = request.query_params.get("role", "viewer")
         try:
             visibility.authorize(role)
-            if visibility_authorizer is not None and not visibility_authorizer(request, role):
+            if visibility_authorizer is None or not visibility_authorizer(request, role):
                 raise PermissionError("visibility authorization denied")
             supplied = visibility_provider(kind) if visibility_provider is not None else {}
             if not isinstance(supplied, Mapping):
