@@ -19,6 +19,7 @@ from starlette.routing import Route
 from .build_info import build_information
 from .dashboard_economy_provider import EconomyProjectionProvider
 from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
+from .source_state import source_state
 
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
@@ -102,11 +103,19 @@ def _envelope(
     projected_at = _now()
     truth = truth_state or ("partial" if errors else ("current" if items else "unknown"))
     request_id = request.headers.get("x-request-id", "")[:128] or uuid4().hex
+    state = source_state(
+        availability="available" if items else ("unavailable" if errors else "unknown"),
+        freshness="fresh" if items else "unknown",
+        coverage="partial" if errors else ("complete" if items else "unknown"),
+        data_quality="degraded" if errors else ("valid" if items else "unknown"),
+        degradation_reasons=[{"code": "SOURCE_PARTIAL", "message": str(error)} for error in errors],
+    )
     envelope = {
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id,
         "source_owner": owner,
         "scope": dict(scope or {}),
+        "source_state": state,
         "freshness": {
             "truth_state": truth,
             "visibility": _visibility(),
