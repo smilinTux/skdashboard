@@ -815,6 +815,30 @@ def create_app(
 
         return do.get_overview_home(h)
 
+    async def _visibility(request):
+        """Return metadata-rich aggregate visibility, never source content."""
+        from . import visibility
+
+        kind = request.path_params["kind"]
+        allowed = {"target_inventory", "trends", "experiments", "confidence", "guardrails",
+                   "bottlenecks", "comparisons", "regressions", "cleanup", "recovery"}
+        if kind not in allowed:
+            return _json({"error": "unknown_visibility_view"})
+        query = request.query_params
+        try:
+            missingness = json.loads(query.get("missingness", "{}"))
+            if not isinstance(missingness, dict):
+                missingness = {}
+        except (TypeError, ValueError):
+            missingness = {}
+        return _json(visibility.project(
+            kind, [], role=query.get("role", "viewer"),
+            target_revision=query.get("target_revision", "unknown"),
+            cohort=query.get("cohort", "unknown"),
+            evaluator_version=query.get("evaluator_version", "unknown"),
+            freshness=query.get("freshness", "unknown"), missingness=missingness,
+        ))
+
     static_dir = Path(__file__).parent / "static"
     if (
         control_plane_reliability_provider is None
@@ -1927,6 +1951,7 @@ def create_app(
         Route("/board", board_page),
         Route("/api/status", _get_route(_get_agent_status)),
         Route("/api/overview", lambda r: _json(_overview_home(home))),
+        Route("/api/visibility/{kind}", _visibility),
         Route("/api/doctor", _get_route(_get_doctor_report)),
         Route("/api/board", _get_route(_get_board_state)),
         Route("/api/memory", _get_route(_get_memory_stats)),
