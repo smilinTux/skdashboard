@@ -251,3 +251,53 @@ def test_provider_retry_replay_stale_and_malformed_fail_closed(tmp_path):
     assert malformed.json()["error"] == "visibility_provider_malformed"
     assert "hidden" not in stale.text
     assert "hidden" not in malformed.text
+
+
+def test_contract_malformed_mappings_emit_one_redacted_notification_and_record(
+    tmp_path,
+):
+    notifications = []
+    outcomes = []
+    for protected in ("row-protected-value", "metadata-protected-value"):
+        supplied = supplied_projection()
+        if protected.startswith("row"):
+            supplied["rows"] = [{"metric": "throughput", "details": protected}]
+        else:
+            supplied["missingness"] = {protected: "not-an-integer"}
+        outcomes.append(supplied)
+
+    client = TestClient(
+        create_app(
+            tmp_path,
+            visibility_provider=lambda _kind: outcomes.pop(0),
+            visibility_authorizer=lambda _request, _role: True,
+            visibility_notifier=notifications.append,
+        )
+    )
+    responses = [
+        client.get("/api/visibility/trends?role=viewer"),
+        client.get("/api/visibility/trends?role=viewer"),
+    ]
+    assert all(response.status_code == 422 for response in responses)
+    assert all(
+        response.json()["error"] == "visibility_provider_malformed"
+        for response in responses
+    )
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "evidence" / "skrsi-visibility" / "terminal.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(records) == len(notifications) == 2
+    assert all(record["code"] == "visibility_provider_malformed" for record in records)
+    assert all(item["escalation"] == "notification_only" for item in notifications)
+    serialized = json.dumps(
+        {
+            "responses": [item.json() for item in responses],
+            "records": records,
+            "notifications": notifications,
+        }
+    )
+    assert "row-protected-value" not in serialized
+    assert "metadata-protected-value" not in serialized

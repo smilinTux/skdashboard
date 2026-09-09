@@ -867,18 +867,21 @@ def create_app(
             )
             if not isinstance(supplied, Mapping):
                 raise ValueError("visibility provider returned a malformed projection")
-            return _json(
-                visibility.project(
-                    kind,
-                    supplied.get("rows", ()),
-                    role=role,
-                    target_revision=supplied.get("target_revision", "unknown"),
-                    cohort=supplied.get("cohort", "unknown"),
-                    evaluator_version=supplied.get("evaluator_version", "unknown"),
-                    freshness=supplied.get("freshness", "unknown"),
-                    missingness=supplied.get("missingness"),
+            try:
+                return _json(
+                    visibility.project(
+                        kind,
+                        supplied.get("rows", ()),
+                        role=role,
+                        target_revision=supplied.get("target_revision", "unknown"),
+                        cohort=supplied.get("cohort", "unknown"),
+                        evaluator_version=supplied.get("evaluator_version", "unknown"),
+                        freshness=supplied.get("freshness", "unknown"),
+                        missingness=supplied.get("missingness"),
+                    )
                 )
-            )
+            except (TypeError, ValueError):
+                visibility_boundary.reject_malformed(kind)
         except PermissionError:
             return JSONResponse({"error": "visibility_forbidden"}, status_code=403)
         except VisibilityUnavailable as exc:

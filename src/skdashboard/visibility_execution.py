@@ -101,3 +101,8 @@ class VisibilityProviderBoundary:
         finally:
             if release_now:
                 self._slots.release()
+
+    def reject_malformed(self, kind: str) -> None:
+        """Record one redacted terminal contract-validation failure."""
+
+        self._failure(kind, "visibility_provider_malformed", 1, 422)
