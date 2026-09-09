@@ -174,7 +174,7 @@ function signalFor(id, items) {
     fleet: () => `${aggregateValue(first, "graded")} graded, ${aggregateValue(first, "error")} errors, ${aggregateValue(first, "warn")} warnings`,
     ai: () => `Harness ${aggregateValue(first, "observation_count")} observations; gateway ${aggregateValue(second, "observation_count")} observations`,
     economy: () => `${aggregateValue(first, "regressions")} performance regressions; ${aggregateValue(second, "total_supply")} Joule supply`,
-    governance: () => `${aggregateValue(first, "denials")} policy denials; policy evidence ${aggregateValue(first, "available")}`,
+    governance: () => `${aggregateValue(first, "active_identities")} active, ${aggregateValue(first, "inactive_identities")} inactive identities; policy evidence ${aggregateValue(first, "available")}`,
     legal: () => first.aggregate ? `${aggregateValue(first, "matters")} matter-free aggregate records; deadline pressure ${aggregateValue(first, "deadline_pressure")}` : "Policy-filtered aggregate unavailable",
     corpus: () => `${aggregateValue(first, "approved_releases")} approved releases; ${aggregateValue(first, "pipeline_failures")} pipeline failures`,
     operator: () => `${aggregateValue(first, "open_conditions")} open conditions, ${aggregateValue(first, "ready_actions")} ready-action observations; ${aggregateValue(second, "discovered")} SKOS modules`,

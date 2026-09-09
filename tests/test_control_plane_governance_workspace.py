@@ -24,7 +24,13 @@ def readers(*, stale=False, partial=False):
     for spec in SPECS:
         aggregate = {field: 1 for field in spec.fields}
         if spec.adapter_id == "capauth.policy":
-            aggregate = {"available": True, "denials": 2}
+            aggregate = {
+                "available": True,
+                "denials": 2,
+                "inspected_identities": 2,
+                "active_identities": 1,
+                "inactive_identities": 1,
+            }
         output[spec.adapter_id] = aggregate_reader(
             aggregate,
             expected=2 if partial and spec.adapter_id == "skcoord.flow" else 1,

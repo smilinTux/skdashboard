@@ -157,7 +157,13 @@ SPECS = (
         "capauth.policy",
         "CapAuth",
         "policy_health",
-        ("available", "denials"),
+        (
+            "available",
+            "denials",
+            "inspected_identities",
+            "active_identities",
+            "inactive_identities",
+        ),
         classification="confidential",
     ),
     AdapterSpec(
@@ -542,15 +548,14 @@ def _local_readers(
             or not isinstance(activity, list)
         ):
             raise ValueError
-        observed_at = max(
-            (item.get("ts") for item in activity if item.get("ts")),
-            default=None,
+        latest_activity = max(
+            (item.get("ts") for item in activity if item.get("ts")), default=None
         )
         return aggregate_reader(
             {key: kpis.get(key) for key in fields},
-            observed_at=observed_at,
-            watermark_data=observed_at,
-            has_observations=bool(activity),
+            observed_at=default_observed_at,
+            watermark_data=latest_activity,
+            has_observations=True,
         )()
 
     def cmdb() -> dict:
@@ -601,8 +606,8 @@ def _local_readers(
             raise ValueError
         return aggregate_reader(
             {key: summary[key] for key in fields},
-            expected=summary.get("graded", 0) + summary.get("skipped", 0),
-            reporting=summary.get("graded", 0),
+            expected=summary.get("expected_reporters", 0),
+            reporting=summary.get("reporting_nodes", 0),
             errors=["partial"] if raw.get("errors") else [],
             has_observations=bool(summary["graded"] or summary["skipped"]),
             observed_at=default_observed_at,
@@ -633,24 +638,23 @@ def _local_readers(
             or not isinstance(raw.get("errors"), list)
         ):
             raise ValueError
-        observed = min(
+        observed = max(
             (item.get("last_seen") for item in collectors if item.get("last_seen")),
             default=raw.get("generated_at"),
         )
         stale_collectors = coverage.get("stale_collectors", 0)
         delayed_collectors = coverage.get("delayed_collectors", 0)
-        collector_states = {item.get("status") for item in collectors if item.get("status")}
         return aggregate_reader(
             {
                 "tokens_total": tokens["total"],
                 "latency_ms": None,
-                "cache_ratio": summary.get("cache_ratio") if summary.get("cache_ratio") is not None else None,
+                "cache_ratio": summary.get("cache_ratio")
+                if summary.get("cache_ratio") is not None
+                else None,
                 "error_count": None,
                 "denial_count": None,
                 "cost_usd": (
-                    summary.get("cost_usd")
-                    if summary.get("cost_state") != "unavailable"
-                    else None
+                    summary.get("cost_usd") if summary.get("cost_state") != "unavailable" else None
                 ),
                 "cost_state": summary.get("cost_state", "unavailable"),
                 "observation_count": raw.get("observation_count", 0),
@@ -661,7 +665,7 @@ def _local_readers(
             expected=coverage.get("expected_nodes"),
             reporting=coverage.get("reporting_nodes"),
             observed_at=observed,
-            errors=["partial"] if raw.get("errors") or len(collector_states) > 1 else [],
+            errors=["partial"] if raw.get("errors") else [],
             has_observations=bool(raw.get("observation_count")),
             watermark_data=collectors,
         )()
@@ -784,7 +788,8 @@ def _local_readers(
 
             identities = tuple(manifest.identities.values())
             available = bool(identities)
-            denials = sum(identity.status != "active" for identity in identities)
+            active = sum(identity.status == "active" for identity in identities)
+            inactive = len(identities) - active
 
             errors = []
             if not available:
@@ -795,10 +800,13 @@ def _local_readers(
             return aggregate_reader(
                 {
                     "available": available,
-                    "denials": denials,
+                    "denials": None,
+                    "inspected_identities": len(identities),
+                    "active_identities": active,
+                    "inactive_identities": inactive,
                 },
                 expected=len(identities),
-                reporting=sum(identity.status == "active" for identity in identities),
+                reporting=len(identities),
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
                 observed_at=observed_at,
@@ -904,12 +912,12 @@ def _local_readers(
             discovered = 0
             unavailable = 0
             errors = []
-            observed_at = []
+            source_observed_at = []
 
             if skcode_arena_path.exists() and skcode_arena_path.is_dir():
                 try:
                     arena_entries, arena_observed_at = _directory_snapshot(skcode_arena_path)
-                    observed_at.append(arena_observed_at)
+                    source_observed_at.append(arena_observed_at)
                     discovered = sum(1 for entry in arena_entries if entry.is_dir())
                 except PermissionError:
                     raise
@@ -921,7 +929,7 @@ def _local_readers(
                     src_path = skcapstone_repo_path / "src" / "skcapstone"
                     if src_path.exists() and src_path.is_dir():
                         module_files, repo_observed_at = _directory_snapshot(src_path, "*.py")
-                        observed_at.append(repo_observed_at)
+                        source_observed_at.append(repo_observed_at)
                         discovered += len(module_files)
                 except PermissionError:
                     raise
@@ -943,8 +951,11 @@ def _local_readers(
                 reporting=discovered,
                 errors=errors[:1] if errors else [],
                 has_observations=has_observations,
-                observed_at=min(observed_at, default=default_observed_at),
-                watermark_data=f"skos-scan:{discovered}:{unavailable}",
+                observed_at=default_observed_at,
+                watermark_data={
+                    "scan": f"skos-scan:{discovered}:{unavailable}",
+                    "sources": source_observed_at,
+                },
             )()
         except PermissionError:
             raise
