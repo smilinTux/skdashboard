@@ -116,6 +116,86 @@ def test_truth_states_fail_closed_and_are_sensitive_to_source_evidence() -> None
     assert "secret" not in str(timeout)
 
 
+def test_source_status_keeps_dimensions_independent() -> None:
+    spec = SPECS[0]
+    item = project_estate(
+        {
+            spec.adapter_id: aggregate_reader(
+                {field: 1 for field in spec.fields},
+                expected=3,
+                reporting=2,
+                observed_at=(NOW - timedelta(seconds=61)).isoformat(),
+                errors=["one collector returned malformed data"],
+            )
+        },
+        now=NOW,
+    )[0]
+
+    assert item["truth_state"] == "partial"
+    assert item["coverage"] == {"expected": 3, "reporting": 2}
+    assert item["source_status"] == {
+        "requirement": "required",
+        "availability": {"state": "available"},
+        "freshness": {
+            "state": "stale",
+            "age_seconds": 61,
+            "ttl_seconds": 60,
+            "reason": {"code": "OBSERVATION_EXPIRED"},
+        },
+        "coverage": {
+            "state": "partial",
+            "expected": 3,
+            "reporting": 2,
+            "reason": {"code": "COVERAGE_PARTIAL"},
+        },
+        "data_quality": {
+            "state": "degraded",
+            "reason": {"code": "SOURCE_REPORTED_ERRORS"},
+        },
+    }
+
+
+def test_source_status_failure_and_optional_policy_visibility_are_explicit() -> None:
+    required = SPECS[0]
+    unavailable = project_estate({}, now=NOW)[0]
+    assert unavailable["source_status"] == {
+        "requirement": "required",
+        "availability": {
+            "state": "unavailable",
+            "reason": {"code": "SOURCE_UNAVAILABLE"},
+        },
+        "freshness": {
+            "state": "unknown",
+            "age_seconds": None,
+            "ttl_seconds": required.ttl_seconds,
+            "reason": {"code": "OBSERVATION_UNAVAILABLE"},
+        },
+        "coverage": {
+            "state": "unknown",
+            "expected": None,
+            "reporting": None,
+            "reason": {"code": "COVERAGE_UNAVAILABLE"},
+        },
+        "data_quality": {
+            "state": "unknown",
+            "reason": {"code": "QUALITY_UNAVAILABLE"},
+        },
+    }
+
+    protected = next(spec for spec in SPECS if spec.adapter_id == "sklegal.global")
+    observed = aggregate_reader(
+        {field: 1 for field in protected.fields}, observed_at=NOW.isoformat()
+    )
+    item = next(
+        item
+        for item in project_estate({protected.adapter_id: observed}, now=NOW)
+        if item["adapter_id"] == protected.adapter_id
+    )
+    assert item["source_status"]["requirement"] == "optional"
+    assert item["source_status"]["availability"]["state"] == "available"
+    assert item["visibility"]["state"] == "policy_filtered"
+
+
 def test_malformed_or_future_source_cannot_leak_or_render_current() -> None:
     spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
     raw = aggregate_reader(

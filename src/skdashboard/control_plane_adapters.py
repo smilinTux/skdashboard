@@ -71,6 +71,7 @@ class AdapterSpec:
     ttl_seconds: int = 60
     timeout_ms: int = 1_000
     classification: str = "internal"
+    required: bool = True
 
 
 SPECS = (
@@ -185,6 +186,7 @@ SPECS = (
         "policy_filtered_global_aggregate",
         ("matters", "deadline_pressure"),
         classification="confidential",
+        required=False,
     ),
     AdapterSpec(
         "hammertime.pipeline",
@@ -192,6 +194,7 @@ SPECS = (
         "approved_aggregate_pipeline",
         ("approved_releases", "pipeline_failures"),
         classification="confidential",
+        required=False,
     ),
 )
 
@@ -232,6 +235,47 @@ def _iso(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _dimension(state: str, reason: str | None = None, **details: object) -> dict:
+    value = {"state": state, **details}
+    if reason is not None:
+        value["reason"] = {"code": reason}
+    return value
+
+
+def _source_status(
+    spec: AdapterSpec,
+    *,
+    availability: str,
+    availability_reason: str | None,
+    freshness: str,
+    freshness_reason: str | None,
+    coverage: str,
+    coverage_reason: str | None,
+    quality: str,
+    quality_reason: str | None,
+    age_seconds: int | None = None,
+    expected: int | None = None,
+    reporting: int | None = None,
+) -> dict:
+    return {
+        "requirement": "required" if spec.required else "optional",
+        "availability": _dimension(availability, availability_reason),
+        "freshness": _dimension(
+            freshness,
+            freshness_reason,
+            age_seconds=age_seconds,
+            ttl_seconds=spec.ttl_seconds,
+        ),
+        "coverage": _dimension(
+            coverage,
+            coverage_reason,
+            expected=expected,
+            reporting=reporting,
+        ),
+        "data_quality": _dimension(quality, quality_reason),
+    }
+
+
 def _error(
     spec: AdapterSpec,
     projected_at: str,
@@ -261,6 +305,23 @@ def _error(
         "projected_at": projected_at,
         "watermark": {"source": spec.adapter_id, "value": None},
         "truth_state": truth_state,
+        "source_status": _source_status(
+            spec,
+            availability=(
+                "unauthorized"
+                if code == "SOURCE_UNAUTHORIZED"
+                else "unreachable"
+                if code == "SOURCE_UNREACHABLE"
+                else "unavailable"
+            ),
+            availability_reason=code,
+            freshness="unknown",
+            freshness_reason="OBSERVATION_UNAVAILABLE",
+            coverage="unknown",
+            coverage_reason="COVERAGE_UNAVAILABLE",
+            quality="invalid" if code == "SOURCE_MALFORMED" else "unknown",
+            quality_reason=code if code == "SOURCE_MALFORMED" else "QUALITY_UNAVAILABLE",
+        ),
         "coverage": {"expected": None, "reporting": None},
         "aggregate": None,
         "errors": [{"code": code, "message": message, "retryable": True}],
@@ -416,6 +477,21 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
     elif has_observations and age_seconds > spec.ttl_seconds:
         truth_state = "stale"
 
+    freshness_state = "stale" if age_seconds > spec.ttl_seconds else "current"
+    freshness_reason = "OBSERVATION_EXPIRED" if freshness_state == "stale" else None
+    if expected is None or reporting is None:
+        coverage_state, coverage_reason = "unknown", "COVERAGE_UNAVAILABLE"
+    elif reporting < expected:
+        coverage_state, coverage_reason = "partial", "COVERAGE_PARTIAL"
+    else:
+        coverage_state, coverage_reason = "complete", None
+    if errors:
+        quality_state, quality_reason = "degraded", "SOURCE_REPORTED_ERRORS"
+    elif not has_observations:
+        quality_state, quality_reason = "unknown", "OBSERVATION_UNAVAILABLE"
+    else:
+        quality_state, quality_reason = "valid", None
+
     result = {
         "adapter_id": spec.adapter_id,
         "adapter_version": ADAPTER_VERSION,
@@ -431,6 +507,20 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
         "projected_at": projected,
         "watermark": {"source": spec.adapter_id, "value": watermark},
         "truth_state": truth_state,
+        "source_status": _source_status(
+            spec,
+            availability="available",
+            availability_reason=None,
+            freshness=freshness_state,
+            freshness_reason=freshness_reason,
+            coverage=coverage_state,
+            coverage_reason=coverage_reason,
+            quality=quality_state,
+            quality_reason=quality_reason,
+            age_seconds=age_seconds,
+            expected=expected,
+            reporting=reporting,
+        ),
         "coverage": coverage,
         "aggregate": (
             {key: aggregate[key] for key in spec.fields} if truth_state != "unknown" else None
