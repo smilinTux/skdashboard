@@ -1,6 +1,7 @@
 // Shared API + UI helpers for the SKDashboard board.
 
 import "./read_only_api.js";
+export { renderSignInAction } from "./read_only_api.js";
 
 // The operator identity + capability token this page presents on every
 // privileged (write) call (Unified Consent Plane P1.3, coord card
@@ -43,7 +44,11 @@ export function esc(s) {
 
 export async function getJSON(url) {
   const r = await fetch(url, { headers: { "Accept": "application/json" } });
-  if (!r.ok) throw new Error(url + " -> " + r.status);
+  if (!r.ok) {
+    const error = new Error(url + " -> " + r.status);
+    error.status = r.status;
+    throw error;
+  }
   return r.json();
 }
 
