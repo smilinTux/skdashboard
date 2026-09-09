@@ -1,18 +1,63 @@
-"""Safe aggregate target and experiment visibility projections.
+"""Safe aggregate target and experiment visibility projections."""
 
-The projection deliberately accepts measurements, not source payloads.  This keeps
-prompt, response, Matter, Inbox and corpus data outside the dashboard boundary.
-"""
 from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
 SCHEMA = "skdashboard.visibility.v1"
 ROLES = frozenset({"operator", "viewer", "auditor"})
-_FORBIDDEN = frozenset({"secret", "prompt", "response", "matter", "inbox", "corpus", "token", "credential"})
+VIEWS = frozenset(
+    {
+        "target_inventory",
+        "trends",
+        "experiments",
+        "confidence",
+        "guardrails",
+        "bottlenecks",
+        "comparisons",
+        "regressions",
+        "cleanup",
+        "recovery",
+    }
+)
+_FORBIDDEN = frozenset(
+    {
+        "secret",
+        "prompt",
+        "response",
+        "matter",
+        "inbox",
+        "corpus",
+        "token",
+        "credential",
+    }
+)
+_ROW_FIELDS = frozenset(
+    {
+        "target_id",
+        "experiment_id",
+        "metric",
+        "value",
+        "unit",
+        "status",
+        "baseline",
+        "candidate",
+        "delta",
+        "confidence",
+        "threshold",
+        "sample_size",
+        "missingness",
+        "latency_ms",
+        "queue_depth",
+        "throughput",
+        "host",
+        "model",
+        "route",
+        "seat",
+    }
+)
 
 
 def _canonical(value: Any) -> bytes:
@@ -23,31 +68,66 @@ def _hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def _safe(value: Any, key: str = "") -> Any:
-    """Allowlist scalar aggregate values and recursively remove sensitive fields."""
-    lowered = key.lower()
-    if any(word in lowered for word in _FORBIDDEN):
-        return None
-    if isinstance(value, Mapping):
-        return {str(k): _safe(v, str(k)) for k, v in value.items() if not any(w in str(k).lower() for w in _FORBIDDEN)}
-    if isinstance(value, (list, tuple)):
-        return [_safe(v, key) for v in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return None
+def _bounded_text(value: Any, field: str) -> str:
+    text = str(value).strip()
+    if not text or len(text) > 160:
+        raise ValueError(f"{field} must be non-empty and at most 160 characters")
+    return text
 
 
-def _view(kind: str, rows: Iterable[Mapping[str, Any]], *, target_revision: str, cohort: str,
-          evaluator_version: str, freshness: str = "unknown", missingness: Mapping[str, int] | None = None) -> dict:
-    safe_rows = [_safe(dict(row)) for row in rows]
-    payload = {"kind": kind, "rows": safe_rows}
-    return {
-        "schema": SCHEMA, "kind": kind, "target_revision": target_revision,
-        "cohort": cohort, "freshness": freshness,
-        "missingness": dict(missingness or {}), "sample_size": len(safe_rows),
-        "evaluator_version": evaluator_version, "evidence_hash": _hash(payload),
+def _safe_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only typed aggregate fields, never arbitrary source payload fields."""
+
+    unknown = set(row) - _ROW_FIELDS
+    if unknown:
+        raise ValueError(f"visibility row has unknown fields: {sorted(unknown)}")
+    if any(word in str(key).lower() for key in row for word in _FORBIDDEN):
+        raise ValueError("visibility row contains a protected field")
+    result: dict[str, Any] = {}
+    for key, value in row.items():
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise ValueError(f"visibility row field {key} must be scalar")
+        if isinstance(value, str) and len(value) > 160:
+            raise ValueError(f"visibility row field {key} is too long")
+        result[str(key)] = value
+    return result
+
+
+def _view(
+    kind: str,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    target_revision: str,
+    cohort: str,
+    evaluator_version: str,
+    freshness: str = "unknown",
+    missingness: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    if kind not in VIEWS:
+        raise ValueError("unknown visibility view")
+    safe_rows = [_safe_row(dict(row)) for row in rows]
+    safe_missingness = dict(missingness or {})
+    if any(
+        not isinstance(key, str)
+        or not key
+        or len(key) > 80
+        or not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        for key, value in safe_missingness.items()
+    ):
+        raise ValueError("missingness must contain bounded non-negative integer counts")
+    metadata = {
+        "kind": kind,
+        "target_revision": _bounded_text(target_revision, "target_revision"),
+        "cohort": _bounded_text(cohort, "cohort"),
+        "freshness": _bounded_text(freshness, "freshness"),
+        "missingness": safe_missingness,
+        "sample_size": len(safe_rows),
+        "evaluator_version": _bounded_text(evaluator_version, "evaluator_version"),
         "rows": safe_rows,
     }
+    return {"schema": SCHEMA, **metadata, "evidence_hash": _hash(metadata)}
 
 
 def authorize(role: str) -> None:
@@ -55,23 +135,24 @@ def authorize(role: str) -> None:
         raise PermissionError("dashboard visibility requires an authorized read-only role")
 
 
-def project(kind: str, rows: Iterable[Mapping[str, Any]], *, role: str = "viewer",
-            target_revision: str = "unknown", cohort: str = "unknown",
-            evaluator_version: str = "unknown", freshness: str = "unknown",
-            missingness: Mapping[str, int] | None = None) -> dict:
+def project(
+    kind: str,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    role: str = "viewer",
+    target_revision: str = "unknown",
+    cohort: str = "unknown",
+    evaluator_version: str = "unknown",
+    freshness: str = "unknown",
+    missingness: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
     authorize(role)
-    return _view(kind, rows, target_revision=target_revision, cohort=cohort,
-                 evaluator_version=evaluator_version, freshness=freshness,
-                 missingness=missingness)
-
-
-def target_inventory(rows, **kwargs): return project("target_inventory", rows, **kwargs)
-def trends(rows, **kwargs): return project("trends", rows, **kwargs)
-def experiments(rows, **kwargs): return project("experiments", rows, **kwargs)
-def confidence(rows, **kwargs): return project("confidence", rows, **kwargs)
-def guardrails(rows, **kwargs): return project("guardrails", rows, **kwargs)
-def bottlenecks(rows, **kwargs): return project("bottlenecks", rows, **kwargs)
-def comparisons(rows, **kwargs): return project("comparisons", rows, **kwargs)
-def regressions(rows, **kwargs): return project("regressions", rows, **kwargs)
-def cleanup(rows, **kwargs): return project("cleanup", rows, **kwargs)
-def recovery(rows, **kwargs): return project("recovery", rows, **kwargs)
+    return _view(
+        kind,
+        rows,
+        target_revision=target_revision,
+        cohort=cohort,
+        evaluator_version=evaluator_version,
+        freshness=freshness,
+        missingness=missingness,
+    )

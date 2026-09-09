@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -475,9 +476,7 @@ def _daemon_base_url(daemon_port: int | None = None) -> str:
     try:
         port = int(configured_port)
     except ValueError:
-        logger.warning(
-            "Invalid SKCAPSTONE_DAEMON_PORT=%r; falling back to 7777", configured_port
-        )
+        logger.warning("Invalid SKCAPSTONE_DAEMON_PORT=%r; falling back to 7777", configured_port)
         port = 7777
     return f"http://127.0.0.1:{port}"
 
@@ -778,6 +777,8 @@ def create_app(
     control_plane_governance_provider=None,
     control_plane_economy_provider=None,
     control_plane_report_provider=None,
+    visibility_provider=None,
+    visibility_authorizer=None,
 ):
     """Build the Starlette ASGI app for the dashboard.
 
@@ -820,24 +821,34 @@ def create_app(
         from . import visibility
 
         kind = request.path_params["kind"]
-        allowed = {"target_inventory", "trends", "experiments", "confidence", "guardrails",
-                   "bottlenecks", "comparisons", "regressions", "cleanup", "recovery"}
-        if kind not in allowed:
-            return _json({"error": "unknown_visibility_view"})
-        query = request.query_params
+        if kind not in visibility.VIEWS:
+            return JSONResponse({"error": "unknown_visibility_view"}, status_code=404)
+        if set(request.query_params) - {"role"}:
+            return JSONResponse({"error": "invalid_visibility_scope"}, status_code=400)
+        role = request.query_params.get("role", "viewer")
         try:
-            missingness = json.loads(query.get("missingness", "{}"))
-            if not isinstance(missingness, dict):
-                missingness = {}
+            visibility.authorize(role)
+            if visibility_authorizer is not None and not visibility_authorizer(request, role):
+                raise PermissionError("visibility authorization denied")
+            supplied = visibility_provider(kind) if visibility_provider is not None else {}
+            if not isinstance(supplied, Mapping):
+                raise ValueError("visibility provider returned a malformed projection")
+            return _json(
+                visibility.project(
+                    kind,
+                    supplied.get("rows", ()),
+                    role=role,
+                    target_revision=supplied.get("target_revision", "unknown"),
+                    cohort=supplied.get("cohort", "unknown"),
+                    evaluator_version=supplied.get("evaluator_version", "unknown"),
+                    freshness=supplied.get("freshness", "unknown"),
+                    missingness=supplied.get("missingness"),
+                )
+            )
+        except PermissionError:
+            return JSONResponse({"error": "visibility_forbidden"}, status_code=403)
         except (TypeError, ValueError):
-            missingness = {}
-        return _json(visibility.project(
-            kind, [], role=query.get("role", "viewer"),
-            target_revision=query.get("target_revision", "unknown"),
-            cohort=query.get("cohort", "unknown"),
-            evaluator_version=query.get("evaluator_version", "unknown"),
-            freshness=query.get("freshness", "unknown"), missingness=missingness,
-        ))
+            return JSONResponse({"error": "invalid_visibility_projection"}, status_code=422)
 
     static_dir = Path(__file__).parent / "static"
     if (
@@ -852,17 +863,11 @@ def create_app(
         from .dashboard_architecture import ArchitectureProjectionProvider
 
         control_plane_architecture_provider = ArchitectureProjectionProvider()
-    if (
-        control_plane_economy_provider is None
-        and control_plane_decision_authorizer is not None
-    ):
+    if control_plane_economy_provider is None and control_plane_decision_authorizer is not None:
         from .dashboard_economy_provider import EconomyProjectionProvider
 
         control_plane_economy_provider = EconomyProjectionProvider()
-    if (
-        control_plane_governance_provider is None
-        and control_plane_decision_authorizer is not None
-    ):
+    if control_plane_governance_provider is None and control_plane_decision_authorizer is not None:
         from .dashboard_governance import GovernanceProjectionProvider
 
         control_plane_governance_provider = GovernanceProjectionProvider()
@@ -879,7 +884,9 @@ def create_app(
 
     def _redirect(location):
         async def handler(_request):
-            return RedirectResponse(location, status_code=307, headers={"Cache-Control": "no-store"})
+            return RedirectResponse(
+                location, status_code=307, headers={"Cache-Control": "no-store"}
+            )
 
         return handler
 
@@ -1161,7 +1168,9 @@ def create_app(
         result["capability"] = decision["reason"]
         result["authz_via"] = decision["via"]
         if result.get("ok"):
-            dk.BUS.publish({"type": "card_changed", "id": card_id, "actor": requester}, public=True)
+            dk.BUS.publish(
+                {"type": "card_changed", "id": card_id, "actor": requester}, public=True
+            )
         return _json(result)
 
     async def api_queue_ai(request):
@@ -1182,9 +1191,7 @@ def create_app(
         section 7. A named alias for :func:`_capability_gate` (same body, same
         return shape) kept so the change routes read as change.* PEPs.
         """
-        return _capability_gate(
-            request, resource=resource, capability=capability, actor=actor
-        )
+        return _capability_gate(request, resource=resource, capability=capability, actor=actor)
 
     def _change_actor(request) -> str:
         """Resolve the authenticated actor for a change.* PEP.
@@ -1324,9 +1331,7 @@ def create_app(
             if supplied_conditions
             else audit_prefix
         )
-        _persist_change_consent(
-            request, mgr, rid=rid, capability="change.cab_vote", decision=gate
-        )
+        _persist_change_consent(request, mgr, rid=rid, capability="change.cab_vote", decision=gate)
         vote = mgr.submit_cab_vote(
             rid,
             agent=actor_id,
