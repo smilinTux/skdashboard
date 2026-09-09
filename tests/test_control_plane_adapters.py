@@ -63,8 +63,8 @@ def test_every_estate_population_has_bounded_typed_metadata() -> None:
     for item in items:
         assert item["schema_version"] == SCHEMA_VERSION
         assert item["owner"]
-        assert item["query_budget"] == {"max_items": 1, "timeout_ms": 1_000}
         spec = next(value for value in SPECS if value.adapter_id == item["adapter_id"])
+        assert item["query_budget"] == {"max_items": 1, "timeout_ms": spec.timeout_ms}
         assert item["ttl_seconds"] == spec.ttl_seconds
         assert item["classification"] in {"internal", "confidential"}
         assert item["truth_state"] == "unavailable"
