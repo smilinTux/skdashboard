@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -90,3 +92,31 @@ def test_now_metric_context_sources_match_the_registry() -> None:
 
     economy = next(line for line in configs if 'id: "economy"' in line)
     assert 'metricSource: "skcounter.harness"' in economy
+
+
+def test_now_live_connection_states_in_real_chrome() -> None:
+    if not shutil.which("node") or not shutil.which("google-chrome"):
+        return
+    result = subprocess.run(
+        ["node", "scripts/qualify_now_live_connection_cdp.mjs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    evidence = json.loads(result.stdout)
+    assert evidence == {
+        "result": "PASS",
+        "states": [
+            "retrying",
+            "polling fallback",
+            "connected",
+            "polling fallback",
+            "retrying",
+            "offline",
+            "sign in required",
+        ],
+        "endpoint": "/api/v1/events",
+        "boundedRetry": True,
+    }

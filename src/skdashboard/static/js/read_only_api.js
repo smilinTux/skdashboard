@@ -31,7 +31,11 @@ export async function getJSON(url, { timeoutMs = 0 } = {}) {
   } else if (response.status === 503) {
     void renderSignInAction(true);
   }
-  if (!response.ok) throw new Error(`${url} -> ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`${url} -> ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 

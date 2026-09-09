@@ -1,7 +1,8 @@
 // Overview home: operational summary tiles + active work + recent activity +
 // agent health, from one /api/overview call. Live-refreshes over SSE.
-import { esc, getJSON, timeShort, avatarColor } from "./api.js";
+import { esc, getJSON, timeShort, avatarColor, renderSignInAction } from "./api.js";
 import { openCard, initPanel } from "./editor.js";
+import { createLiveConnection } from "./live_connection.js";
 import {
   DEFAULT_CONTEXT, REGISTRY_HASH, REGISTRY_VERSION, SILOS, TRUTH_STATES,
   apiUrl, listViews, normalizedContext, parseUrl, removeView, responseMatches,
@@ -17,6 +18,7 @@ let loadEpoch = 0;
 let currentContext = normalizedContext(DEFAULT_CONTEXT);
 let contextBlocked = false;
 let currentQuality = null;
+let liveConnection;
 
 async function load() {
   if (contextBlocked) return;
@@ -24,6 +26,7 @@ async function load() {
   clearScopedForTransition();
   const protectedReady = await loadQuality(epoch, currentContext);
   if (protectedReady !== true) return;
+  liveConnection.pollSucceeded();
   if (hasFilters()) {
     setLegacyVisible(false);
     return;
@@ -397,6 +400,7 @@ async function loadQuality(epoch, context) {
     return true;
   } catch (error) {
     if (epoch !== loadEpoch) return null;
+    liveConnection.pollFailed(error);
     clearProtectedEstate(`Protected estate evidence is unavailable: ${error.message}.`);
     if (currentContext.saved_view) document.getElementById("saved-view-status").textContent = "Unauthorized or revoked. The saved view retained no protected evidence.";
     return false;
@@ -692,18 +696,15 @@ function renderHealth(agent) {
   el.innerHTML = pillarHtml + stats;
 }
 
-function connectSSE() {
+function prepareLiveConnection() {
   const dot = document.getElementById("live-dot"), text = document.getElementById("live-text");
   let deb = null;
-  const es = new EventSource("/api/events");
   const refresh = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
-  es.addEventListener("open", () => { dot.classList.add("on"); text.textContent = "live"; });
-  es.addEventListener("board_changed", refresh);
-  es.addEventListener("card_changed", refresh);
-  es.addEventListener("error", () => { dot.classList.remove("on"); text.textContent = "reconnecting"; });
+  liveConnection = createLiveConnection({ dot, text, refresh, signIn: renderSignInAction });
 }
 
 const initialContextReady = initializeContext();
+prepareLiveConnection();
 document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
   const dialog = document.getElementById("ai-boundary");
   dialog._trigger = event.currentTarget;
@@ -716,6 +717,6 @@ for (const dialog of document.querySelectorAll("dialog")) {
   });
 }
 initPanel(() => load());   // card detail panel (edit/notes/AI); reload on change
-if (initialContextReady) load();
-connectSSE();
+if (initialContextReady) void load().finally(() => liveConnection.start());
+else liveConnection.start();
 setInterval(load, 30000);
