@@ -25,6 +25,7 @@ Invariants proved:
 
 from __future__ import annotations
 
+import ast
 import json
 import tempfile
 from pathlib import Path
@@ -302,29 +303,33 @@ def test_assistant_has_no_action_parser_or_dispatcher(spy_request_run):
 # Invariant 4: no OTHER unguarded caller of agent_run.request_run
 # --------------------------------------------------------------------------- #
 def test_no_unguarded_request_run_callers_in_skdashboard():
-    """Grep every skdashboard source file for ``request_run(`` call sites and
-    assert there are exactly the two known, gated callers:
-
-      - skdashboard/dashboard.py: ``_queue_run`` (called only after
-        ``_queue_gate`` returns ok - proved by invariants 1/2 above).
-      - skdashboard/dashboard_assistant.py: ``_run_action`` (called only after
-        ``capability_ok`` is True and the mode is not "execute" - proved by
-        invariant 3 above).
-
-    If a future change adds a third call site, this test fails loudly instead
-    of silently letting an unguarded auto-queue path in.
-    """
+    """Assert the sole ``request_run`` call remains inside gated ``_queue_run``."""
     import skdashboard
 
     src_dir = Path(skdashboard.__file__).parent
     hits = []
     for path in sorted(src_dir.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            if "request_run(" in line and "def request_run(" not in line:
-                hits.append(f"{path.relative_to(src_dir)}:{lineno}")
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
-    assert hits == ["dashboard.py:1129"], (
+        class RequestRunVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.functions = []
+
+            def visit_FunctionDef(self, node):
+                self.functions.append(node.name)
+                self.generic_visit(node)
+                self.functions.pop()
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node):
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "request_run":
+                    hits.append((str(path.relative_to(src_dir)), tuple(self.functions)))
+                self.generic_visit(node)
+
+        RequestRunVisitor().visit(tree)
+
+    assert hits == [("dashboard.py", ("create_app", "_queue_run"))], (
         "unexpected set of agent_run.request_run call sites in skdashboard: "
         f"{hits!r}; the assistant must never be a caller"
     )
