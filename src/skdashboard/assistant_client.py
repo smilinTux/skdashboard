@@ -25,6 +25,83 @@ MAX_CONTENT_CHARS = 32_000
 MAX_REQUEST_BYTES = 128_000
 MAX_STREAM_CHUNKS = 4096
 
+# The NOW contract is deliberately a small, typed boundary.  It is separate
+# from lifecycle/card state: source usability and citations are evidence.
+_USABLE_SOURCE_STATES = frozenset({"current", "partial"})
+_UNUSABLE_SOURCE_STATES = frozenset({"missing", "stale", "unavailable", "policy_filtered"})
+_READ_ONLY_PREFIXES = ("get ", "read ", "inspect ", "list ", "review ", "check ", "compare ")
+_FORBIDDEN_ACTION_WORDS = ("run ", "execute", "delete", "update", "write", "restart", "deploy", "send ", "queue ")
+
+
+class NowSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_id: str = Field(min_length=1, max_length=256)
+    state: Literal["current", "partial", "missing", "stale", "unavailable", "policy_filtered"]
+    authorized: bool
+    detail: str = Field(default="", max_length=4000)
+
+
+class NowStatement(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    text: str = Field(min_length=1, max_length=2000)
+    source_ids: list[str] = Field(min_length=1, max_length=32)
+    uncertainty: str = Field(min_length=1, max_length=1000)
+
+
+class NowNextStep(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    rank: int = Field(ge=1, le=20)
+    text: str = Field(min_length=1, max_length=1000)
+    source_ids: list[str] = Field(min_length=1, max_length=32)
+    read_only: Literal[True] = True
+
+
+class NowProposal(BaseModel):
+    """Typed model output for bounded, evidence-cited operator analysis."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    status: Literal["proposal", "abstain"]
+    conditions: list[NowStatement] = Field(default_factory=list, max_length=32)
+    risks: list[NowStatement] = Field(default_factory=list, max_length=32)
+    anomalies: list[NowStatement] = Field(default_factory=list, max_length=32)
+    next_steps: list[NowNextStep] = Field(default_factory=list, max_length=20)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+def validate_now_response(payload: object, sources: list[NowSource]) -> dict:
+    """Validate a bounded NOW proposal, rejecting unsupported model claims."""
+    if not isinstance(payload, dict):
+        raise ResponseValidationError("Malformed NOW response", "malformed_response")
+    authorized = {s.source_id for s in sources if s.authorized and s.state in _USABLE_SOURCE_STATES}
+    all_ids = {s.source_id for s in sources}
+    try:
+        status = payload.get("status")
+        if status not in {"proposal", "abstain"}:
+            raise ValueError("invalid status")
+        if status == "abstain":
+            if authorized:
+                raise ValueError("cannot abstain when usable evidence exists")
+            return {"status": "abstain", "reason": str(payload.get("reason", "no usable evidence"))}
+        if not authorized:
+            raise ValueError("proposal requires usable authorized evidence")
+        statements = [NowStatement(**x) for x in payload.get("statements", [])]
+        steps = [NowNextStep(**x) for x in payload.get("next_steps", [])]
+        if not statements:
+            raise ValueError("proposal requires statements")
+        for statement in statements:
+            if not set(statement.source_ids) <= authorized:
+                raise ValueError("unauthorized or unusable citation")
+        for step in steps:
+            if not set(step.source_ids) <= authorized or not step.read_only:
+                raise ValueError("invalid next step citation")
+            if any(word in step.text.lower() for word in _FORBIDDEN_ACTION_WORDS):
+                raise ValueError("next steps must be read-only")
+        return {"status": "proposal", "statements": [x.model_dump() for x in statements],
+                "next_steps": [x.model_dump() for x in sorted(steps, key=lambda x: x.rank)],
+                "uncertainties": [{"source_id": s.source_id, "state": s.state}
+                                  for s in sources if s.state in _UNUSABLE_SOURCE_STATES or not s.authorized]}
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ResponseValidationError("Malformed NOW response", "malformed_response") from exc
+
 
 class AssistantRequestContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
