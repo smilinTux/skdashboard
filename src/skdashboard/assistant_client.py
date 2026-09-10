@@ -72,7 +72,6 @@ def validate_now_response(payload: object, sources: list[NowSource]) -> dict:
     if not isinstance(payload, dict):
         raise ResponseValidationError("Malformed NOW response", "malformed_response")
     authorized = {s.source_id for s in sources if s.authorized and s.state in _USABLE_SOURCE_STATES}
-    all_ids = {s.source_id for s in sources}
     try:
         status = payload.get("status")
         if status not in {"proposal", "abstain"}:
