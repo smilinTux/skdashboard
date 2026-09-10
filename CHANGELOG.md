@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Card `d9a1000e`: bound partial-evidence NOW analysis. Added a typed,
+  fail-closed NOW response validator to the assistant client that only accepts
+  proposals citing authorized, usable (`current`/`partial`) sources, requires
+  read-only next steps, and forces abstention when no usable evidence exists.
+
 - Card `2d2a6d4d`: link the canonical SKRSI project and define SELF as
   Systematic Evaluation, Learning, and Feedback in visibility documentation.
 
