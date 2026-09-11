@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
 from unittest.mock import Mock
 
 import pytest
@@ -285,6 +285,70 @@ def test_overview_passes_exact_context_and_verifier_to_project_provider(
     )
     assert project["scope"]["role"] == "operator"
     assert project["owner_policy_scope"]["role"] == "project-manager"
+
+
+def test_concurrent_overviews_share_one_estate_projection(tmp_path, monkeypatch) -> None:
+    from skdashboard import control_plane_adapters, control_plane_quality
+
+    instant = datetime.now(UTC)
+    rig = Rig(clock=lambda: instant)
+    started = Event()
+    second_entered = Event()
+    release = Event()
+    calls = 0
+    calls_lock = Lock()
+
+    monkeypatch.setattr(control_plane_adapters, "default_readers", lambda _home: {})
+
+    def project_estate(_readers):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        started.set()
+        assert release.wait(timeout=5)
+        return []
+
+    monkeypatch.setattr(control_plane_adapters, "project_estate", project_estate)
+    monkeypatch.setattr(
+        control_plane_quality,
+        "project_data_quality",
+        lambda _items: {"projection_type": "data_quality", "truth_state": "unknown"},
+    )
+
+    def factory(request, capability, target):
+        if request.headers.get("x-request-id") == "concurrent-2":
+            second_entered.set()
+        return rig.factory(request, capability, target)
+
+    app = create_app(
+        tmp_path,
+        control_plane_decision_authorizer=rig.authorizer,
+        control_plane_invocation_factory=factory,
+    )
+
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+
+        def read(index):
+            return client.get(
+                "/api/v1/overview?role=operator&scope=estate&window=latest&baseline=none&service=all",
+                headers={
+                    "Authorization": f"Bearer {rig.fresh_bearer()}",
+                    "Origin": ORIGIN,
+                    "X-Request-ID": f"concurrent-{index}",
+                },
+            )
+
+        first = pool.submit(read, 1)
+        assert started.wait(timeout=5)
+        health = client.get("/api/v1/health")
+        second = pool.submit(read, 2)
+        assert second_entered.wait(timeout=5)
+        release.set()
+        responses = [first.result(timeout=5), second.result(timeout=5)]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert health.status_code == 200
+    assert calls == 1
 
 
 def test_overview_integrates_released_skcoord_provider(tmp_path, monkeypatch) -> None:

@@ -651,6 +651,7 @@ def routes(
         raise ValueError("owner projection requires typed control-plane authorization")
     hits: dict[str, deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
+    estate_projection_task: asyncio.Task[list[dict]] | None = None
     authorize = authorizer or (
         lambda bearer, capability, target: _capauth_authorize(home, bearer, capability, target)
     )
@@ -852,7 +853,21 @@ def routes(
             unavailable_authorized_card_snapshot,
         )
 
-        adapter_items = project_estate(default_readers(home))
+        nonlocal estate_projection_task
+
+        async def read_estate_projection() -> list[dict]:
+            return await asyncio.to_thread(project_estate, default_readers(home))
+
+        def clear_estate_projection(completed: asyncio.Task[list[dict]]) -> None:
+            nonlocal estate_projection_task
+            if estate_projection_task is completed:
+                estate_projection_task = None
+
+        if estate_projection_task is None:
+            estate_projection_task = asyncio.create_task(read_estate_projection())
+            estate_projection_task.add_done_callback(clear_estate_projection)
+        projection_task = estate_projection_task
+        adapter_items = await asyncio.shield(projection_task)
         presentation_scope = AuthorizedCardScopeV1(
             role=scope.role,
             scope=scope.scope,

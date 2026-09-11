@@ -107,5 +107,9 @@ try {
 } finally {
   server.kill("SIGTERM"); chrome.kill("SIGTERM");
   await sleep(100);
-  fs.rmSync(profile, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true });
+  const cleanup = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
+  for (const directory of [profile, home]) {
+    try { fs.rmSync(directory, cleanup); }
+    catch (error) { if (error.code !== "ENOTEMPTY") throw error; }
+  }
 }
