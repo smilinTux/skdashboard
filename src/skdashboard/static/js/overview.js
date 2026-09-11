@@ -291,7 +291,7 @@ async function analyzeNow() {
   try {
     const brief = await getJSON(
       `/api/v1/now/ai-brief?${safeSearch(currentContext)}`,
-      { timeoutMs: 50000 },
+      { timeoutMs: 70000 },
     );
     status.textContent = brief.status === "abstained"
       ? `AI abstained: ${brief.abstention || "insufficient evidence"}`

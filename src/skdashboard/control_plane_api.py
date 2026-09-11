@@ -925,7 +925,7 @@ def routes(
             aggregate = json.loads(overview_response.body)
             brief = await asyncio.wait_for(
                 asyncio.to_thread(now_operator_brief, aggregate, actor="now-operator"),
-                timeout=45,
+                timeout=65,
             )
             return JSONResponse(brief)
         except Exception as exc:
