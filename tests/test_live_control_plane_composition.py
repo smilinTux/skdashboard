@@ -616,7 +616,7 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     assert schedule_projection["items"][0]["source_watermarks"] == direct_watermarks
     assert schedule_projection["dependencies"] == []
     assert "protected description" not in schedule.text
-    assert store_reads == [source.id] * 4
+    assert store_reads == [source.id] * 5
     assert schedule_projection["items"][0]["dates"]["planned_target"] == {
         "state": "unknown",
         "instant": None,
