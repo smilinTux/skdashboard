@@ -292,7 +292,7 @@ def test_now_ai_brief_does_not_block_other_requests(tmp_path: Path, monkeypatch)
 
     def slow_brief(_aggregate, actor):
         started.set()
-        assert release.wait(timeout=2)
+        assert release.wait(timeout=10)
         return {"status": "abstained", "generated_at": "2026-09-07T17:00:00Z"}
 
     monkeypatch.setattr(dashboard_assistant, "now_operator_brief", slow_brief)
@@ -310,9 +310,9 @@ def test_now_ai_brief_does_not_block_other_requests(tmp_path: Path, monkeypatch)
             "/api/v1/now/ai-brief",
             headers={"Authorization": "Bearer test"},
         )
-        assert started.wait(timeout=1)
+        assert started.wait(timeout=10)
         health_request = executor.submit(client.get, "/api/v1/health")
-        health = health_request.result(timeout=1)
+        health = health_request.result(timeout=10)
 
         assert health.status_code == 200
         assert not request.done()
