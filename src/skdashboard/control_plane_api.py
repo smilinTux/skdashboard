@@ -854,7 +854,9 @@ def routes(
 
         adapter_items = project_estate(default_readers(home))
         project_scope = AuthorizedCardScopeV1(
-            role=scope.role,
+            # Project records are always selected through the bounded owner
+            # policy role. The outer envelope retains the requested NOW role.
+            role="project-manager",
             scope=scope.scope,
             service=scope.service,
             window=scope.window,

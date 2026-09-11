@@ -276,6 +276,8 @@ def test_overview_passes_exact_context_and_verifier_to_project_provider(
 
     assert response.status_code == 200
     assert len(calls) == 1
+    assert calls[0].role == "project-manager"
+    assert response.json()["scope"]["role"] == "operator"
     assert any(
         item.get("projection_type") == "project_records" for item in response.json()["items"]
     )
