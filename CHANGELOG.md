@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Card `ab686b00`: keep NOW analysis active through the existing SKGateway
+  assistant deadline while preserving the `sk-m-public` route.
+
 - Card `d9a1100f`: share one in-flight estate projection across concurrent NOW
   reads so expensive adapters do not overlap or block health responses.
 
