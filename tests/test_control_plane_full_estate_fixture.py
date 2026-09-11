@@ -374,7 +374,7 @@ def test_one_pack_drives_api_report_forecast_failure_agent_and_mcp_qualification
     }
     assert set(profiles) == set(fixture["qualification_targets"])
     assert report["report_hash"] == fixture["report_profile"]["expected_report_hash"]
-    assert len(report["source_watermarks"]) == 12
+    assert len(report["source_watermarks"]) == 13
     assert all(item["value"].startswith("sha256:") for item in report["source_watermarks"])
     assert len(report["sections"]) == profiles["report"]["expected_sections"]
     _validate_report(report)
