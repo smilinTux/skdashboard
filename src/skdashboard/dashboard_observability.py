@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 _METRIC = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)$")
@@ -74,7 +75,52 @@ def collect_gateway() -> dict:
         }
 
 
-def collect() -> dict:
+def _fleet(home: Path) -> dict:
+    """Return a bounded worker projection with no free-form agent content."""
+    from .dashboard_fleet import collect_workers
+
+    raw = collect_workers(home)
+    workers = []
+    for item in raw.get("workers", [])[:256]:
+        if not isinstance(item, dict):
+            continue
+        truth = item.get("truth_state")
+        if truth not in {"current", "stale", "unavailable"}:
+            truth = "unavailable"
+        workers.append(
+            {
+                "name": str(item.get("name") or "unknown")[:128],
+                "host": str(item.get("host") or "unknown")[:128],
+                "state": str(item.get("state") or "unknown")[:32],
+                "has_current_task": bool(item.get("task_id")),
+                "last_seen": item.get("observed_at")
+                if isinstance(item.get("observed_at"), str)
+                else None,
+                "age_seconds": item.get("age_seconds")
+                if isinstance(item.get("age_seconds"), int)
+                else None,
+                "truth_state": truth,
+            }
+        )
+    running = sum(item["truth_state"] == "current" for item in workers)
+    stale = sum(item["truth_state"] == "stale" for item in workers)
+    unavailable = len(workers) - running - stale
+    return {
+        "source": "skcapstone_fleet",
+        "truth_state": "partial" if raw.get("errors") or unavailable else "current",
+        "workers": workers,
+        "summary": {
+            "running": running,
+            "stale": stale,
+            "unavailable": unavailable,
+            "total": len(workers),
+            "truncated": len(raw.get("workers", [])) > len(workers),
+        },
+        "errors": ["worker projection unavailable"] if raw.get("errors") else [],
+    }
+
+
+def collect(home: Path | None = None) -> dict:
     errors: list[str] = []
     sources: list[dict] = []
     vllm_text, error = _fetch(os.environ.get("SKDASHBOARD_VLLM_METRICS", "http://127.0.0.1:11439/metrics"))
@@ -86,4 +132,8 @@ def collect() -> dict:
     if gateway["source"]:
         sources.append(gateway["source"])
     errors.extend(gateway["errors"])
+    if home is not None and not os.environ.get("SKDASHBOARD_FLEET_METRICS_ENDPOINT"):
+        fleet = _fleet(Path(home))
+        sources.append(fleet)
+        errors.extend(f"fleet: {error}" for error in fleet["errors"])
     return {"schema_version": "1.0.0", "observed_at": _now(), "projected_at": _now(), "freshness": {"truth_state": "current" if sources and not errors else ("partial" if sources else "unavailable"), "age_seconds": 0, "ttl_seconds": 15}, "sources": sources, "errors": errors[:16]}

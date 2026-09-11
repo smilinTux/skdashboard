@@ -1,4 +1,10 @@
-from skdashboard.dashboard_observability import _gateway, _vllm, collect_gateway
+from skdashboard.dashboard_observability import (
+    _fleet,
+    _gateway,
+    _vllm,
+    collect,
+    collect_gateway,
+)
 
 
 def test_vllm_projection_preserves_operational_and_cache_metrics():
@@ -55,3 +61,112 @@ def test_gateway_collection_preserves_unavailable_state(monkeypatch):
 
     assert result["source"] is None
     assert result["errors"] == ["skgateway: timed out after 0.75"]
+
+
+def test_local_fleet_projection_is_bounded_redacted_and_freshness_driven(
+    tmp_path, monkeypatch
+):
+    workers = [
+        {
+            "name": "pi-glm-chiap08-card",
+            "host": "chiap08",
+            "state": "working",
+            "task_id": "d9a10009",
+            "task_title": "must not leave the server",
+            "observed_at": "2026-09-10T20:00:00Z",
+            "age_seconds": 4,
+            "truth_state": "current",
+            "notes": "secret",
+            "prompt": "secret",
+        },
+        {
+            "name": "pi-glm-chiap02-old",
+            "host": "chiap02",
+            "state": "working",
+            "task_id": "25ab78c6",
+            "observed_at": "2026-09-10T19:00:00Z",
+            "age_seconds": 3604,
+            "truth_state": "stale",
+        },
+    ]
+    monkeypatch.setattr(
+        "skdashboard.dashboard_fleet.collect_workers",
+        lambda _home: {"workers": workers, "errors": []},
+    )
+
+    result = _fleet(tmp_path)
+
+    assert result["summary"] == {
+        "running": 1,
+        "stale": 1,
+        "unavailable": 0,
+        "total": 2,
+        "truncated": False,
+    }
+    assert result["workers"][1]["state"] == "working"
+    assert result["workers"][1]["truth_state"] == "stale"
+    assert "task_title" not in result["workers"][0]
+    assert "notes" not in result["workers"][0]
+    assert "prompt" not in result["workers"][0]
+
+
+def test_local_fleet_projection_caps_worker_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "skdashboard.dashboard_fleet.collect_workers",
+        lambda _home: {
+            "workers": [
+                {"name": f"worker-{number}", "truth_state": "stale"}
+                for number in range(300)
+            ],
+            "errors": [],
+        },
+    )
+
+    result = _fleet(tmp_path)
+
+    assert len(result["workers"]) == 256
+    assert result["summary"]["running"] == 0
+    assert result["summary"]["stale"] == 256
+    assert result["summary"]["truncated"] is True
+
+
+def test_local_fleet_projection_does_not_expose_source_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "skdashboard.dashboard_fleet.collect_workers",
+        lambda _home: {"workers": [], "errors": ["secret=/private/token"]},
+    )
+
+    result = _fleet(tmp_path)
+
+    assert result["errors"] == ["worker projection unavailable"]
+    assert "private" not in str(result)
+
+
+def test_collect_uses_local_fleet_when_endpoint_is_absent(tmp_path, monkeypatch):
+    monkeypatch.delenv("SKDASHBOARD_FLEET_METRICS_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "skdashboard.dashboard_observability._fetch",
+        lambda _url, *, timeout=2.5: (None, "unavailable"),
+    )
+    monkeypatch.setattr(
+        "skdashboard.dashboard_observability._fleet",
+        lambda home: {
+            "source": "skcapstone_fleet",
+            "truth_state": "current",
+            "workers": [],
+            "summary": {"running": 0, "stale": 0, "total": 0},
+            "errors": [],
+        },
+    )
+
+    result = collect(tmp_path)
+
+    assert result["sources"] == [
+        {
+            "source": "skcapstone_fleet",
+            "truth_state": "current",
+            "workers": [],
+            "summary": {"running": 0, "stale": 0, "total": 0},
+            "errors": [],
+        }
+    ]

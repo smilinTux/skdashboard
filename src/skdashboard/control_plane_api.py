@@ -1558,7 +1558,7 @@ def routes(
     async def observability(_request):
         from .dashboard_observability import collect
 
-        return JSONResponse(collect(), headers={"Cache-Control": "no-store"})
+        return JSONResponse(collect(home), headers={"Cache-Control": "no-store"})
 
     async def legacy_overview(_request):
         from .dashboard_overview import get_overview_home
