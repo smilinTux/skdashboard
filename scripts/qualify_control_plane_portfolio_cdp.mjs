@@ -87,7 +87,7 @@ uvicorn.run(app, host="127.0.0.1", port=${port}, log_level="error")
       await send("Input.dispatchKeyEvent", { type: "keyUp", key: value, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
     };
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: `Bearer ${fs.readFileSync(bearerFile, "utf8")}`, Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: `Bearer ${fs.readFileSync(bearerFile, "utf8")}`, Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/portfolio?role=operator&scope=estate&window=latest&baseline=none&service=all` });
     await waitFor(async () => evaluate("document.querySelectorAll('[data-workspace-silo]').length === 10 && document.querySelector('[data-workspace-silo]').href.includes('role=operator')").catch(() => false), "Portfolio presentation links did not initialize");
     const presentation = JSON.parse(await evaluate(`JSON.stringify({options:[...document.getElementById("project-silo").options].map((option)=>option.value),links:[...document.querySelectorAll("[data-workspace-silo]")].map((link)=>({silo:link.dataset.workspaceSilo,href:link.href}))})`));

@@ -163,12 +163,12 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
       rows: document.querySelectorAll('#estate-rows tr[data-silo]').length,
       sources: [...document.querySelectorAll('#estate-rows tr[data-silo]')].reduce((total, row) => total + Number(row.dataset.sourceCount), 0),
       evidenceButtons: document.querySelectorAll('.estate-evidence-button').length,
-      metricVersions: [...document.querySelectorAll('#estate-rows td:nth-child(4)')].every((node) => node.textContent.includes('@1.0.0') && node.textContent.includes('scope estate') && node.textContent.includes('window latest')),
-      baselineUnknown: [...document.querySelectorAll('#estate-rows td:nth-child(5)')].every((node) => node.textContent.includes('Unknown') && node.textContent.includes('No comparable baseline')),
+      metricVersions: [...document.querySelectorAll('#estate-rows td:nth-child(6)')].every((node) => node.textContent.includes('@1.0.0') && node.textContent.includes('scope estate') && node.textContent.includes('window latest')),
+      baselineUnknown: [...document.querySelectorAll('#estate-rows td:nth-child(7)')].every((node) => node.textContent.includes('Unknown') && node.textContent.includes('No comparable baseline')),
       ai: document.querySelector('.ai-abstention').textContent,
       legal: document.querySelector('[data-silo=legal]').textContent,
-      flowMetric: document.querySelector('[data-silo=flow] td:nth-child(4)').textContent,
-      economyMetric: document.querySelector('[data-silo=economy] td:nth-child(4)').textContent,
+      flowMetric: document.querySelector('[data-silo=flow] td:nth-child(6)').textContent,
+      economyMetric: document.querySelector('[data-silo=economy] td:nth-child(6)').textContent,
       count: document.getElementById('estate-count').textContent,
     }))())`));
     assert.equal(desktop.url, "/control-plane/now?role=architect&scope=estate&window=latest&baseline=none&service=all");
@@ -231,7 +231,7 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     assert.ok(accessible.some((node) => node.role === "heading" && node.name === "Estate pulse"));
     assert.ok(accessible.some((node) => node.role === "button" && node.name === "Evidence for Portfolio and projects"));
 
-    await evaluate("document.querySelector('.estate-evidence-button').focus()");
+    await evaluate("document.querySelector('[data-silo=portfolio] .estate-evidence-button').focus()");
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r", unmodifiedText: "\r", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     assert.equal(await evaluate("document.getElementById('estate-evidence').open"), true);

@@ -853,18 +853,17 @@ def routes(
         )
 
         adapter_items = project_estate(default_readers(home))
-        project_scope = AuthorizedCardScopeV1(
-            # Project records are always selected through the bounded owner
-            # policy role. The outer envelope retains the requested NOW role.
-            role="project-manager",
+        presentation_scope = AuthorizedCardScopeV1(
+            role=scope.role,
             scope=scope.scope,
             service=scope.service,
             window=scope.window,
             baseline=scope.baseline,
         )
+        project_scope = presentation_scope.model_copy(update={"role": "project-manager"})
         context = getattr(request.state, "control_plane_decision", None)
         verifier = getattr(request.state, "control_plane_currentness_verifier", None)
-        project = unavailable_authorized_card_snapshot(project_scope)
+        project = unavailable_authorized_card_snapshot(presentation_scope)
         if project_provider is not None and context is not None and verifier is not None:
             project = project_provider.read(
                 context,
@@ -872,6 +871,11 @@ def routes(
                 home,
                 currentness_verifier=verifier,
             )
+            project = dict(project)
+            project["owner_policy_scope"] = project.get(
+                "scope", project_scope.model_dump(mode="json")
+            )
+            project["scope"] = presentation_scope.model_dump(mode="json")
         errors = [
             f"{item.get('adapter_id', item.get('projection_type', 'source'))}: {error['code']}"
             for item in [*adapter_items, project]

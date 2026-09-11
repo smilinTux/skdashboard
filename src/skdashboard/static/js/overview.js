@@ -235,7 +235,7 @@ function renderEstate(items) {
       <td><strong>Unknown</strong><small>No comparable baseline is projected</small></td>
       <td><button class="quality-preview-button estate-evidence-button" type="button" data-silo="${esc(silo.id)}" aria-label="Evidence for ${esc(silo.label)}">Evidence</button></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="7" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
   const sourceCount = [...estateEvidence.values()].reduce((total, value) => total + value.sources.length, 0);
   document.getElementById("estate-count").textContent = `${visible.length} silos | ${sourceCount} sources`;
   rows.querySelectorAll(".estate-evidence-button").forEach((button) => button.addEventListener("click", () => openEstateEvidence(button.dataset.silo, button)));
@@ -359,7 +359,7 @@ function clearProtectedEstate(message) {
   document.getElementById("estate-evidence-body").replaceChildren();
   document.getElementById("quality-preview-body").replaceChildren();
   document.getElementById("command-results").replaceChildren();
-  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="6" class="quality-empty">${esc(message)} No silo is assumed healthy.</td></tr>`;
+  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="8" class="quality-empty">${esc(message)} No silo is assumed healthy.</td></tr>`;
   document.getElementById("estate-count").textContent = "Unavailable";
   document.getElementById("quality-summary").innerHTML = `<span class="truth-badge unavailable"><b aria-hidden="true">!</b> Unavailable</span><span>${esc(message)}</span>`;
   document.getElementById("quality-issues").innerHTML = `<p class="quality-empty">Protected data-quality evidence is unavailable. No source is assumed healthy.</p>`;
@@ -375,7 +375,7 @@ function clearScopedForTransition() {
   }
   document.getElementById("estate-evidence-body").replaceChildren();
   document.getElementById("quality-preview-body").replaceChildren();
-  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="7"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
+  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="8"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
   document.getElementById("estate-count").textContent = "Loading";
   document.getElementById("quality-summary").innerHTML = `<div class="spinner" aria-label="Loading data quality"></div>`;
   document.getElementById("quality-issues").replaceChildren();
