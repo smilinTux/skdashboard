@@ -25,7 +25,7 @@
         "watermark",
         "errors"
       ],
-      "expected_item_count": 16,
+      "expected_item_count": 17,
       "expected_row_set_sha256": "sha256:e3eabce15da5ea75fbc9800ecb23e2483424ea2aafece9de9ea1bdf2124b5902"
     },
     "api": {

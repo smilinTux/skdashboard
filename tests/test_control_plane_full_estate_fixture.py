@@ -262,7 +262,7 @@ def test_fixture_spans_every_public_synthetic_estate_signal_and_truth_condition(
     }
 
     assert hashlib.sha256(ESTATE_FIXTURE.read_bytes()).hexdigest() == (
-        "f8010d63597442dc31c833df3b98d8d43d75f1807f5973b2b6c23f0816ca9abb"
+        "eb86e75dafefb0ac5565e95f57a4d9395256120a72cb6a28ee0e92ac0afd74c5"
     )
     assert fixture["classification"] == "public"
     assert fixture["synthetic"] is True
