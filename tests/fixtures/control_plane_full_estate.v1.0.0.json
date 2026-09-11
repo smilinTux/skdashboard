@@ -454,6 +454,6 @@
       "skos"
     ],
     "watermark_policy": "include_nonempty_authorized_aggregate_watermarks",
-    "expected_report_hash": "sha256:9838d606e994b8c46558c7be64d524feca2e9a33e8c3400a97e62e8da577869e"
+    "expected_report_hash": "sha256:17c04081d9af189baf5d14a997f20c5bf4d4b8fa97fdb73c65c8a0850afdc6ef"
   }
 }
