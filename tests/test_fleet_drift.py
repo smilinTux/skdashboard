@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 import pytest
 from skcapstone.fleet import store
@@ -151,6 +153,8 @@ def test_every_node_lands_in_exactly_one_bucket(fleet_tree) -> None:
         "warn": 1,
         "info": 1,
         "ok": 1,
+        "expected_reporters": 7,
+        "reporting_nodes": 6,
     }
 
 
@@ -219,6 +223,76 @@ def test_missing_fleet_tree_is_an_empty_report_not_a_crash(tmp_path) -> None:
     assert payload["nodes"] == []
     assert payload["skipped"] == []
     assert payload["summary"]["graded"] == 0
+    assert payload["provenance"] == {
+        "owner": "SKCapstone Fleet",
+        "population": "published node inventory",
+        "truth_state": "unavailable",
+        "coverage": {"known": 0, "graded": 0},
+    }
+
+
+def test_worker_projection_excludes_unclaimed_and_marks_stale(tmp_path) -> None:
+    current = Mock(agent="pi-qwen-chiap08-abcd1234", current_task="abcd1234", host="chiap08", state=Mock(value="active"), last_seen="2026-09-07T06:39:00Z")
+    stale = Mock(agent="pi-codex-chiap04-deadbeef", current_task="deadbeef", host="chiap04", state=Mock(value="active"), last_seen="2026-09-07T06:20:00Z")
+    idle = Mock(agent="pi-link-chiap08-11111111", current_task=None)
+    views = [Mock(task=Mock(id="abcd1234", title="Run Qwen worker")), Mock(task=Mock(id="deadbeef", title="Old worker"))]
+    with patch("skcoord.coordination.Board") as board:
+        board.return_value.get_task_views.return_value = views
+        board.return_value.load_agents.return_value = [current, stale, idle]
+        result = df.collect_workers(tmp_path, now=datetime(2026, 9, 7, 6, 40, tzinfo=timezone.utc))
+    assert result["summary"]["running"] == 1
+    assert result["summary"]["stale"] == 1
+    assert result["source"] == "skcoord.agent_projection"
+    assert result["workers"][0]["lane"] == "qwen"
+    assert result["workers"][0]["task_title"] == "Run Qwen worker"
+    assert result["workers"][1]["truth_state"] == "stale"
+
+
+def test_worker_projection_prefers_cross_node_wrapper_beats(tmp_path) -> None:
+    beats = tmp_path / "fleet" / "beats"
+    beats.mkdir(parents=True)
+    (beats / "pi-qwen-chiap02-abcd1234.json").write_text(
+        json.dumps(
+            {
+                "owner": "pi-qwen-chiap02-abcd1234",
+                "card_id": "abcd1234",
+                "disposition": "RUNNING",
+                "beat_at": 1_000,
+                "elapsed_s": 240,
+            }
+        )
+    )
+    (beats / "pi-codex-chiap04-deadbeef.json").write_text(
+        json.dumps(
+            {
+                "owner": "pi-codex-chiap04-deadbeef",
+                "card_id": "deadbeef",
+                "disposition": "RUNNING",
+                "beat_at": 650,
+                "elapsed_s": 600,
+            }
+        )
+    )
+    views = [Mock(task=Mock(id="abcd1234", title="Run Qwen worker"))]
+    with patch("skcoord.coordination.Board") as board:
+        board.return_value.get_task_views.return_value = views
+        result = df.collect_workers(
+            tmp_path,
+            now=datetime.fromtimestamp(1_100, timezone.utc),
+        )
+
+    assert result["source"] == "skfleet.wrapper_heartbeat"
+    assert result["summary"]["running"] == 1
+    assert result["summary"]["stale"] == 1
+    assert result["summary"]["known_hosts"] == 5
+    assert result["summary"]["reporting_hosts"] == 1
+    assert result["workers"][0]["host"] == "chiap02"
+    assert result["workers"][0]["elapsed_seconds"] == 240
+    assert {row["host"] for row in result["nodes"]} == set(df.DEFAULT_FLEET_HOSTS)
+    assert result["lanes"] == [
+        {"lane": "codex", "running": 0, "stale": 1},
+        {"lane": "qwen", "running": 1, "stale": 0},
+    ]
 
 
 # ----------------------------------------------------------------- alert ---
@@ -401,8 +475,26 @@ def test_fleet_page_is_routed_and_shipped() -> None:
     from skdashboard.dashboard import create_app
 
     app = create_app(Path("/nonexistent-home"))
-    assert {getattr(r, "path", None) for r in app.routes} >= {"/fleet", "/api/fleet/drift"}
+    assert {getattr(r, "path", None) for r in app.routes} >= {
+        "/fleet",
+        "/api/v1/fleet/drift",
+    }
     static = Path(skdashboard.__file__).parent / "static"
     assert (static / "fleet.html").is_file()
     assert (static / "js" / "fleet.js").is_file()
     assert (static / "css" / "fleet.css").is_file()
+
+
+def test_read_only_fleet_navigation_uses_canonical_route(tmp_path) -> None:
+    from starlette.testclient import TestClient
+
+    from skdashboard.read_only import create_read_only_app
+
+    client = TestClient(create_read_only_app(tmp_path), base_url="https://10.0.0.139:7778")
+    page = client.get("/control-plane/now")
+    fleet = client.get("/control-plane/fleet")
+
+    assert page.status_code == 200
+    assert 'href="/control-plane/fleet"' in page.text
+    assert fleet.status_code == 200
+    assert 'href="/control-plane/fleet"' in fleet.text

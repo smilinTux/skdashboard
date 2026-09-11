@@ -39,7 +39,12 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "css/board.css",
         "css/cockpit.css",
         "css/gateway_economy.css",
+        "css/cmdb.css",
+        "css/economy.css",
+        "css/fleet.css",
+        "css/observability.css",
         "css/governance.css",
+        "css/assistant.css",
         "css/overview.css",
         "css/projects.css",
         "css/reliability.css",
@@ -47,18 +52,30 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "css/schedule.css",
         "js/ai.js",
         "js/architecture.js",
+        "js/assistant.js",
+        "js/ai_compose.js",
+        "js/api.js",
         "js/auth_status.js",
+        "js/board.js",
+        "js/cmdb.js",
         "js/control_plane_scope.js",
+        "js/economy.js",
+        "js/fleet.js",
+        "js/observability.js",
         "js/governance.js",
         "js/fleet_chat.js",
         "js/gateway_client.js",
         "js/gateway_economy.js",
+        "js/detail_panel.js",
+        "js/editor.js",
         "js/overview.js",
+        "js/live_connection.js",
         "js/projects.js",
         "js/read_only_api.js",
         "js/reliability.js",
         "js/reports.js",
         "js/schedule.js",
+        "vendor/Sortable.min.js",
     }
 )
 LEGACY_RUNTIME_PATHS = (
@@ -69,6 +86,7 @@ LEGACY_RUNTIME_PATHS = (
     "/trust",
     "/models",
     "/fleet",
+    "/observability",
 )
 
 
@@ -277,10 +295,30 @@ def create_read_only_app(
     else:
         legacy_runtime_urls = {}
 
+    # Keep navigation on this authenticated origin. Board and CMDB are real
+    # read-only module surfaces, not aliases for Portfolio and Architecture.
+    local_runtime_urls = {
+        "/cockpit": "/control-plane/now",
+        "/trust": "/control-plane/governance",
+        "/models": "/control-plane/ai",
+        "/board": "/board",
+        "/cmdb": "/cmdb",
+        "/assistant": "/assistant",
+        "/tasks": "/board",
+        "/work-queue": "/board",
+        "/economy": "/economy",
+        "/fleet": "/control-plane/fleet",
+        "/observability": "/observability",
+    }
+
     def page(name: str):
         async def serve(_request):
             html = (static_dir / name).read_text(encoding="utf-8")
+            for path, url in local_runtime_urls.items():
+                html = html.replace(f'href="{path}"', f'href="{url}"')
             for path, url in legacy_runtime_urls.items():
+                if path in local_runtime_urls:
+                    continue
                 html = html.replace(f'href="{path}"', f'href="{url}"')
             if session_adapter is not None:
                 html = html.replace(
@@ -291,8 +329,11 @@ def create_read_only_app(
         return serve
 
     async def index(_request):
-        name = "read_only_session.html" if session_adapter is not None else "read_only.html"
-        return await page(name)(_request)
+        # The module root is the product entrypoint. The workspace page owns
+        # sign-in state and renders protected data only after authorization.
+        return RedirectResponse(
+            "/control-plane/now", status_code=307, headers={"Cache-Control": "no-store"}
+        )
 
     def redirect(location: str):
         async def serve(_request):
@@ -327,8 +368,12 @@ def create_read_only_app(
         if relative in {
             "js/ai.js",
             "js/architecture.js",
+            "js/assistant.js",
+            "js/economy.js",
+            "js/fleet.js",
             "js/governance.js",
             "js/overview.js",
+            "js/live_connection.js",
             "js/projects.js",
             "js/reliability.js",
             "js/reports.js",
@@ -342,7 +387,11 @@ def create_read_only_app(
                     'import { openCard, initPanel } from "./editor.js";',
                     "const openCard = () => {};\nconst initPanel = () => {};",
                 )
+            for path, url in local_runtime_urls.items():
+                javascript = javascript.replace(json.dumps(path), json.dumps(url))
             for path, url in legacy_runtime_urls.items():
+                if path in local_runtime_urls:
+                    continue
                 javascript = javascript.replace(json.dumps(path), json.dumps(url))
             return Response(javascript, media_type="text/javascript")
         return FileResponse(candidate)
@@ -355,7 +404,7 @@ def create_read_only_app(
                 "id": "skdashboard-read-only",
                 "name": "SK Control Plane",
                 "grade": "B",
-                "entry": {"url": f"{base}/"},
+                "entry": {"url": f"{base}/control-plane/now"},
                 "nav": {"icon": "dashboard", "order": 40, "label": "Control Plane"},
                 "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
                 "health": f"{base}/api/v1/health",
@@ -374,14 +423,24 @@ def create_read_only_app(
                 "&baseline=none&service=all&selected_silo=legal"
             ),
         ),
-        Route("/tasks", board_workspace),
-        Route("/work-queue", board_workspace),
+        Route("/tasks", redirect("/board")),
+        Route("/work-queue", redirect("/board")),
         Route("/control-plane/reliability", page("reliability.html")),
         Route("/control-plane/architecture", page("architecture.html")),
         Route("/control-plane/ai", page("ai.html")),
-        Route("/economy", page("gateway_economy.html")),
+        Route("/gateway/economy", page("gateway_economy.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
+        Route("/cockpit", redirect("/control-plane/now")),
+        Route("/trust", redirect("/control-plane/governance")),
+        Route("/models", redirect("/control-plane/ai")),
+        Route("/board", page("board.html")),
+        Route("/cmdb", page("cmdb.html")),
+        Route("/assistant", page("assistant.html")),
+        Route("/economy", page("economy.html")),
+        Route("/fleet", page("fleet.html")),
+        Route("/control-plane/fleet", page("fleet.html")),
+        Route("/observability", page("observability.html")),
         Route("/fleet-chat", page("fleet_chat.html")),
         Route("/.well-known/skworld-module.json", manifest),
     ]

@@ -6,31 +6,69 @@ export function esc(value) {
     .replace(/"/g, "&quot;");
 }
 
-export async function getJSON(url) {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    headers: { Accept: "application/json" },
-  });
-  if (response.status === 401) void renderSignInAction();
-  if (!response.ok) throw new Error(`${url} -> ${response.status}`);
+export async function getJSON(url, { timeoutMs = 0 } = {}) {
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: controller?.signal,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+  if (response.status === 401) {
+    if (
+      typeof window !== "undefined" &&
+      window.location.pathname !== "/auth/login" &&
+      typeof window.location.assign === "function"
+    ) {
+      window.location.assign(`/auth/login?${new URLSearchParams({ return_to: `${window.location.pathname}${window.location.search}` })}`);
+    }
+    void renderSignInAction(true);
+  } else if (response.status === 503) {
+    void renderSignInAction(true);
+  }
+  if (!response.ok) {
+    const error = new Error(`${url} -> ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
+}
+
+export async function authHeaders(extra) {
+  return { ...(extra || {}) };
+}
+
+let toastTimer;
+export function toast(message, isError = false) {
+  const element = document.getElementById("toast");
+  if (!element) return;
+  element.textContent = String(message || "");
+  element.style.background = isError ? "var(--crit)" : "var(--ink)";
+  element.style.color = isError ? "#fff" : "var(--bg)";
+  element.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => element.classList.remove("show"), 2600);
 }
 
 let sessionCheck;
 
-export async function renderSignInAction() {
+export async function renderSignInAction(force = false) {
   if (
     typeof document === "undefined" ||
     typeof location === "undefined" ||
-    !location.pathname.startsWith("/control-plane/") ||
     document.getElementById("session-sign-in")
   ) return;
   sessionCheck ||= fetch("/auth/session", {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
   }).then((response) => response.status === 401).catch(() => false);
-  if (!(await sessionCheck) || document.getElementById("session-sign-in")) return;
-  const navigation = document.querySelector(".topbar, .sidebar");
+  if ((!force && !(await sessionCheck)) || document.getElementById("session-sign-in")) return;
+  const navigation = document.querySelector(".topbar, .sidebar, .header-actions");
   if (!navigation) return;
   const link = document.createElement("a");
   link.id = "session-sign-in";

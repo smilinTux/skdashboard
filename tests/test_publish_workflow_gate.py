@@ -51,5 +51,5 @@ def test_public_metadata_is_pypi_safe_and_exact_qualification_pin_is_retained() 
     assert not [line for line in requirements if " @ " in line]
     assert QUALIFIED_REQUIREMENTS.read_text(encoding="utf-8").splitlines()[-1] == (
         "capauth @ git+https://github.com/smilinTux/capauth.git"
-        "@222ffe76b309c4415b488209da6e4b2c27cc7335"
+        "@b91fb9851e6950c67cbb0fb27a1e9609c71a43bf"
     )

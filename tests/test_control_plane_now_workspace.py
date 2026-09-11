@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -55,6 +57,10 @@ def test_now_workspace_declares_exact_breadth_and_fail_closed_ai_boundary() -> N
     assert 'url.pathname = "/control-plane/now"' in js
     assert 'scope: "estate", window: "latest", baseline: "none", service: "all"' in js
     assert "Expected 16 bounded adapter observations" in js
+    assert "renderAiBrief(response.items)" in js
+    assert "Math.round((coverage.reporting / coverage.expected) * 100)" in js
+    assert "Request activity is not treated as an accepted outcome or verified effect" in js
+    assert "No impact estimate or action authorization" in js
     assert "No silo is assumed healthy" in js
     assert "item.population" in js
     assert "coverage.reporting, 0" not in js
@@ -86,3 +92,31 @@ def test_now_metric_context_sources_match_the_registry() -> None:
 
     economy = next(line for line in configs if 'id: "economy"' in line)
     assert 'metricSource: "skcounter.harness"' in economy
+
+
+def test_now_live_connection_states_in_real_chrome() -> None:
+    if not shutil.which("node") or not shutil.which("google-chrome"):
+        return
+    result = subprocess.run(
+        ["node", "scripts/qualify_now_live_connection_cdp.mjs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    evidence = json.loads(result.stdout)
+    assert evidence == {
+        "result": "PASS",
+        "states": [
+            "retrying",
+            "polling fallback",
+            "connected",
+            "polling fallback",
+            "retrying",
+            "offline",
+            "sign in required",
+        ],
+        "endpoint": "/api/v1/events",
+        "boundedRetry": True,
+    }

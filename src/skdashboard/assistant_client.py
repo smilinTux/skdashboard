@@ -67,6 +67,7 @@ class AssistantRequest(BaseModel):
     max_tokens: int = Field(default=1400, ge=1, le=4096)
     temperature: float = Field(default=0.3, ge=0.0, le=1.0)
     stream: Literal[True] = True
+    response_format: dict[str, object] | None = None
 
 
 class RetrievalTrace(BaseModel):
@@ -88,7 +89,9 @@ class AssistantProvenance(BaseModel):
 
 class AssistantDelta(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    role: Literal["assistant"] | None = None
     content: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
+    token_ids: list[int] | None = Field(default=None, max_length=4096)
 
 
 class AssistantChoice(BaseModel):
@@ -97,6 +100,9 @@ class AssistantChoice(BaseModel):
     delta: AssistantDelta | None = None
     message: dict[str, object] | None = None
     finish_reason: Literal["stop", "length", "error"] | None = None
+    logprobs: dict[str, object] | None = None
+    stop_reason: str | int | None = Field(default=None, max_length=256)
+    token_ids: list[int] | None = Field(default=None, max_length=4096)
 
 
 class AssistantResponse(BaseModel):
@@ -121,7 +127,12 @@ class AssistantStreamChunk(BaseModel):
     id: str = Field(min_length=1, max_length=256)
     object: Literal["chat.completion.chunk"]
     created: int
-    model: Literal[DASHBOARD_ASSISTANT_ROUTE]
+    model: str = Field(min_length=1, max_length=256)
+    requested_model: str | None = Field(default=None, min_length=1, max_length=256)
+    system_fingerprint: str | None = Field(default=None, max_length=256)
+    timings: dict[str, int | float] | None = None
+    prompt_token_ids: list[int] | None = Field(default=None, max_length=32768)
+    prompt_text: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
     choices: list[AssistantChoice] = Field(min_length=1, max_length=4)
 
 
@@ -176,10 +187,34 @@ class AssistantClient:
         return {"actor": _safe(actor), "card_id": _safe(card_id) if card_id else None,
                 **{key: _safe(value) for key, value in values.items()}}
 
-    def _request(self, messages: list[dict], actor: str, card_id: str | None) -> bytes:
+    def _request(
+        self,
+        messages: list[dict],
+        actor: str,
+        card_id: str | None,
+        *,
+        max_tokens: int = 1400,
+        json_response: bool = False,
+        response_schema: dict[str, object] | None = None,
+    ) -> bytes:
         try:
             typed = [AssistantRequestMessage(**message) for message in messages]
-            payload = AssistantRequest(messages=typed).model_dump_json(exclude_none=True).encode()
+            payload = AssistantRequest(
+                messages=typed,
+                max_tokens=max_tokens,
+                response_format=(
+                    {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "typed_response",
+                            "strict": True,
+                            "schema": response_schema,
+                        },
+                    }
+                    if response_schema is not None
+                    else ({"type": "json_object"} if json_response else None)
+                ),
+            ).model_dump_json(exclude_none=True).encode()
         except Exception as exc:
             raise AssistantClientError("Invalid assistant request", "invalid_request",
                                        self._audit(actor, card_id, error=type(exc).__name__)) from exc
@@ -201,12 +236,32 @@ class AssistantClient:
             raise OutageError("Gateway is unreachable", "outage",
                               self._audit(actor, card_id, error=type(exc).__name__)) from exc
 
-    def chat(self, messages: list[dict], actor: str = "operator", card_id: str | None = None) -> str:
+    def chat(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
+             *, require_retrieval_traces: bool = True, max_tokens: int = 1400,
+             json_response: bool = False,
+             response_schema: dict[str, object] | None = None) -> str:
         """Collect a fully validated stream; the wire request always has stream=true."""
-        return "".join(self.chat_stream(messages, actor=actor, card_id=card_id))
+        return "".join(self.chat_stream(messages, actor=actor, card_id=card_id,
+                                        require_retrieval_traces=require_retrieval_traces,
+                                        max_tokens=max_tokens, json_response=json_response,
+                                        response_schema=response_schema))
 
-    def chat_stream(self, messages: list[dict], actor: str = "operator", card_id: str | None = None):
-        response = self._urlopen(self._request(messages, actor, card_id), actor, card_id)
+    def chat_stream(self, messages: list[dict], actor: str = "operator", card_id: str | None = None,
+                    *, require_retrieval_traces: bool = True, max_tokens: int = 1400,
+                    json_response: bool = False,
+                    response_schema: dict[str, object] | None = None):
+        response = self._urlopen(
+            self._request(
+                messages,
+                actor,
+                card_id,
+                max_tokens=max_tokens,
+                json_response=json_response,
+                response_schema=response_schema,
+            ),
+            actor,
+            card_id,
+        )
         try:
             provenance = self._provenance(response, actor, card_id)
             tokens, terminal_finished, done_seen = [], False, False
@@ -233,7 +288,7 @@ class AssistantClient:
                 except Exception as exc:
                     raise ResponseValidationError("Malformed assistant stream", "validation_error",
                         self._audit(actor, card_id, error=type(exc).__name__)) from exc
-                if chunk.model != DASHBOARD_ASSISTANT_ROUTE:
+                if chunk.model not in {DASHBOARD_ASSISTANT_ROUTE, provenance.model_served}:
                     self._fail("route_drift", actor, card_id)
                 choice = chunk.choices[0]
                 if choice.finish_reason:
@@ -245,7 +300,7 @@ class AssistantClient:
                     self._fail("response_too_large", actor, card_id)
             if not terminal_finished or not done_seen:
                 self._fail("incomplete_stream", actor, card_id)
-            if not provenance.retrieval_traces:
+            if require_retrieval_traces and not provenance.retrieval_traces:
                 self._fail("missing_retrieval_trace", actor, card_id)
             yield from tokens
         finally:
@@ -258,10 +313,13 @@ class AssistantClient:
     def _provenance(self, response, actor: str, card_id: str | None) -> AssistantProvenance:
         headers = response.headers
         try:
-            traces = json.loads(headers["X-SK-Retrieval-Traces"])
+            traces = json.loads(headers.get("X-SK-Retrieval-Traces", "[]"))
+            rail = headers.get("X-SK-Rail")
             provenance = AssistantProvenance(model_served=headers["X-SK-Model-Served"],
-                backend_id=headers["X-SK-Backend-Id"], route_used=headers["X-SK-Route-Used"],
-                egress_profile=headers["X-SK-Egress-Profile"], retrieval_traces=traces,
+                backend_id=headers.get("X-SK-Backend-Id") or headers["X-SK-Backend"],
+                route_used=headers.get("X-SK-Route-Used") or headers["X-SK-Logical-Route"],
+                egress_profile=headers.get("X-SK-Egress-Profile") or
+                ("local-only" if rail == "local" else rail), retrieval_traces=traces,
                 timestamp=datetime.now(timezone.utc).isoformat())
         except Exception as exc:
             raise ResponseValidationError("Missing typed response provenance", "provenance_missing",

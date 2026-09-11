@@ -276,9 +276,15 @@ def test_overview_passes_exact_context_and_verifier_to_project_provider(
 
     assert response.status_code == 200
     assert len(calls) == 1
-    assert any(
-        item.get("projection_type") == "project_records" for item in response.json()["items"]
+    assert calls[0].role == "project-manager"
+    assert response.json()["scope"]["role"] == "operator"
+    project = next(
+        item
+        for item in response.json()["items"]
+        if item.get("projection_type") == "project_records"
     )
+    assert project["scope"]["role"] == "operator"
+    assert project["owner_policy_scope"]["role"] == "project-manager"
 
 
 def test_overview_integrates_released_skcoord_provider(tmp_path, monkeypatch) -> None:

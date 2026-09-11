@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, RefResolver
 
+from skdashboard.control_plane_adapters import aggregate_reader
 from skdashboard.dashboard_reports import (
     ReportSnapshotError,
     ReportSnapshotStore,
     build_report_snapshot,
     compare_report_snapshots,
+    generate_offline_report_snapshot,
     report_hash,
     validate_report_snapshot,
 )
@@ -183,6 +186,65 @@ def test_store_rejects_missing_superseded_snapshot_and_protected_scope(tmp_path:
                 }
             ],
         )
+
+
+def test_offline_generator_freezes_real_supported_aggregates(tmp_path: Path):
+    observed_at = "2026-09-06T20:59:00Z"
+    readers = {
+        "skcapstone.fleet": aggregate_reader(
+            {"graded": 3, "skipped": 0, "error": 0, "warn": 0, "info": 0, "ok": 3},
+            expected=3,
+            reporting=3,
+            observed_at=observed_at,
+            watermark_data="fleet-fold-42",
+        ),
+        "skgateway.observed": aggregate_reader(
+            {
+                "tokens_total": 75,
+                "cost_usd": None,
+                "cost_state": "unavailable",
+                "latency_ms": None,
+                "cache_ratio": None,
+                "error_count": None,
+                "denial_count": None,
+                "observation_count": 4161,
+                "fresh_collectors": 3,
+                "delayed_collectors": 0,
+                "stale_collectors": 0,
+            },
+            expected=3,
+            reporting=3,
+            observed_at=observed_at,
+            watermark_data="gateway-status-42",
+        ),
+    }
+
+    report = generate_offline_report_snapshot(
+        tmp_path,
+        portfolio_id="estate",
+        now=datetime(2026, 9, 6, 21, 0, tzinfo=timezone.utc),
+        readers=readers,
+    )
+
+    metrics = {
+        item["metric_id"]: item
+        for section in report["sections"]
+        for item in section["metric_results"]
+    }
+    assert metrics["fleet.reporting_nodes"]["value"] == 3
+    assert metrics["ai.gateway_observation_count"]["value"] == 4161
+    assert report["as_of"] == observed_at
+    assert ReportSnapshotStore(tmp_path).get(report["snapshot_id"]) == report
+
+
+def test_offline_generator_refuses_an_empty_snapshot(tmp_path: Path):
+    with pytest.raises(ReportSnapshotError, match="no supported aggregate evidence"):
+        generate_offline_report_snapshot(
+            tmp_path,
+            now=datetime(2026, 9, 6, 21, 0, tzinfo=timezone.utc),
+            readers={},
+        )
+    assert not (tmp_path / "reports").exists()
 
 
 def test_comparison_preserves_truth_and_definition_incompatibility():

@@ -35,8 +35,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("skdashboard.fleet")
@@ -55,6 +57,178 @@ ALERT_MIN_INTERVAL_S = 300.0
 #: How many findings the alert text names before it summarizes the rest. The
 #: alert is a pointer to the panel, not a replacement for reading it.
 ALERT_MAX_NAMED = 5
+WORKER_TTL_SECONDS = 300
+WORKER_STALE_WINDOW_SECONDS = 3600
+DEFAULT_FLEET_HOSTS = ("chiap01", "chiap02", "chiap03", "chiap04", "chiap08")
+
+
+def _instant(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+
+
+def _projection_workers(home: Path, instant: datetime) -> list[dict]:
+    """Fallback for installations that have not deployed wrapper beats yet."""
+    from skcoord.coordination import Board
+
+    board = Board(Path(home))
+    titles = {view.task.id: view.task.title for view in board.get_task_views()}
+    workers = []
+    for agent in board.load_agents():
+        if not agent.agent.startswith("pi-") or not agent.current_task:
+            continue
+        observed = _instant(agent.last_seen)
+        age = max(0, int((instant - observed).total_seconds())) if observed else None
+        truth = "current" if age is not None and age <= WORKER_TTL_SECONDS else "stale"
+        lane = agent.agent.removeprefix("pi-").split("-", 1)[0]
+        workers.append(
+            {
+                "name": agent.agent,
+                "host": agent.host,
+                "lane": lane,
+                "task_id": agent.current_task,
+                "task_title": titles.get(agent.current_task),
+                "state": agent.state.value,
+                "observed_at": agent.last_seen,
+                "age_seconds": age,
+                "elapsed_seconds": None,
+                "truth_state": truth,
+                "source": "skcoord.agent_projection",
+            }
+        )
+    return workers
+
+
+def _beat_host(owner: str) -> str | None:
+    match = re.search(r"-(chi(?:ap|wk)\d+)-", owner)
+    return match.group(1) if match else None
+
+
+def _beat_workers(home: Path, instant: datetime, titles: dict[str, str]) -> tuple[list[dict], int]:
+    workers = []
+    omitted = 0
+    for path in sorted((Path(home) / "fleet" / "beats").glob("*.json")):
+        try:
+            if path.stat().st_size > 16 * 1024:
+                raise ValueError("oversized heartbeat")
+            beat = json.loads(path.read_text(encoding="utf-8"))
+            owner = beat["owner"]
+            card = beat["card_id"]
+            observed = datetime.fromtimestamp(beat["beat_at"], timezone.utc)
+            if not isinstance(owner, str) or path.stem != owner:
+                raise ValueError("heartbeat identity mismatch")
+            if not isinstance(card, str) or not re.fullmatch(r"[0-9a-f]{8}", card):
+                raise ValueError("invalid heartbeat card")
+            host = _beat_host(owner)
+            if not host:
+                raise ValueError("heartbeat host unavailable")
+            age = max(0, int((instant - observed).total_seconds()))
+            if age > WORKER_STALE_WINDOW_SECONDS:
+                omitted += 1
+                continue
+            workers.append(
+                {
+                    "name": owner,
+                    "host": host,
+                    "lane": owner.removeprefix("pi-").split("-", 1)[0],
+                    "task_id": card,
+                    "task_title": titles.get(card),
+                    "state": str(beat.get("disposition") or "unknown").lower(),
+                    "observed_at": observed.isoformat().replace("+00:00", "Z"),
+                    "age_seconds": age,
+                    "elapsed_seconds": beat.get("elapsed_s") if isinstance(beat.get("elapsed_s"), int) else None,
+                    "truth_state": "current" if age <= WORKER_TTL_SECONDS else "stale",
+                    "source": "skfleet.wrapper_heartbeat",
+                }
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            omitted += 1
+    return workers, omitted
+
+
+def _runtime_statistics(workers: list[dict]) -> tuple[list[dict], list[dict]]:
+    configured = os.environ.get("SKFLEET_HOSTS", " ".join(DEFAULT_FLEET_HOSTS)).split()
+    hosts = {host: {"host": host, "running": 0, "stale": 0, "latest_age_seconds": None, "lanes": set()} for host in configured}
+    lanes: dict[str, dict] = {}
+    for worker in workers:
+        host = hosts.setdefault(worker["host"], {"host": worker["host"], "running": 0, "stale": 0, "latest_age_seconds": None, "lanes": set()})
+        state = "running" if worker["truth_state"] == "current" else "stale"
+        host[state] += 1
+        host["lanes"].add(worker["lane"])
+        age = worker.get("age_seconds")
+        if age is not None and (host["latest_age_seconds"] is None or age < host["latest_age_seconds"]):
+            host["latest_age_seconds"] = age
+        lane = lanes.setdefault(worker["lane"], {"lane": worker["lane"], "running": 0, "stale": 0})
+        lane[state] += 1
+    node_rows = []
+    for value in hosts.values():
+        value["lanes"] = sorted(value["lanes"])
+        value["truth_state"] = "current" if value["running"] else "stale" if value["stale"] else "no_recent_worker"
+        node_rows.append(value)
+    return sorted(node_rows, key=lambda row: row["host"]), sorted(lanes.values(), key=lambda row: row["lane"])
+
+
+def collect_workers(home: Path, *, now: datetime | None = None) -> dict:
+    """Project synchronized wrapper heartbeats, with SKCoord as a compatibility fallback."""
+    result = {
+        "source": "skfleet.wrapper_heartbeat",
+        "ttl_seconds": WORKER_TTL_SECONDS,
+        "stale_window_seconds": WORKER_STALE_WINDOW_SECONDS,
+        "workers": [],
+        "nodes": [],
+        "lanes": [],
+        "summary": {"running": 0, "stale": 0, "known_hosts": 0, "reporting_hosts": 0, "omitted_old_beats": 0},
+        "errors": [],
+    }
+    try:
+        from skcoord.coordination import Board
+
+        board = Board(Path(home))
+        titles = {view.task.id: view.task.title for view in board.get_task_views()}
+        instant = now or datetime.now(timezone.utc)
+        workers, omitted = _beat_workers(home, instant, titles)
+        if not workers and omitted == 0:
+            result["source"] = "skcoord.agent_projection"
+            workers = _projection_workers(home, instant)
+        result["workers"] = workers
+        result["workers"].sort(
+            key=lambda worker: (
+                worker["truth_state"] != "current",
+                worker["age_seconds"] if worker["age_seconds"] is not None else float("inf"),
+                worker["name"],
+            )
+        )
+        result["nodes"], result["lanes"] = _runtime_statistics(workers)
+        result["summary"].update(
+            running=sum(worker["truth_state"] == "current" for worker in workers),
+            stale=sum(worker["truth_state"] != "current" for worker in workers),
+            known_hosts=len(result["nodes"]),
+            reporting_hosts=sum(node["running"] > 0 for node in result["nodes"]),
+            omitted_old_beats=omitted,
+        )
+    except Exception as exc:  # noqa: BLE001 -- one source must not 500 Fleet Drift
+        result["errors"].append(f"worker projection unavailable: {exc}")
+    return result
+
+
+def collect_inference() -> dict:
+    """Reuse the bounded observability collector and preserve source attribution."""
+    try:
+        from .dashboard_observability import collect
+
+        telemetry = collect()
+        return {
+            "observed_at": telemetry.get("observed_at"),
+            "sources": telemetry.get("sources", []),
+            "errors": telemetry.get("errors", []),
+        }
+    except Exception as exc:  # noqa: BLE001 -- report the unavailable source
+        return {"observed_at": None, "sources": [], "errors": [str(exc)]}
 
 
 def default_state_path(home: Path) -> Path:
@@ -102,7 +276,16 @@ def collect_drift(paths=None) -> dict:
     payload: dict = {
         "nodes": [],
         "skipped": [],
-        "summary": {"graded": 0, "skipped": 0, "error": 0, "warn": 0, "info": 0, "ok": 0},
+        "summary": {
+            "graded": 0,
+            "skipped": 0,
+            "error": 0,
+            "warn": 0,
+            "info": 0,
+            "ok": 0,
+            "expected_reporters": 0,
+            "reporting_nodes": 0,
+        },
         "errors": [],
     }
     try:
@@ -152,8 +335,24 @@ def collect_drift(paths=None) -> dict:
     summary = payload["summary"]
     summary["graded"] = len(payload["nodes"])
     summary["skipped"] = len(payload["skipped"])
+    summary["expected_reporters"] = len(views)
+    summary["reporting_nodes"] = len(payload["nodes"]) + sum(
+        row["reason_code"] != "no_inventory" for row in payload["skipped"]
+    )
     for node in payload["nodes"]:
         summary[node["severity"]] += 1
+    payload["provenance"] = {
+        "owner": "SKCapstone Fleet",
+        "population": "published node inventory",
+        "truth_state": (
+            "partial"
+            if payload["errors"]
+            else "current"
+            if summary["graded"] or summary["skipped"]
+            else "unavailable"
+        ),
+        "coverage": {"known": summary["graded"] + summary["skipped"], "graded": summary["graded"]},
+    }
     return payload
 
 
@@ -314,6 +513,8 @@ def get_drift(home: Path, *, paths=None, alert: bool = True, send=None, now=None
         the alert gate decided this poll (None when ``alert`` is False).
     """
     payload = collect_drift(paths)
+    payload["worker_runtime"] = collect_workers(Path(home))
+    payload["inference_runtime"] = collect_inference()
     payload["alert"] = None
     if alert:
         try:

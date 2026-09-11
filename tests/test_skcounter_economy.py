@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -187,6 +188,62 @@ def test_empty_projection_is_well_formed(data_root, tmp_path):
     assert result["sources"] == []
 
 
+def test_acknowledged_edge_store_reads_only_latest_snapshot(tmp_path, monkeypatch):
+    root = tmp_path / "skcounter"
+    sent = root / "sent" / "chiap08" / "jarvis"
+    sent.mkdir(parents=True)
+    monkeypatch.setenv("SKCOUNTER_DATA_DIR", str(root))
+    old = sent / "z-old-hash.json"
+    old.write_text(
+        json.dumps(_snapshot(observed="2026-08-23T11:00:00Z", aggregates=[_aggregate(total=100)])),
+        encoding="utf-8",
+    )
+    new = sent / "a-new-hash.json"
+    new.write_text(
+        json.dumps(_snapshot(observed="2026-08-23T12:00:00Z", aggregates=[_aggregate(total=250)])),
+        encoding="utf-8",
+    )
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
+
+    result = get_ai_usage(
+        tmp_path,
+        now=datetime(2026, 8, 23, 12, 10, tzinfo=timezone.utc),
+    )
+
+    assert result["observation_count"] == 1
+    assert result["summary"]["tokens"]["total"] == 250
+
+
+def test_valid_index_missing_requested_lane_uses_acknowledged_local_snapshot(
+    data_root, tmp_path
+):
+    sent = data_root / "sent" / "chiap08" / "jarvis"
+    sent.mkdir(parents=True)
+    (sent / "latest.json").write_text(json.dumps(_snapshot()), encoding="utf-8")
+
+    result = get_ai_usage(tmp_path)
+
+    assert result["observation_count"] == 1
+    assert result["summary"]["tokens"]["total"] == 100
+    assert result["available_lanes"] == ["harness_reported"]
+
+
+def test_duplicate_observation_and_acknowledged_snapshot_is_counted_once(
+    data_root, tmp_path
+):
+    snapshot = _snapshot()
+    _write(data_root, "received.json", snapshot)
+    sent = data_root / "sent" / "chiap08" / "jarvis"
+    sent.mkdir(parents=True)
+    (sent / "acknowledged.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+    result = get_ai_usage(tmp_path)
+
+    assert result["observation_count"] == 1
+    assert result["summary"]["tokens"]["total"] == 100
+
+
 def test_lanes_remain_separate_and_latest_observation_wins(data_root, tmp_path):
     _write(
         data_root,
@@ -222,6 +279,18 @@ def test_lanes_remain_separate_and_latest_observation_wins(data_root, tmp_path):
     assert gateway["summary"]["tokens"]["total"] == 900
     assert harness["available_lanes"] == ["gateway_observed", "harness_reported"]
     assert harness["collectors"][0]["status"] == "fresh"
+    assert harness["coverage"]["expected_nodes"] == 1
+    assert harness["coverage"]["percent"] == 100.0
+
+
+def test_unobserved_lane_does_not_inherit_other_lane_status(data_root, tmp_path):
+    _write(data_root, "harness.json", _snapshot())
+
+    gateway = get_ai_usage(tmp_path, {"lane": "gateway_observed"})
+
+    assert gateway["status"] == "empty"
+    assert gateway["observation_count"] == 0
+    assert gateway["summary"]["tokens"]["total"] == 0
 
 
 def test_daily_series_breakdowns_filters_and_activity(data_root, tmp_path):

@@ -20,7 +20,7 @@
       "projection": "estate_rows",
       "required_fields": ["silo", "signal", "truth_state", "watermark", "errors"],
       "expected_item_count": 16,
-      "expected_row_set_sha256": "sha256:9f40babcdf871b17e685b2e83029de04bf21be8b90a603892c9f2161528af706"
+      "expected_row_set_sha256": "sha256:e3eabce15da5ea75fbc9800ecb23e2483424ea2aafece9de9ea1bdf2124b5902"
     },
     "api": {
       "method": "GET",
@@ -31,13 +31,13 @@
     "agent": {
       "access": "read_only",
       "representation": "canonical_json",
-      "expected_payload_sha256": "sha256:730a922c1886b7bfac349316a5d5187659fd9c14eac9b61f7d78305e9d870950"
+      "expected_payload_sha256": "sha256:0d68b267d53777856c42720f418e207280c17e74584df008ca86da071f05d88c"
     },
     "mcp": {
       "access": "read_only",
       "resource_uri": "skdashboard://fixtures/control-plane/full-estate/v1",
       "media_type": "application/json",
-      "expected_payload_sha256": "sha256:730a922c1886b7bfac349316a5d5187659fd9c14eac9b61f7d78305e9d870950"
+      "expected_payload_sha256": "sha256:0d68b267d53777856c42720f418e207280c17e74584df008ca86da071f05d88c"
     },
     "report": {
       "schema": "control-plane-report-snapshot.v1.1.0",
@@ -199,7 +199,7 @@
       "signal": "policy_denials",
       "adapter_id": "capauth.policy",
       "condition": "governance_denial",
-      "aggregate": {"available": true, "denials": 2},
+      "aggregate": {"available": true, "denials": 2, "inspected_identities": 2, "active_identities": 1, "inactive_identities": 1},
       "coverage": {"expected": 5, "reporting": 5},
       "watermark": "synthetic-policy-r1",
       "errors": [],
@@ -284,6 +284,6 @@
       "skos"
     ],
     "watermark_policy": "include_nonempty_authorized_aggregate_watermarks",
-    "expected_report_hash": "sha256:94da0e01e11e519628f28648e67367fe434547cb781a309920e1f32f05d2ea69"
+    "expected_report_hash": "sha256:9838d606e994b8c46558c7be64d524feca2e9a33e8c3400a97e62e8da577869e"
   }
 }

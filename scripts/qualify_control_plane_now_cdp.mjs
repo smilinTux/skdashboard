@@ -149,7 +149,7 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     await send("Network.enable");
     await send("Accessibility.enable");
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/now?role=architect&scope=estate&window=latest&baseline=none&service=all` });
     try {
       await waitFor(async () => evaluate("document.querySelectorAll('#estate-rows tr[data-silo]').length === 12").catch(() => false), "Estate pulse did not render");
@@ -163,12 +163,12 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
       rows: document.querySelectorAll('#estate-rows tr[data-silo]').length,
       sources: [...document.querySelectorAll('#estate-rows tr[data-silo]')].reduce((total, row) => total + Number(row.dataset.sourceCount), 0),
       evidenceButtons: document.querySelectorAll('.estate-evidence-button').length,
-      metricVersions: [...document.querySelectorAll('#estate-rows td:nth-child(4)')].every((node) => node.textContent.includes('@1.0.0') && node.textContent.includes('scope estate') && node.textContent.includes('window latest')),
-      baselineUnknown: [...document.querySelectorAll('#estate-rows td:nth-child(5)')].every((node) => node.textContent.includes('Unknown') && node.textContent.includes('No comparable baseline')),
+      metricVersions: [...document.querySelectorAll('#estate-rows td:nth-child(6)')].every((node) => node.textContent.includes('@1.0.0') && node.textContent.includes('scope estate') && node.textContent.includes('window latest')),
+      baselineUnknown: [...document.querySelectorAll('#estate-rows td:nth-child(7)')].every((node) => node.textContent.includes('Unknown') && node.textContent.includes('No comparable baseline')),
       ai: document.querySelector('.ai-abstention').textContent,
       legal: document.querySelector('[data-silo=legal]').textContent,
-      flowMetric: document.querySelector('[data-silo=flow] td:nth-child(4)').textContent,
-      economyMetric: document.querySelector('[data-silo=economy] td:nth-child(4)').textContent,
+      flowMetric: document.querySelector('[data-silo=flow] td:nth-child(6)').textContent,
+      economyMetric: document.querySelector('[data-silo=economy] td:nth-child(6)').textContent,
       count: document.getElementById('estate-count').textContent,
     }))())`));
     assert.equal(desktop.url, "/control-plane/now?role=architect&scope=estate&window=latest&baseline=none&service=all");
@@ -177,8 +177,9 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     assert.equal(desktop.evidenceButtons, 12);
     assert.equal(desktop.metricVersions, true);
     assert.equal(desktop.baselineUnknown, true);
-    assert.match(desktop.ai, /AI abstained/);
-    assert.match(desktop.ai, /will not invent/);
+    assert.match(desktop.ai, /Evidence brief: 1 AI source needs attention/);
+    assert.match(desktop.ai, /SKGateway reports 9 requests/);
+    assert.match(desktop.ai, /Request activity is not treated as an accepted outcome or verified effect/);
     assert.match(desktop.legal, /Policy filtered/);
     assert.match(desktop.flowMetric, /skcoord\.flow \(task_flow\): 8 of 9/);
     assert.match(desktop.flowMetric, /skcoord\.agent_presence \(agent_presence\): 4 of 4/);
@@ -230,7 +231,7 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     assert.ok(accessible.some((node) => node.role === "heading" && node.name === "Estate pulse"));
     assert.ok(accessible.some((node) => node.role === "button" && node.name === "Evidence for Portfolio and projects"));
 
-    await evaluate("document.querySelector('.estate-evidence-button').focus()");
+    await evaluate("document.querySelector('[data-silo=portfolio] .estate-evidence-button').focus()");
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r", unmodifiedText: "\r", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     assert.equal(await evaluate("document.getElementById('estate-evidence').open"), true);
@@ -305,24 +306,19 @@ uvicorn.run(ScopeBoundaryHarness(), host="127.0.0.1", port=${port}, log_level="e
     await pressKey("Escape", "Escape");
     await pressKey("k", "KeyK", 2);
     assert.equal(await evaluate("document.getElementById('command-palette').open"), true);
-    await send("Network.setExtraHTTPHeaders", { headers: { Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Origin: "https://10.0.0.139:7778" } });
     await evaluate("window.dispatchEvent(new PopStateEvent('popstate'))");
-    await waitFor(async () => evaluate("document.getElementById('estate-count').textContent === 'Unavailable'").catch(() => false), "401 revocation did not fail closed");
-    assert.equal(await evaluate("document.getElementById('command-palette').open"), false);
-    assert.equal(await evaluate("document.getElementById('estate-evidence').open"), false);
-    assert.equal(await evaluate("document.getElementById('estate-evidence-body').textContent"), "");
-    assert.equal(await evaluate("document.getElementById('quality-preview-body').textContent"), "");
-    assert.equal(await evaluate("document.querySelectorAll('.chip.ok').length"), 0);
+    await waitFor(async () => evaluate("location.pathname === '/auth/login'").catch(() => false), "401 revocation did not redirect to sign-in");
     assert.equal(await evaluate("document.body.textContent.includes('synthetic-flow-r1')"), false);
-    assert.match(await evaluate("document.getElementById('saved-view-status').textContent"), /Unauthorized or revoked/);
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    assert.match(await evaluate("location.search"), /return_to=/);
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: savedUrl });
     await waitFor(async () => evaluate("document.querySelector('#estate-rows tr[data-silo]')?.dataset.silo === 'flow'").catch(() => false), "Saved view did not recover after 401 test");
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer denied-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer denied-cdp", Origin: "https://10.0.0.139:7778" } });
     await evaluate("window.dispatchEvent(new PopStateEvent('popstate'))");
     await waitFor(async () => evaluate("document.getElementById('estate-count').textContent === 'Unavailable'").catch(() => false), "403 revocation did not fail closed");
     assert.match(await evaluate("document.getElementById('saved-view-status').textContent"), /Unauthorized or revoked/);
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "http://10.0.0.139:7778" } });
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer now-cdp", Origin: "https://10.0.0.139:7778" } });
     await send("Page.navigate", { url: safeShareUrl });
     await waitFor(async () => evaluate("document.querySelector('#estate-rows tr[data-silo]')?.dataset.silo === 'flow'").catch(() => false), "Safe share link did not restore context");
     assert.equal(await evaluate("new URLSearchParams(location.search).has('saved_view')"), false);

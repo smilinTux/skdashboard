@@ -37,6 +37,34 @@ def _coverage(item: Mapping[str, object]) -> dict:
     return {"reporting": reporting, "expected": expected, "percent": percent}
 
 
+def _source_status(item: Mapping[str, object]) -> dict:
+    status = item.get("source_status")
+    if isinstance(status, dict):
+        return status
+    truth = str(item["truth_state"])
+    coverage = _coverage(item)
+    available = truth not in {"unavailable", "unreachable", "unknown"}
+    return {
+        "requirement": "required",
+        "availability": {"state": "available" if available else truth},
+        "freshness": {
+            "state": truth if truth in {"current", "stale"} else "unknown",
+        },
+        "coverage": {
+            "state": (
+                "partial"
+                if truth == "partial"
+                else "complete"
+                if coverage["percent"] == 100.0
+                else "unknown"
+            ),
+        },
+        "data_quality": {
+            "state": "degraded" if item.get("errors") else "valid" if available else "unknown",
+        },
+    }
+
+
 def _safe_provenance(item: Mapping[str, object]) -> list[dict]:
     state = str(item["truth_state"])
     if state == "stale":
@@ -110,6 +138,26 @@ def project_data_quality(observations: Iterable[Mapping[str, object]]) -> dict:
     expected_sources = len(items)
     manifest = registry_manifest()
     overall = min((str(item["truth_state"]) for item in items), key=_STATE_ORDER.get)
+    statuses = [_source_status(item) for item in items]
+    dimensions = ("availability", "freshness", "coverage", "data_quality")
+    status_counts = {
+        dimension: dict(
+            sorted(Counter(str(status[dimension]["state"]) for status in statuses).items())
+        )
+        for dimension in dimensions
+    }
+    degradation_reasons = Counter(
+        str(status[dimension]["reason"]["code"])
+        for status in statuses
+        for dimension in dimensions
+        if isinstance(status[dimension].get("reason"), dict)
+        and status[dimension]["reason"].get("code")
+    )
+    degradation_reasons.update(
+        "POLICY_FILTERED"
+        for item in items
+        if item.get("visibility", {}).get("state") == "policy_filtered"
+    )
     return {
         "projection_type": "data_quality",
         "schema_version": "1.1.0",
@@ -124,6 +172,20 @@ def project_data_quality(observations: Iterable[Mapping[str, object]]) -> dict:
         "source_count": len(items),
         "issue_count": len(issues),
         "issues": issues,
+        "source_status_rollup": {
+            "requirements": dict(
+                sorted(Counter(str(status["requirement"]) for status in statuses).items())
+            ),
+            **status_counts,
+            "degradation_reasons": dict(sorted(degradation_reasons.items())),
+            "visibility": dict(
+                sorted(
+                    Counter(
+                        str(item.get("visibility", {}).get("state", "unknown")) for item in items
+                    ).items()
+                )
+            ),
+        },
         "metric_registry": {
             "registry_version": manifest["registry_version"],
             "registry_hash": manifest["registry_hash"],

@@ -1,7 +1,8 @@
 // Overview home: operational summary tiles + active work + recent activity +
 // agent health, from one /api/overview call. Live-refreshes over SSE.
-import { esc, getJSON, timeShort, avatarColor } from "./api.js";
+import { esc, getJSON, timeShort, avatarColor, renderSignInAction } from "./api.js";
 import { openCard, initPanel } from "./editor.js";
+import { createLiveConnection } from "./live_connection.js";
 import {
   DEFAULT_CONTEXT, REGISTRY_HASH, REGISTRY_VERSION, SILOS, TRUTH_STATES,
   apiUrl, listViews, normalizedContext, parseUrl, removeView, responseMatches,
@@ -17,6 +18,7 @@ let loadEpoch = 0;
 let currentContext = normalizedContext(DEFAULT_CONTEXT);
 let contextBlocked = false;
 let currentQuality = null;
+let liveConnection;
 
 async function load() {
   if (contextBlocked) return;
@@ -24,6 +26,7 @@ async function load() {
   clearScopedForTransition();
   const protectedReady = await loadQuality(epoch, currentContext);
   if (protectedReady !== true) return;
+  liveConnection.pollSucceeded();
   if (hasFilters()) {
     setLegacyVisible(false);
     return;
@@ -174,7 +177,7 @@ function signalFor(id, items) {
     fleet: () => `${aggregateValue(first, "graded")} graded, ${aggregateValue(first, "error")} errors, ${aggregateValue(first, "warn")} warnings`,
     ai: () => `Harness ${aggregateValue(first, "observation_count")} observations; gateway ${aggregateValue(second, "observation_count")} observations`,
     economy: () => `${aggregateValue(first, "regressions")} performance regressions; ${aggregateValue(second, "total_supply")} Joule supply`,
-    governance: () => `${aggregateValue(first, "denials")} policy denials; policy evidence ${aggregateValue(first, "available")}`,
+    governance: () => `${aggregateValue(first, "active_identities")} active, ${aggregateValue(first, "inactive_identities")} inactive identities; policy evidence ${aggregateValue(first, "available")}`,
     legal: () => first.aggregate ? `${aggregateValue(first, "matters")} matter-free aggregate records; deadline pressure ${aggregateValue(first, "deadline_pressure")}` : "Policy-filtered aggregate unavailable",
     corpus: () => `${aggregateValue(first, "approved_releases")} approved releases; ${aggregateValue(first, "pipeline_failures")} pipeline failures`,
     operator: () => `${aggregateValue(first, "open_conditions")} open conditions, ${aggregateValue(first, "ready_actions")} ready-action observations; ${aggregateValue(second, "discovered")} SKOS modules`,
@@ -204,28 +207,108 @@ function renderEstate(items) {
     const sources = silo.adapters.map((adapter) => byId.get(adapter));
     return (!currentContext.selected_silo || silo.id === currentContext.selected_silo)
       && (!currentContext.truth || combinedState(sources) === currentContext.truth);
+  }).sort((a, b) => {
+    const rank = { unreachable: 0, unavailable: 1, stale: 2, partial: 3, unknown: 4, current: 5, not_applicable: 6 };
+    return rank[combinedState(a.adapters.map((adapter) => byId.get(adapter)))] - rank[combinedState(b.adapters.map((adapter) => byId.get(adapter)))];
   });
   rows.innerHTML = visible.map((silo) => {
     const sources = silo.adapters.map((adapter) => byId.get(adapter));
     const state = combinedState(sources);
     const owners = [...new Set(sources.map((item) => item.owner))].join(" + ");
     const visibility = sources.some((item) => item.visibility.state === "policy_filtered") ? "Policy filtered" : "Visible";
+    const reasons = sources.map((item) => {
+      const provenance = (item.safe_provenance || []).map((entry) => `${entry.code}: ${entry.message}`).join("; ");
+      return `${item.adapter_id}: ${provenance || (item.truth_state === "current" ? "Current" : "No reason supplied")}`;
+    });
+    const required = sources.filter((item) => item.required !== false).length;
+    const optional = sources.length - required;
     const metricSource = silo.metricSource || silo.adapters[0];
     const metricSourceHere = silo.adapters.includes(metricSource);
     estateEvidence.set(silo.id, { ...silo, sources, state, owners, visibility, metricSource, metricSourceHere });
     return `<tr data-silo="${esc(silo.id)}" data-source-count="${sources.length}">
       <td><strong>${esc(silo.label)}</strong><small>Owner: ${esc(owners)}</small></td>
       <td><span class="truth-badge ${esc(state)}"><b aria-hidden="true">${QUALITY_ICON[state]}</b>${esc(state.replace("_", " "))}</span><small>${esc(visibility)}</small></td>
+      <td class="now-reason"><strong>${state === "current" ? "Current" : "Why not current"}</strong>${reasons.map((reason) => `<small>${esc(reason)}</small>`).join("")}</td>
+      <td><span class="source-count">${required} required · ${optional} optional</span><small>${sources.map((item) => esc(item.adapter_id)).join(", ")}</small></td>
       <td><strong>${esc(signalFor(silo.id, sources))}</strong><small>Source aggregate only; no AI inference</small></td>
       <td><span class="mono">${esc(silo.metric)}</span><small>definition only; result not projected</small><small>scope estate; window latest; ${esc(contextLabel())}; registry source ${esc(metricSource)}${metricSourceHere ? "" : "; source observation appears in another silo"}</small><small>${esc(coverageFor(sources))}</small></td>
       <td><strong>Unknown</strong><small>No comparable baseline is projected</small></td>
       <td><button class="quality-preview-button estate-evidence-button" type="button" data-silo="${esc(silo.id)}" aria-label="Evidence for ${esc(silo.label)}">Evidence</button></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="quality-empty">No authorized silo matches this presentation filter. No hidden result is inferred.</td></tr>`;
   const sourceCount = [...estateEvidence.values()].reduce((total, value) => total + value.sources.length, 0);
   document.getElementById("estate-count").textContent = `${visible.length} silos | ${sourceCount} sources`;
   rows.querySelectorAll(".estate-evidence-button").forEach((button) => button.addEventListener("click", () => openEstateEvidence(button.dataset.silo, button)));
   return true;
+}
+
+function renderAiBrief(items) {
+  const sources = items.filter((item) => ["skcounter.harness", "skgateway.observed"].includes(item.adapter_id));
+  const observed = sources.filter((item) => item.aggregate && item.aggregate.observation_count > 0);
+  if (!observed.length) return;
+  const gateway = observed.find((item) => item.adapter_id === "skgateway.observed");
+  const attention = sources.filter((item) => !["current", "not_applicable"].includes(item.truth_state));
+  const evidence = observed.map((item) => `${item.owner}: ${item.aggregate.observation_count} observations, ${coverageText(item.coverage)}, truth ${item.truth_state}`).join("; ");
+  const gatewaySummary = gateway
+    ? `SKGateway reports ${gateway.aggregate.observation_count} requests with ${coverageText(gateway.coverage).toLowerCase()}. ${gateway.aggregate.cost_state === "unavailable" ? "Cost remains unavailable." : `Cost state is ${gateway.aggregate.cost_state}.`}`
+    : "No gateway-observed request population is available.";
+  document.getElementById("ai-heading").textContent = attention.length
+    ? `Evidence brief: ${attention.length} AI source${attention.length === 1 ? " needs" : "s need"} attention`
+    : "Evidence brief: AI sources are current";
+  document.getElementById("ai-summary").textContent = `${gatewaySummary} Request activity is not treated as an accepted outcome or verified effect.`;
+  document.getElementById("ai-evidence").textContent = evidence;
+  document.getElementById("ai-practice").textContent = "Keep usage, cost, accepted outcomes, and verified effects as separate measures.";
+  document.getElementById("ai-confidence").textContent = "High for displayed source state; not calculated for outcomes or causal effect.";
+  document.getElementById("ai-uncertainty").textContent = "Accepted-outcome and post-decision effect evidence are not projected.";
+  document.getElementById("ai-counter").textContent = attention.length
+    ? attention.map((item) => `${item.owner} is ${item.truth_state}`).join("; ")
+    : "No source-state warning in the two bounded AI usage lanes.";
+  document.getElementById("ai-alternatives").textContent = "Open AI outcomes for lane provenance or source evidence for exact reconciliation details.";
+  document.getElementById("ai-impact").textContent = "No impact estimate or action authorization. Restore missing coverage before drawing outcome conclusions.";
+}
+
+function briefList(title, entries, nextSteps = false) {
+  if (!entries.length) return "";
+  return `<section><h4>${esc(title)}</h4><ol>${entries.map((entry) => {
+    const text = nextSteps ? entry.proposal : entry.summary;
+    const sources = (entry.sources || []).map((source) => `${source.source_id} | ${source.freshness} | ${source.observed_at || "time unavailable"}`).join("; ");
+    return `<li><strong>${esc(text)}</strong><small>${esc(entry.summary)} | ${esc(entry.uncertainty)} | ${esc(sources)}</small></li>`;
+  }).join("")}</ol></section>`;
+}
+
+async function analyzeNow() {
+  const button = document.getElementById("ai-analyze-button");
+  const panel = document.getElementById("ai-analysis");
+  const status = document.getElementById("ai-analysis-status");
+  const alert = document.getElementById("ai-analysis-alert");
+  const body = document.getElementById("ai-analysis-body");
+  button.disabled = true;
+  panel.hidden = false;
+  status.textContent = "Analyzing current authorized metrics...";
+  alert.hidden = true;
+  alert.textContent = "";
+  body.replaceChildren();
+  try {
+    const brief = await getJSON(
+      `/api/v1/now/ai-brief?${safeSearch(currentContext)}`,
+      { timeoutMs: 50000 },
+    );
+    status.textContent = brief.status === "abstained"
+      ? `AI abstained: ${brief.abstention || "insufficient evidence"}`
+      : `Generated ${timeShort(brief.generated_at)}. Proposals only; no action was taken.`;
+    body.innerHTML = [
+      briefList("What is happening", brief.conditions || []),
+      briefList("Risks", brief.risks || []),
+      briefList("Anomalies", brief.anomalies || []),
+      briefList("Recommended next steps", brief.next_steps || [], true),
+    ].join("") || "<p>No supported insight was returned.</p>";
+  } catch (error) {
+    status.textContent = "AI analysis unavailable. The evidence brief above remains current.";
+    alert.textContent = "The configured SKGateway dashboard route could not return a valid analysis. Check gateway health, then retry.";
+    alert.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function openEstateEvidence(siloId, trigger) {
@@ -247,11 +330,15 @@ function openEstateEvidence(siloId, trigger) {
 }
 
 function coverageText(coverage) {
-  if (!coverage || coverage.percent == null) return "Coverage unavailable";
+  if (!coverage) return "Coverage unavailable";
+  const percent = coverage.percent == null && Number.isFinite(coverage.expected) && coverage.expected > 0 && Number.isFinite(coverage.reporting)
+    ? Math.round((coverage.reporting / coverage.expected) * 100)
+    : coverage.percent;
+  if (percent == null) return "Coverage unavailable";
   if (coverage.population === "declared_sources") {
-    return `${coverage.reporting} of ${coverage.expected} sources observed (${coverage.percent}%)`;
+    return `${coverage.reporting} of ${coverage.expected} sources observed (${percent}%)`;
   }
-  return `${coverage.reporting} of ${coverage.expected} reporting (${coverage.percent}%)`;
+  return `${coverage.reporting} of ${coverage.expected} reporting (${percent}%)`;
 }
 
 function clearLegacyOverview(message) {
@@ -272,7 +359,7 @@ function clearProtectedEstate(message) {
   document.getElementById("estate-evidence-body").replaceChildren();
   document.getElementById("quality-preview-body").replaceChildren();
   document.getElementById("command-results").replaceChildren();
-  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="6" class="quality-empty">${esc(message)} No silo is assumed healthy.</td></tr>`;
+  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="8" class="quality-empty">${esc(message)} No silo is assumed healthy.</td></tr>`;
   document.getElementById("estate-count").textContent = "Unavailable";
   document.getElementById("quality-summary").innerHTML = `<span class="truth-badge unavailable"><b aria-hidden="true">!</b> Unavailable</span><span>${esc(message)}</span>`;
   document.getElementById("quality-issues").innerHTML = `<p class="quality-empty">Protected data-quality evidence is unavailable. No source is assumed healthy.</p>`;
@@ -288,7 +375,7 @@ function clearScopedForTransition() {
   }
   document.getElementById("estate-evidence-body").replaceChildren();
   document.getElementById("quality-preview-body").replaceChildren();
-  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="6"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
+  document.getElementById("estate-rows").innerHTML = `<tr><td colspan="8"><div class="spinner" aria-label="Loading authorized scope"></div></td></tr>`;
   document.getElementById("estate-count").textContent = "Loading";
   document.getElementById("quality-summary").innerHTML = `<div class="spinner" aria-label="Loading data quality"></div>`;
   document.getElementById("quality-issues").replaceChildren();
@@ -306,12 +393,14 @@ async function loadQuality(epoch, context) {
       throw new Error("Metric registry changed; this view is stale");
     }
     if (!renderEstate(response.items)) throw new Error("Expected 16 bounded adapter observations");
+    renderAiBrief(response.items);
     renderQuality(quality);
     currentQuality = quality;
     refreshCommandResults();
     return true;
   } catch (error) {
     if (epoch !== loadEpoch) return null;
+    liveConnection.pollFailed(error);
     clearProtectedEstate(`Protected estate evidence is unavailable: ${error.message}.`);
     if (currentContext.saved_view) document.getElementById("saved-view-status").textContent = "Unauthorized or revoked. The saved view retained no protected evidence.";
     return false;
@@ -607,29 +696,27 @@ function renderHealth(agent) {
   el.innerHTML = pillarHtml + stats;
 }
 
-function connectSSE() {
+function prepareLiveConnection() {
   const dot = document.getElementById("live-dot"), text = document.getElementById("live-text");
   let deb = null;
-  const es = new EventSource("/api/events");
   const refresh = () => { clearTimeout(deb); deb = setTimeout(load, 400); };
-  es.addEventListener("open", () => { dot.classList.add("on"); text.textContent = "live"; });
-  es.addEventListener("board_changed", refresh);
-  es.addEventListener("card_changed", refresh);
-  es.addEventListener("error", () => { dot.classList.remove("on"); text.textContent = "reconnecting"; });
+  liveConnection = createLiveConnection({ dot, text, refresh, signIn: renderSignInAction });
 }
 
 const initialContextReady = initializeContext();
+prepareLiveConnection();
 document.getElementById("ai-boundary-button").addEventListener("click", (event) => {
   const dialog = document.getElementById("ai-boundary");
   dialog._trigger = event.currentTarget;
   dialog.showModal();
 });
+document.getElementById("ai-analyze-button").addEventListener("click", analyzeNow);
 for (const dialog of document.querySelectorAll("dialog")) {
   dialog.addEventListener("close", () => {
     if (dialog._trigger) dialog._trigger.focus();
   });
 }
 initPanel(() => load());   // card detail panel (edit/notes/AI); reload on change
-if (initialContextReady) load();
-connectSSE();
+if (initialContextReady) void load().finally(() => liveConnection.start());
+else liveConnection.start();
 setInterval(load, 30000);

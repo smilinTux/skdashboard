@@ -24,7 +24,7 @@ from starlette.routing import Route
 
 COOKIE_NAME = "__Host-skdashboard_session"
 SCOPES = "openid skdashboard.read skdashboard.events.read"
-SESSION_TTL = 8 * 60 * 60
+SESSION_TTL = 24 * 60 * 60
 LOGIN_TTL = 5 * 60
 MAX_LOGIN_GLOBAL = 128
 MAX_LOGIN_SOURCE = 16
@@ -575,6 +575,31 @@ class EncryptedSessionAdapter:
                 }
             )
             fresh = self._validate_token_response(token, now)
+        except OIDCExchangeError as exc:
+            with self._connect() as connection:
+                connection.execute(
+                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
+                    (old_encrypted, _digest(handle), reserved_encrypted),
+                )
+                if exc.category == "upstream_denied":
+                    connection.execute(
+                        "DELETE FROM sessions WHERE handle_hash = ?",
+                        (_digest(handle),),
+                    )
+            if exc.category == "upstream_denied":
+                return SessionResolution("reauth_required")
+            return SessionResolution("unavailable")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            with self._connect() as connection:
+                connection.execute(
+                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ? AND encrypted = ?",
+                    (old_encrypted, _digest(handle), reserved_encrypted),
+                )
+                connection.execute(
+                    "DELETE FROM sessions WHERE handle_hash = ?",
+                    (_digest(handle),),
+                )
+            return SessionResolution("reauth_required")
         except Exception:
             with self._connect() as connection:
                 connection.execute(
@@ -603,11 +628,36 @@ class EncryptedSessionAdapter:
                     record["control_plane_session"], request
                 )
             except SessionReauthenticationRequired:
-                with self._connect() as connection:
-                    connection.execute(
-                        "DELETE FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+                if not isinstance(subject, str):
+                    return SessionResolution("reauth_required")
+                try:
+                    replacement = self.control_plane_bridge.enroll(
+                        subject,
+                        self.config.redirect_uri.rsplit("/auth/callback", 1)[0],
                     )
-                return SessionResolution("reauth_required")
+                    if (
+                        not isinstance(replacement, str)
+                        or not replacement.isascii()
+                        or not 32 <= len(replacement) <= 128
+                    ):
+                        raise ValueError("invalid control-plane session handle")
+                    control_plane_request = self.control_plane_bridge.request(
+                        replacement, request
+                    )
+                    record["control_plane_session"] = replacement
+                    with self._connect() as connection:
+                        connection.execute(
+                            "UPDATE sessions SET encrypted = ? WHERE handle_hash = ?",
+                            (self._seal(record), _digest(handle)),
+                        )
+                except (PermissionError, ValueError, TypeError):
+                    with self._connect() as connection:
+                        connection.execute(
+                            "DELETE FROM sessions WHERE handle_hash = ?", (_digest(handle),)
+                        )
+                    return SessionResolution("reauth_required")
+                except Exception:
+                    return SessionResolution("unavailable")
             except Exception:
                 return SessionResolution("unavailable")
         return SessionResolution(

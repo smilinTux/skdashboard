@@ -63,8 +63,9 @@ def test_every_estate_population_has_bounded_typed_metadata() -> None:
     for item in items:
         assert item["schema_version"] == SCHEMA_VERSION
         assert item["owner"]
-        assert item["query_budget"] == {"max_items": 1, "timeout_ms": 1_000}
-        assert item["ttl_seconds"] == 60
+        spec = next(value for value in SPECS if value.adapter_id == item["adapter_id"])
+        assert item["query_budget"] == {"max_items": 1, "timeout_ms": spec.timeout_ms}
+        assert item["ttl_seconds"] == spec.ttl_seconds
         assert item["classification"] in {"internal", "confidential"}
         assert item["truth_state"] == "unavailable"
         assert item["aggregate"] is None
@@ -113,6 +114,86 @@ def test_truth_states_fail_closed_and_are_sensitive_to_source_evidence() -> None
     assert timeout["truth_state"] == "unavailable"
     assert timeout["errors"][0]["code"] == "SOURCE_TIMEOUT"
     assert "secret" not in str(timeout)
+
+
+def test_source_status_keeps_dimensions_independent() -> None:
+    spec = SPECS[0]
+    item = project_estate(
+        {
+            spec.adapter_id: aggregate_reader(
+                {field: 1 for field in spec.fields},
+                expected=3,
+                reporting=2,
+                observed_at=(NOW - timedelta(seconds=61)).isoformat(),
+                errors=["one collector returned malformed data"],
+            )
+        },
+        now=NOW,
+    )[0]
+
+    assert item["truth_state"] == "partial"
+    assert item["coverage"] == {"expected": 3, "reporting": 2}
+    assert item["source_status"] == {
+        "requirement": "required",
+        "availability": {"state": "available"},
+        "freshness": {
+            "state": "stale",
+            "age_seconds": 61,
+            "ttl_seconds": 60,
+            "reason": {"code": "OBSERVATION_EXPIRED"},
+        },
+        "coverage": {
+            "state": "partial",
+            "expected": 3,
+            "reporting": 2,
+            "reason": {"code": "COVERAGE_PARTIAL"},
+        },
+        "data_quality": {
+            "state": "degraded",
+            "reason": {"code": "SOURCE_REPORTED_ERRORS"},
+        },
+    }
+
+
+def test_source_status_failure_and_optional_policy_visibility_are_explicit() -> None:
+    required = SPECS[0]
+    unavailable = project_estate({}, now=NOW)[0]
+    assert unavailable["source_status"] == {
+        "requirement": "required",
+        "availability": {
+            "state": "unavailable",
+            "reason": {"code": "SOURCE_UNAVAILABLE"},
+        },
+        "freshness": {
+            "state": "unknown",
+            "age_seconds": None,
+            "ttl_seconds": required.ttl_seconds,
+            "reason": {"code": "OBSERVATION_UNAVAILABLE"},
+        },
+        "coverage": {
+            "state": "unknown",
+            "expected": None,
+            "reporting": None,
+            "reason": {"code": "COVERAGE_UNAVAILABLE"},
+        },
+        "data_quality": {
+            "state": "unknown",
+            "reason": {"code": "QUALITY_UNAVAILABLE"},
+        },
+    }
+
+    protected = next(spec for spec in SPECS if spec.adapter_id == "sklegal.global")
+    observed = aggregate_reader(
+        {field: 1 for field in protected.fields}, observed_at=NOW.isoformat()
+    )
+    item = next(
+        item
+        for item in project_estate({protected.adapter_id: observed}, now=NOW)
+        if item["adapter_id"] == protected.adapter_id
+    )
+    assert item["source_status"]["requirement"] == "optional"
+    assert item["source_status"]["availability"]["state"] == "available"
+    assert item["visibility"]["state"] == "policy_filtered"
 
 
 def test_malformed_or_future_source_cannot_leak_or_render_current() -> None:
@@ -182,7 +263,16 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         "last_successful_reconciliation": NOW.isoformat(),
     }
     fleet = {
-        "summary": {"graded": 1, "skipped": 1, "error": 0, "warn": 0, "info": 0, "ok": 1},
+        "summary": {
+            "graded": 1,
+            "skipped": 1,
+            "error": 0,
+            "warn": 0,
+            "info": 0,
+            "ok": 1,
+            "expected_reporters": 2,
+            "reporting_nodes": 2,
+        },
         "errors": [],
     }
 
@@ -240,11 +330,14 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         items = project_estate(readers, now=NOW)
 
     by_id = {item["adapter_id"]: item for item in items}
+    assert by_id["skcapstone.itil"]["truth_state"] == "current"
+    assert by_id["skcapstone.itil"]["observed_at"] == "2026-08-24T12:00:00Z"
     assert by_id["skcoord.agent_presence"]["aggregate"] == {
         "total_agents": 2,
         "active_agents": 1,
     }
-    assert by_id["skcapstone.fleet"]["truth_state"] == "partial"
+    assert by_id["skcapstone.fleet"]["truth_state"] == "current"
+    assert by_id["skcapstone.fleet"]["coverage"] == {"expected": 2, "reporting": 2}
     assert by_id["cmdb.configuration"]["aggregate"] == {
         "total": 2,
         "operational": 2,
@@ -262,6 +355,187 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
     assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.25
     assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
     assert by_id["skjoule.wallet"]["aggregate"] == {"total_supply": 7, "active_agents": 1}
+
+    harness_spec = next(spec for spec in SPECS if spec.adapter_id == "skcounter.harness")
+    gateway_spec = next(spec for spec in SPECS if spec.adapter_id == "skgateway.observed")
+    assert harness_spec.ttl_seconds == 1_200
+    assert gateway_spec.ttl_seconds == 60
+
+
+def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry(
+    tmp_path: Path,
+) -> None:
+    empty = {
+        "generated_at": NOW.isoformat(),
+        "summary": {
+            "tokens": {"total": 0},
+            "cost_usd": 0.0,
+            "cost_state": "unavailable",
+        },
+        "coverage": {
+            "expected_nodes": 0,
+            "reporting_nodes": 0,
+            "fresh_collectors": 0,
+            "delayed_collectors": 0,
+            "stale_collectors": 0,
+        },
+        "collectors": [],
+        "observation_count": 0,
+        "errors": [],
+    }
+    harness = {
+        **empty,
+        "summary": {
+            "tokens": {"total": 125},
+            "cost_usd": 1.75,
+            "cost_state": "estimated",
+        },
+        "coverage": {**empty["coverage"], "expected_nodes": 1, "reporting_nodes": 1,
+                     "fresh_collectors": 1},
+        "collectors": [{"last_seen": NOW.isoformat(), "status": "fresh"}],
+        "observation_count": 1,
+    }
+    telemetry = {
+        "observed_at": NOW.isoformat(),
+        "errors": ["vllm: source unavailable"],
+        "sources": [
+            {"source": "vllm", "summary": {"running": 2, "queued": 1}},
+            {
+                "source": "skgateway",
+                "summary": {
+                    "totalRequests": 9,
+                    "totalInputTokens": 80,
+                    "totalOutputTokens": 20,
+                    "totalCostUsd": 0.5,
+                    "unpricedRequests": 0,
+                },
+                "backends": {"a": {"observed": True}, "b": {"observed": False}},
+            },
+        ],
+    }
+
+    with (
+        patch(
+            "skdashboard.dashboard_skcounter.get_ai_usage",
+            side_effect=lambda _home, filters: (
+                harness if filters["lane"] == "harness_reported" else empty
+            ),
+        ),
+        patch(
+            "skdashboard.dashboard_observability.collect_gateway",
+            return_value={
+                "observed_at": telemetry["observed_at"],
+                "source": telemetry["sources"][1],
+                "errors": [],
+            },
+        ),
+    ):
+        readers = _local_readers(tmp_path, board_data={})
+        items = project_estate(
+            {
+                key: Reader(payload=readers[key]())
+                for key in ("skcounter.harness", "skgateway.observed")
+            },
+            now=NOW,
+        )
+
+    by_id = {item["adapter_id"]: item for item in items}
+    assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.75
+    assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
+    assert by_id["skgateway.observed"]["aggregate"]["tokens_total"] == 100
+    assert by_id["skgateway.observed"]["aggregate"]["observation_count"] == 9
+    assert by_id["skgateway.observed"]["coverage"] == {"expected": 1, "reporting": 1}
+    assert by_id["skgateway.observed"]["truth_state"] == "current"
+
+
+def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Path) -> None:
+    stale = {
+        "generated_at": NOW.isoformat(),
+        "summary": {"tokens": {"total": 1}, "cost_usd": 0.0, "cost_state": "unavailable"},
+        "coverage": {
+            "expected_nodes": 1,
+            "reporting_nodes": 1,
+            "fresh_collectors": 0,
+            "delayed_collectors": 0,
+            "stale_collectors": 1,
+        },
+        "collectors": [{"last_seen": "2026-01-01T00:00:00Z", "status": "stale"}],
+        "observation_count": 1,
+        "errors": [],
+    }
+    live = {
+        "observed_at": NOW.isoformat(),
+        "source": {
+            "summary": {
+                "totalRequests": 12,
+                "totalInputTokens": 80,
+                "totalOutputTokens": 20,
+                "totalCostUsd": 0,
+                "unpricedRequests": 12,
+            },
+            "backends": {
+                **{f"seen-{index}": {"observed": True} for index in range(3)},
+                **{f"idle-{index}": {"observed": False} for index in range(6)},
+            },
+        },
+        "errors": [],
+    }
+    with (
+        patch("skdashboard.dashboard_skcounter.get_ai_usage", return_value=stale),
+        patch("skdashboard.dashboard_observability.collect_gateway", return_value=live),
+    ):
+        result = _local_readers(tmp_path, board_data={})["skgateway.observed"]()
+
+    assert result["aggregate"]["observation_count"] == 12
+    assert result["aggregate"]["tokens_total"] == 100
+    assert result["coverage"] == {"expected": 1, "reporting": 1}
+
+
+def test_skcounter_collector_age_buckets_do_not_reduce_reporting_coverage(
+    tmp_path: Path,
+) -> None:
+    def usage(_home, _filters):
+        return {
+            "generated_at": NOW.isoformat(),
+            "summary": {
+                "tokens": {"total": 10},
+                "cost_usd": None,
+                "cost_state": "unavailable",
+                "cache_ratio": None,
+            },
+            "coverage": {
+                "expected_nodes": 2,
+                "reporting_nodes": 2,
+                "fresh_collectors": 1,
+                "delayed_collectors": 1,
+                "stale_collectors": 0,
+            },
+            "collectors": [
+                {"last_seen": NOW.isoformat(), "node_id": "fresh", "status": "fresh"},
+                {
+                    "last_seen": (NOW - timedelta(hours=2)).isoformat(),
+                    "node_id": "delayed",
+                    "status": "delayed",
+                },
+            ],
+            "observation_count": 2,
+            "errors": [],
+        }
+
+    with patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage):
+        reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
+            "skcounter.harness"
+        ]
+        result = next(
+            item
+            for item in project_estate({"skcounter.harness": Reader(payload=reader())}, now=NOW)
+            if item["adapter_id"] == "skcounter.harness"
+        )
+
+    assert result["truth_state"] == "current"
+    assert result["coverage"] == {"expected": 2, "reporting": 2}
+    assert result["aggregate"]["fresh_collectors"] == 1
+    assert result["aggregate"]["delayed_collectors"] == 1
 
 
 def test_overview_etag_ignores_delivery_clocks_but_changes_with_source() -> None:
@@ -328,7 +602,16 @@ def test_query_timeout_returns_within_declared_budget() -> None:
 
 def test_empty_or_malformed_owner_folds_never_become_current_zero(tmp_path: Path) -> None:
     empty_fleet = {
-        "summary": {"graded": 0, "skipped": 0, "error": 0, "warn": 0, "info": 0, "ok": 0},
+        "summary": {
+            "graded": 0,
+            "skipped": 0,
+            "error": 0,
+            "warn": 0,
+            "info": 0,
+            "ok": 0,
+            "expected_reporters": 0,
+            "reporting_nodes": 0,
+        },
         "errors": [],
     }
     with patch("skdashboard.dashboard_fleet.get_drift", return_value=empty_fleet):
@@ -527,9 +810,57 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
 
         assert result["aggregate"]["services"] == 3
         assert result["aggregate"]["releases"] == 2
+        assert result["coverage"] == {"expected": 3, "reporting": 2}
+        assert result["observed_at"] == NOW.isoformat().replace("+00:00", "Z")
         assert result["truth_state"] == "partial"
         assert len(result["errors"]) == 1
         assert result["errors"][0]["code"] == "SOURCE_PARTIAL"
+
+
+def test_service_release_adapter_distinguishes_empty_population_from_failure(
+    tmp_path: Path,
+) -> None:
+    with patch("skcoord.cmdb.CMDBManager") as mock_cmdb:
+        mock_cmdb.return_value.list_cis.return_value = []
+        reader = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcapstone.service_release"]
+
+        result = next(
+            item
+            for item in project_estate(
+                {"skcapstone.service_release": Reader(payload=reader())}, now=NOW
+            )
+            if item["adapter_id"] == "skcapstone.service_release"
+        )
+
+    assert result["truth_state"] == "unknown"
+    assert result["coverage"] == {"expected": 0, "reporting": 0}
+    assert result["aggregate"] is None
+    assert result["errors"] == []
+
+
+def test_service_release_adapter_watermark_covers_deployment_health(tmp_path: Path) -> None:
+    service_ci = Mock(
+        id="service-1",
+        ci_type="service",
+        status="operational",
+        attributes={"active_state": "active", "observed_at": "2020-01-01T00:00:00Z"},
+    )
+    with patch("skcoord.cmdb.CMDBManager") as mock_cmdb:
+        mock_cmdb.return_value.list_cis.return_value = [service_ci]
+        reader = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcapstone.service_release"]
+        current = reader()
+        service_ci.status = "degraded"
+        service_ci.attributes["active_state"] = "failed"
+        degraded = reader()
+
+    assert current["observed_at"] == NOW.isoformat()
+    assert degraded["observed_at"] == NOW.isoformat()
+    assert current["watermark"] != degraded["watermark"]
+    assert current["coverage"] == {"expected": 1, "reporting": 1}
 
 
 def test_service_release_adapter_fails_closed_on_cmdb_error(tmp_path: Path) -> None:
@@ -557,11 +888,15 @@ def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
     aggregate_path = perf_data_path / "aggregate.json"
 
     perf_data = {
+        "schema_version": "skperf.aggregate@1.0.0",
+        "population": "approved_benchmarks",
+        "produced_at": NOW.isoformat(),
+        "source_observed_at": NOW.isoformat(),
+        "source_sha256": "a" * 64,
         "regressions": 3,
         "capacity_pressure": 0.75,
         "reporting_benchmarks": 8,
         "expected_benchmarks": 10,
-        "observed_at": NOW.isoformat(),
         "errors": ["benchmark_timeout"],
     }
     aggregate_path.write_text(json.dumps(perf_data))
@@ -665,10 +1000,13 @@ def test_capauth_policy_adapter_reads_sanitized_estate(tmp_path: Path) -> None:
     result = next(item for item in items if item["adapter_id"] == "capauth.policy")
 
     assert result["aggregate"]["available"] is True
-    assert result["aggregate"]["denials"] == 1
+    assert result["aggregate"]["denials"] is None
+    assert result["aggregate"]["inspected_identities"] == 2
+    assert result["aggregate"]["active_identities"] == 1
+    assert result["aggregate"]["inactive_identities"] == 1
     assert result["coverage"]["expected"] == 2
-    assert result["coverage"]["reporting"] == 1
-    assert result["truth_state"] == "partial"
+    assert result["coverage"]["reporting"] == 2
+    assert result["truth_state"] == "current"
 
 
 @pytest.mark.parametrize(
@@ -931,6 +1269,52 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
     assert result["truth_state"] == "current"
 
 
+def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(tmp_path: Path) -> None:
+    observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
+    observations.parent.mkdir(parents=True)
+    observations.write_text(
+        json.dumps(
+            {
+                "observed_at": NOW.isoformat(),
+                "conditions": [
+                    {"status": True, "polarity": "problem_when_true"},
+                    {"status": False, "polarity": "problem_when_false"},
+                    {"status": True, "polarity": "problem_when_false"},
+                ],
+            }
+        )
+    )
+
+    reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
+    result = next(
+        item
+        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        if item["adapter_id"] == "atlas.conditions"
+    )
+
+    assert result["truth_state"] == "current"
+    assert result["coverage"] == {"expected": 3, "reporting": 3}
+    assert result["aggregate"] == {"open_conditions": 2, "ready_actions": 0}
+    assert result["watermark"]["value"].startswith("sha256:")
+
+
+def test_atlas_conditions_adapter_treats_empty_snapshot_as_observed_zero(tmp_path: Path) -> None:
+    observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
+    observations.parent.mkdir(parents=True)
+    observations.write_text(json.dumps({"observed_at": NOW.isoformat(), "conditions": []}))
+
+    reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
+    result = next(
+        item
+        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        if item["adapter_id"] == "atlas.conditions"
+    )
+
+    assert result["truth_state"] == "current"
+    assert result["coverage"] == {"expected": 0, "reporting": 0}
+    assert result["aggregate"] == {"open_conditions": 0, "ready_actions": 0}
+
+
 def test_atlas_missing_timestamp_uses_source_mtime(tmp_path: Path) -> None:
     observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
     observations.parent.mkdir(parents=True)
@@ -1035,21 +1419,23 @@ def test_skos_discovery_adapter_scans_repo_modules(tmp_path: Path) -> None:
     assert result["truth_state"] == "current"
 
 
-def test_skos_discovery_uses_directory_mtime(tmp_path: Path) -> None:
+def test_skos_discovery_uses_successful_projection_time(tmp_path: Path) -> None:
     arena = tmp_path / "skcode" / "arena"
     (arena / "module1").mkdir(parents=True)
     stale_at = NOW - timedelta(seconds=61)
     os.utime(arena, (stale_at.timestamp(), stale_at.timestamp()))
 
-    reader = _local_readers(tmp_path, board_data={})["skos.discovery"]
+    reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
+        "skos.discovery"
+    ]
     result = next(
         item
         for item in project_estate({"skos.discovery": Reader(payload=reader())}, now=NOW)
         if item["adapter_id"] == "skos.discovery"
     )
 
-    assert result["truth_state"] == "stale"
-    assert result["age_seconds"] == 61
+    assert result["truth_state"] == "current"
+    assert result["age_seconds"] == 0
 
 
 def test_skos_discovery_adapter_returns_unknown_when_no_modules(tmp_path: Path) -> None:
