@@ -1,7 +1,7 @@
 // Shared API + UI helpers for the SKDashboard board.
 
 import { renderSignInAction } from "./read_only_api.js";
-export { renderSignInAction } from "./read_only_api.js";
+export { renderSignInAction };
 
 // The operator identity + capability token this page presents on every
 // privileged (write) call (Unified Consent Plane P1.3, coord card
