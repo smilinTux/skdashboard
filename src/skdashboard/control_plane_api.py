@@ -1552,6 +1552,30 @@ def routes(
 
         return JSONResponse(get_drift(home, alert=False))
 
+    async def worker_activity(request):
+        """Merge tail-started projected activity from the five chi hosts."""
+        from . import worker_stream
+
+        card = request.path_params["card"]
+        try:
+            worker_stream.validate_card(card)
+        except ValueError as exc:
+            return _error(request, 400, "INVALID_QUERY", str(exc))
+
+        async def encoded():
+            async for event in worker_stream.stream(card):
+                if event is None:
+                    yield ": heartbeat\n\n"
+                    continue
+                data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                yield f"event: {event['type']}\ndata: {data}\n\n"
+
+        return StreamingResponse(
+            encoded(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
     async def read_only_assistant(request):
         """Stream report answers while making every assistant action impossible."""
         from . import dashboard_assistant as assistant
@@ -1703,6 +1727,10 @@ def routes(
         ),
         Route("/api/economy", protected(economy_workspace, "skdashboard.read")),
         Route("/api/v1/fleet/drift", protected(fleet_workspace, "skdashboard.read")),
+        Route(
+            "/api/v1/fleet/worker-stream/{card}",
+            protected(worker_activity, "skdashboard.read"),
+        ),
         Route("/api/fleet/drift", protected(fleet_workspace, "skdashboard.read")),
         Route(
             "/api/assistant",
