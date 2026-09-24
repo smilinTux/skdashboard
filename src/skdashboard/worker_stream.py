@@ -44,6 +44,7 @@ def validate_card(card: str) -> None:
 
 
 async def _snapshot_state(host: str, card: str, spawn: Spawn) -> dict[str, Any]:
+    process: asyncio.subprocess.Process | None = None
     try:
         process = await spawn(
             *_command(host, follow=False),
@@ -56,8 +57,10 @@ async def _snapshot_state(host: str, card: str, spawn: Spawn) -> dict[str, Any]:
     except OSError:
         return _state(host, card, "no-stream", "host-unavailable")
     except asyncio.TimeoutError:
-        await _stop(process)
         return _state(host, card, "no-stream", "host-unavailable")
+    finally:
+        if process is not None and process.returncode is None:
+            await _stop(process)
     if process.returncode != 0 or len(stdout) > MAX_SNAPSHOT_BYTES:
         return _state(host, card, "no-stream", "host-unavailable")
     for line in stdout.splitlines():

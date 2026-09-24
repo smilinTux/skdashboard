@@ -41,6 +41,32 @@ class _Process:
         return self.returncode
 
 
+class _BlockingProcess(_Process):
+    def __init__(self) -> None:
+        super().__init__()
+        self.returncode = None
+        self.communicating = asyncio.Event()
+        self.reaped = False
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.communicating.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    def terminate(self) -> None:
+        super().terminate()
+        self.returncode = -15
+
+    def kill(self) -> None:
+        super().kill()
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        self.reaped = True
+        assert self.returncode is not None
+        return self.returncode
+
+
 def _snapshot(host: str, card: str, *, session: bool) -> bytes:
     row = {
         "host": host,
@@ -92,6 +118,43 @@ def test_stream_fans_in_five_tail_started_projectors() -> None:
         worker_stream.HOSTS
     )
     assert all(event["card"] == card for event in events)
+
+
+def test_cancellation_reaps_all_in_flight_snapshot_processes_within_bound() -> None:
+    async def cancel_during_snapshot() -> list[_BlockingProcess]:
+        processes: list[_BlockingProcess] = []
+        all_spawned = asyncio.Event()
+
+        async def spawn(*_command: str, **_kwargs) -> _BlockingProcess:
+            process = _BlockingProcess()
+            processes.append(process)
+            if len(processes) == len(worker_stream.HOSTS):
+                all_spawned.set()
+            return process
+
+        body = worker_stream.stream("ae43ecbf", spawn=spawn)
+        first = asyncio.create_task(anext(body))
+        await asyncio.wait_for(all_spawned.wait(), timeout=1)
+        await asyncio.wait_for(
+            asyncio.gather(*(process.communicating.wait() for process in processes)),
+            timeout=1,
+        )
+        first.cancel()
+        try:
+            await asyncio.wait_for(first, timeout=worker_stream.FOLLOWER_STOP_SECONDS)
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("cancelled stream read completed normally")
+        finally:
+            await body.aclose()
+        return processes
+
+    processes = asyncio.run(cancel_during_snapshot())
+
+    assert len(processes) == len(worker_stream.HOSTS)
+    assert all(process.terminated for process in processes)
+    assert all(process.reaped for process in processes)
 
 
 def test_current_worker_without_session_is_explicitly_no_stream() -> None:
