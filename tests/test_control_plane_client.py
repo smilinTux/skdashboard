@@ -285,3 +285,28 @@ def test_published_contract_copies_are_exact_and_schema_validators_are_sensitive
         assert (root / "src/skdashboard/contracts/v1.1.0" / name).read_bytes() == (
             root / "docs/contracts/v1.1.0" / name
         ).read_bytes()
+
+
+def test_callable_bearer_is_reread_on_every_request():
+    """A long-lived client (the MCP server) follows a bearer file the timer rotates."""
+    current = {"value": BEARER}
+
+    async def scenario():
+        client = await ControlPlaneClient.discover(
+            DISCOVERY,
+            lambda: current["value"],
+            transport=httpx.ASGITransport(app=create_fixture_app()),
+        )
+        try:
+            first = await client.health()
+            current["value"] = "rotated-but-not-valid-for-the-fixture"
+            with pytest.raises(ControlPlaneClientError):
+                await client.overview()
+            current["value"] = BEARER
+            again = await client.health()
+        finally:
+            await client.aclose()
+        return first, again
+
+    first, again = asyncio.run(scenario())
+    assert first.data and again.data == first.data
