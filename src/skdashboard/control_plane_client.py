@@ -213,7 +213,9 @@ class ControlPlaneClient:
         entry = manifest.get("entry")
         entry_url = entry.get("url") if isinstance(entry, dict) else None
         parsed_entry = urlsplit(entry_url) if isinstance(entry_url, str) else None
-        if parsed_entry is None or entry_url.rstrip("/") != origin:
+        # The entry may be any page on the same origin (the runtime publishes
+        # /control-plane/now); only scheme, host and port must match exactly.
+        if parsed_entry is None or f"{parsed_entry.scheme}://{parsed_entry.netloc}" != origin:
             raise ControlPlaneClientError("discovery entry crosses origins")
 
     async def aclose(self) -> None:

@@ -310,3 +310,37 @@ def test_callable_bearer_is_reread_on_every_request():
 
     first, again = asyncio.run(scenario())
     assert first.data and again.data == first.data
+
+
+@pytest.mark.parametrize(
+    ("entry", "accepted"),
+    [
+        (ORIGIN + "/control-plane/now", True),  # what the read-only runtime publishes
+        (ORIGIN + "/", True),
+        (ORIGIN + ":8443/control-plane/now", False),  # same host, different port
+        ("https://other.test/control-plane/now", False),
+    ],
+)
+def test_discovery_entry_may_be_any_page_on_the_same_origin(entry, accepted) -> None:
+    manifest = {
+        "schemaVersion": "1.1",
+        "entry": {"url": entry},
+        "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
+        "health": ORIGIN + "/api/v1/health",
+    }
+
+    async def handler(_request):
+        return httpx.Response(200, json=manifest)
+
+    async def run():
+        return await ControlPlaneClient.discover(
+            DISCOVERY, BEARER, transport=httpx.MockTransport(handler)
+        )
+
+    if accepted:
+        client = asyncio.run(run())
+        assert client.origin == ORIGIN
+        asyncio.run(client.aclose())
+    else:
+        with pytest.raises(ControlPlaneClientError, match="crosses origins"):
+            asyncio.run(run())
