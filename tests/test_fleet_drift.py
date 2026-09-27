@@ -549,3 +549,15 @@ def test_beat_host_prefers_known_hosts_and_keeps_chi_fallback() -> None:
     assert df._beat_host("pi-codex-noroc2027-abcd1234", ["noroc2027"]) == "noroc2027"
     assert df._beat_host("pi-codex-review-chiap08-abcd1234", []) == "chiap08"
     assert df._beat_host("pi-codex-unknownhost-abcd1234", ["noroc2027"]) is None
+
+
+def test_skcounter_expects_fleet_nodes_unless_configured(tmp_path, monkeypatch) -> None:
+    from skdashboard.dashboard_skcounter import _expected_nodes
+
+    for name in ("node-noroc2027", "node-41"):
+        _node(tmp_path, name)
+    monkeypatch.delenv("SKCOUNTER_EXPECTED_NODES", raising=False)
+    assert _expected_nodes("harness_reported", tmp_path) == ["41", "noroc2027"]
+    assert _expected_nodes("gateway_observed", tmp_path) == []
+    monkeypatch.setenv("SKCOUNTER_EXPECTED_NODES", "chiap08")
+    assert _expected_nodes("harness_reported", tmp_path) == ["chiap08"]
