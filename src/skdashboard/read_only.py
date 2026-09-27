@@ -483,6 +483,13 @@ def create_read_only_app(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve the read-only SKDashboard control plane")
     parser.add_argument("--home", type=Path, default=Path.home() / ".skcapstone")
+    parser.add_argument(
+        "--capauth-home",
+        type=Path,
+        help="CapAuth home whose enrollments, grants and revocations authorize bearers "
+        "(default: --home). Point it at a node-local login-server home so grants are not "
+        "written into the Syncthing-replicated agent home.",
+    )
     parser.add_argument("--host", required=True, choices=sorted(ALLOWED_BIND_HOSTS))
     parser.add_argument("--port", type=int, default=7778)
     parser.add_argument("--tls-certfile", type=Path, required=True)
@@ -571,6 +578,13 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     app_options = {"session_adapter": session_adapter}
+    if args.capauth_home is not None:
+        from .control_plane_api import _capauth_authorize
+
+        capauth_home = args.capauth_home.expanduser()
+        app_options["authorizer"] = lambda bearer, capability, target: _capauth_authorize(
+            capauth_home, bearer, capability, target
+        )
     if all(live_values):
         from capauth import (
             CurrentPolicyRevisions,
@@ -760,3 +774,7 @@ __all__ = [
     "create_read_only_app",
     "main",
 ]
+
+
+if __name__ == "__main__":
+    main()

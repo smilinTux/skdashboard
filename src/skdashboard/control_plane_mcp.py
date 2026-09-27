@@ -158,8 +158,9 @@ def create_mcp_server(client: ControlPlaneClient) -> Server:
 async def _run(discovery_url: str, bearer_file: Path) -> None:
     from mcp.server.stdio import stdio_server
 
-    bearer = _read_bearer(bearer_file)
-    client = await ControlPlaneClient.discover(discovery_url, bearer)
+    # Re-read per request: an agent's bearer file is rotated every few minutes by
+    # skdashboard-auth-bearer@<agent>.timer and each token lives only five.
+    client = await ControlPlaneClient.discover(discovery_url, lambda: _read_bearer(bearer_file))
     server = create_mcp_server(client)
     try:
         async with stdio_server() as (read_stream, write_stream):
