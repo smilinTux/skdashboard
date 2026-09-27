@@ -29,6 +29,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -38,6 +39,8 @@ IDP_UNIT = "skdashboard-auth-idp.service"
 DASHBOARD_UNIT = "skdashboard-auth-dashboard.service"
 CERT_UNIT = "skdashboard-auth-cert.service"
 CERT_TIMER = "skdashboard-auth-cert.timer"
+BEARER_UNIT = "skdashboard-auth-bearer@.service"
+BEARER_TIMER = "skdashboard-auth-bearer@.timer"
 LOCAL_DASHBOARD_UNIT = "skcapstone-dashboard.service"
 LOCAL_DROPIN = "skdashboard-auth.conf"
 DASHBOARD_SCOPES = ["skdashboard.read", "skdashboard.events.read"]
@@ -354,10 +357,8 @@ def _service_env(layout: Layout) -> None:
     os.environ["CAPAUTH_HOME"] = str(layout.capauth_home)
 
 
-def cmd_grant(args) -> None:
-    layout = Layout(args.state_dir)
-    cfg = load_config(layout)
-    pubkey_file = args.pubkey or _operator_pubkey(Path(cfg.agent_home))
+def grant_identity(layout: Layout, cfg: Config, pubkey_file: Path, identity_class: str) -> str:
+    """Enroll + approve a CapAuth key and provision its signed dashboard grant."""
     armor = Path(pubkey_file).read_text(encoding="utf-8")
     from capauth.authentik.verifier import fingerprint_from_armor
 
@@ -376,16 +377,115 @@ def cmd_grant(args) -> None:
             store.approve(fingerprint)
     finally:
         store.close()
-    result = provision_subject(
+    provision_subject(
         f"device:{fingerprint.lower()}",
         DASHBOARD_SCOPES,
-        identity_class="operator",
+        identity_class=identity_class,
         ttl_hours=GRANT_TTL_HOURS,
         approver=f"skdashboard-auth@{cfg.hostname}",
         base_dir=layout.capauth_home,
     )
-    print(f"Granted {fingerprint} dashboard read access (subject {result['subject']}).")
+    return fingerprint
+
+
+def cmd_grant(args) -> None:
+    layout = Layout(args.state_dir)
+    cfg = load_config(layout)
+    pubkey_file = args.pubkey or _operator_pubkey(Path(cfg.agent_home))
+    fingerprint = grant_identity(layout, cfg, pubkey_file, args.identity_class)
+    print(f"Granted {fingerprint} dashboard read access as {args.identity_class}.")
     print(f"Log in at {cfg.dashboard_url} with that CapAuth key. Re-run grant to renew in a year.")
+
+
+def _bearer_units() -> dict[str, str]:
+    service = f"""[Unit]
+Description=Refresh the SKDashboard bearer for agent %i
+After=network-online.target {IDP_UNIT}
+
+[Service]
+Type=oneshot
+ExecStart={sys.executable} -m skdashboard.auth_setup refresh-bearer %i
+"""
+    timer = """[Unit]
+Description=Keep the SKDashboard bearer for agent %i fresh (tokens live 5 minutes)
+
+[Timer]
+OnActiveSec=5s
+OnUnitActiveSec=4min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
+"""
+    return {BEARER_UNIT: service, BEARER_TIMER: timer}
+
+
+def cmd_agent_add(args) -> None:
+    layout = Layout(args.state_dir)
+    cfg = load_config(layout)
+    from .agent_bearer import agent_dir, bearer_path
+
+    adir = agent_dir(layout.root, args.name)
+    gnupg = adir / "gnupg"
+    for directory in (adir, gnupg):
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+    passphrase = adir / "passphrase"
+    _write_secret(passphrase, Path(args.passphrase_file).read_text(encoding="utf-8"))
+    _gpg(gnupg, "--import", str(args.key), passphrase=passphrase)
+    listing = _gpg(gnupg, "--with-colons", "--list-secret-keys").stdout
+    fingerprints = [line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")]
+    if not fingerprints:
+        sys.exit(f"{args.key} holds no secret key")
+    fingerprint = fingerprints[0]
+    _gpg(gnupg, "-u", fingerprint, "--detach-sign", "-o", "/dev/null", "/dev/null", passphrase=passphrase)
+    public = adir / "public.asc"
+    public.write_text(_gpg(gnupg, "--armor", "--export", fingerprint).stdout, encoding="utf-8")
+    grant_identity(layout, cfg, public, "agent")
+    (adir / "agent.json").write_text(
+        json.dumps({"name": args.name, "fingerprint": fingerprint}, indent=2), encoding="utf-8"
+    )
+    for unit, body in _bearer_units().items():
+        (UNIT_DIR / unit).write_text(body, encoding="utf-8")
+    _systemctl("daemon-reload")
+    _systemctl("enable", "--now", f"skdashboard-auth-bearer@{args.name}.timer")
+    print(f"Agent {args.name} ({fingerprint}) granted; bearer kept fresh at {bearer_path(args.name)}")
+    print(
+        "Point skdashboard-control-plane-mcp at it: --discovery-url "
+        f"{cfg.dashboard_url}/.well-known/skworld-module.json --bearer-file {bearer_path(args.name)}"
+    )
+
+
+def cmd_refresh_bearer(args) -> None:
+    layout = Layout(args.state_dir)
+    cfg = load_config(layout)
+    from .agent_bearer import refresh
+
+    secret = layout.client_secret.read_text(encoding="utf-8").strip()
+    path = refresh(layout.root, cfg, args.name, secret)
+    print(f"bearer refreshed: {path}")
+
+
+def cmd_agent_remove(args) -> None:
+    layout = Layout(args.state_dir)
+    load_config(layout)
+    from .agent_bearer import agent_dir, bearer_path
+
+    adir = agent_dir(layout.root, args.name)
+    _systemctl("disable", "--now", f"skdashboard-auth-bearer@{args.name}.timer", check=False)
+    agent_file = adir / "agent.json"
+    if agent_file.exists():
+        fingerprint = json.loads(agent_file.read_text(encoding="utf-8"))["fingerprint"]
+        from capauth.service.keystore import KeyStore
+
+        store = KeyStore(layout.keys_db)
+        try:
+            store.revoke(fingerprint)
+        finally:
+            store.close()
+    bearer_path(args.name).unlink(missing_ok=True)
+    shutil.rmtree(adir, ignore_errors=True)
+    print(f"Agent {args.name} removed and its login revoked.")
 
 
 def cmd_revoke(args) -> None:
@@ -455,6 +555,15 @@ def cmd_status(args) -> None:
         keys = store.list_keys()
     finally:
         store.close()
+    agents_root = layout.root / "agents"
+    for agent_file in sorted(agents_root.glob("*/agent.json")) if agents_root.exists() else []:
+        from .agent_bearer import bearer_path
+
+        name = agent_file.parent.name
+        bearer = bearer_path(name)
+        age = f"{int(time.time() - bearer.stat().st_mtime)}s old" if bearer.exists() else "missing"
+        timer = _systemctl("is-active", f"skdashboard-auth-bearer@{name}.timer", check=False).stdout.strip()
+        print(f"Agent {name}: bearer {age}, timer {timer}")
     print("Granted identities:" if keys else "Granted identities: none (run `skdashboard-auth grant`)")
     for key in keys:
         print(f"  {key.fingerprint}  {'approved' if key.approved else 'pending'}")
@@ -478,7 +587,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     grant = sub.add_parser("grant", help="grant a CapAuth identity dashboard access")
     grant.add_argument("--pubkey", type=Path, help="armored public key (default: your CapAuth identity)")
+    grant.add_argument("--identity-class", default="operator", choices=("operator", "agent"))
     grant.set_defaults(func=cmd_grant)
+
+    agent_add = sub.add_parser("agent-add", help="give an agent a self-refreshing bearer file")
+    agent_add.add_argument("name", help="short agent name, e.g. atlas")
+    agent_add.add_argument("--key", type=Path, required=True, help="agent's armored secret key")
+    agent_add.add_argument("--passphrase-file", type=Path, required=True)
+    agent_add.set_defaults(func=cmd_agent_add)
+
+    refresh_bearer = sub.add_parser("refresh-bearer", help=argparse.SUPPRESS)
+    refresh_bearer.add_argument("name")
+    refresh_bearer.set_defaults(func=cmd_refresh_bearer)
+
+    agent_remove = sub.add_parser("agent-remove", help="stop an agent's bearer and revoke it")
+    agent_remove.add_argument("name")
+    agent_remove.set_defaults(func=cmd_agent_remove)
 
     revoke = sub.add_parser("revoke", help="stop a CapAuth identity from logging in")
     revoke.add_argument("fingerprint")
