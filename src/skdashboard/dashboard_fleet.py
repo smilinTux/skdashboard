@@ -59,7 +59,43 @@ ALERT_MIN_INTERVAL_S = 300.0
 ALERT_MAX_NAMED = 5
 WORKER_TTL_SECONDS = 300
 WORKER_STALE_WINDOW_SECONDS = 3600
+#: Legacy fallback, used only when the fleet store holds no Node objects at all
+#: and SKFLEET_HOSTS is unset (a pre-skfleet chi install).
 DEFAULT_FLEET_HOSTS = ("chiap01", "chiap02", "chiap03", "chiap04", "chiap08")
+_HOST_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,62}")
+
+
+def fleet_node_hosts(home: Path) -> list[str]:
+    """Host keys of this estate's fleet Node objects (``node-<host>`` -> ``<host>``).
+
+    This is how a new install picks its nodes up automatically: whatever
+    ``skcapstone fleet admit`` has admitted is what the panel lists.
+    """
+    directory = Path(home) / "fleet" / "objects" / "node"
+    hosts: list[str] = []
+    if not directory.is_dir():
+        return hosts
+    for path in sorted(directory.glob("*.json")):
+        try:
+            if path.stat().st_size > 64 * 1024:
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or data.get("kind", "Node") != "Node":
+            continue
+        host = str(data.get("name") or path.stem).removeprefix("node-")
+        if _HOST_RE.fullmatch(host) and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def configured_hosts(home: Path) -> list[str]:
+    """SKFLEET_HOSTS if set, else the fleet's own Node objects, else the legacy list."""
+    raw = os.environ.get("SKFLEET_HOSTS")
+    if raw is not None and raw.split():
+        return raw.split()
+    return fleet_node_hosts(home) or list(DEFAULT_FLEET_HOSTS)
 
 
 def _instant(value: object) -> datetime | None:
@@ -104,12 +140,20 @@ def _projection_workers(home: Path, instant: datetime) -> list[dict]:
     return workers
 
 
-def _beat_host(owner: str) -> str | None:
+def _beat_host(owner: str, known_hosts=()) -> str | None:
+    """Host of a ``pi-<lane>[-<sublane>]-<host>-<card>`` heartbeat owner."""
+    segments = owner.split("-")
+    for host in sorted(known_hosts, key=len, reverse=True):
+        width = host.count("-") + 1
+        for start in range(1, len(segments) - width):
+            if "-".join(segments[start : start + width]) == host:
+                return host
     match = re.search(r"-(chi(?:ap|wk)\d+)-", owner)
     return match.group(1) if match else None
 
 
 def _beat_workers(home: Path, instant: datetime, titles: dict[str, str]) -> tuple[list[dict], int]:
+    known_hosts = configured_hosts(home)
     workers = []
     omitted = 0
     for path in sorted((Path(home) / "fleet" / "beats").glob("*.json")):
@@ -124,7 +168,7 @@ def _beat_workers(home: Path, instant: datetime, titles: dict[str, str]) -> tupl
                 raise ValueError("heartbeat identity mismatch")
             if not isinstance(card, str) or not re.fullmatch(r"[0-9a-f]{8}", card):
                 raise ValueError("invalid heartbeat card")
-            host = _beat_host(owner)
+            host = _beat_host(owner, known_hosts)
             if not host:
                 raise ValueError("heartbeat host unavailable")
             age = max(0, int((instant - observed).total_seconds()))
@@ -151,8 +195,8 @@ def _beat_workers(home: Path, instant: datetime, titles: dict[str, str]) -> tupl
     return workers, omitted
 
 
-def _runtime_statistics(workers: list[dict]) -> tuple[list[dict], list[dict]]:
-    configured = os.environ.get("SKFLEET_HOSTS", " ".join(DEFAULT_FLEET_HOSTS)).split()
+def _runtime_statistics(workers: list[dict], home: Path) -> tuple[list[dict], list[dict]]:
+    configured = configured_hosts(home)
     hosts = {host: {"host": host, "running": 0, "stale": 0, "latest_age_seconds": None, "lanes": set()} for host in configured}
     lanes: dict[str, dict] = {}
     for worker in workers:
@@ -203,7 +247,7 @@ def collect_workers(home: Path, *, now: datetime | None = None) -> dict:
                 worker["name"],
             )
         )
-        result["nodes"], result["lanes"] = _runtime_statistics(workers)
+        result["nodes"], result["lanes"] = _runtime_statistics(workers, home)
         result["summary"].update(
             running=sum(worker["truth_state"] == "current" for worker in workers),
             stale=sum(worker["truth_state"] != "current" for worker in workers),
