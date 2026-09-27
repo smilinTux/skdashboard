@@ -8,11 +8,13 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+from ipaddress import ip_address
 from uuid import uuid4
 
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -25,6 +27,62 @@ from .runtime_boundary import ALLOWED_BROWSER_ORIGINS
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
+
+AUTH_MODE_ENV = "SKDASHBOARD_AUTH"
+AUTH_MODES = frozenset({"on", "off"})
+LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def resolve_auth_mode(environ=None, *, default: str = "off") -> str:
+    """Return the dashboard auth mode from ``SKDASHBOARD_AUTH``.
+
+    ``off`` only waives the CapAuth bearer for requests that originate on this
+    host (see ``_is_local_request``); remote callers are still challenged. An
+    unrecognized value fails closed to ``on`` so a typo never widens access.
+    """
+    values = os.environ if environ is None else environ
+    raw = values.get(AUTH_MODE_ENV)
+    if raw is None or not raw.strip():
+        return default
+    mode = raw.strip().lower()
+    return mode if mode in AUTH_MODES else "on"
+
+
+def _is_local_request(request) -> bool:
+    """True only for a direct, unproxied loopback request naming a loopback host.
+
+    The Host check blocks DNS rebinding; the forwarded-header check refuses
+    requests relayed through a local proxy on behalf of a remote client.
+    """
+    client = request.client
+    if client is None:
+        return False
+    try:
+        if not ip_address(client.host).is_loopback:
+            return False
+    except ValueError:
+        return False
+    if any(
+        name in request.headers
+        for name in ("forwarded", "x-forwarded-for", "x-real-ip", "x-forwarded-host")
+    ):
+        return False
+    host = request.headers.get("host", "")
+    if host.startswith("["):
+        hostname = host[1 : host.find("]")] if "]" in host else ""
+    else:
+        hostname = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return hostname.lower() in LOOPBACK_HOSTNAMES
+
+
+def _is_local_origin(origin: str) -> bool:
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and (parsed.hostname or "") in LOOPBACK_HOSTNAMES
 TENANT_RESOURCE_TYPE = "tenant"
 SSE_CURRENTNESS_SECONDS = 1
 logger = logging.getLogger("skcapstone.dashboard.control_plane")
@@ -436,10 +494,21 @@ def _protected_handler(
     session_capability_issuer=None,
     session_authorizer=None,
     require_stream_context=False,
+    auth_mode="on",
 ):
     async def wrapped(request):
         _clear_decision(request)
         origin = request.headers.get("origin")
+        if (
+            auth_mode == "off"
+            and decision_authorizer is None
+            and not require_stream_context
+            and _is_local_request(request)
+            and (origin is None or _is_local_origin(origin))
+        ):
+            response = await handler(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
         if origin is not None and origin not in ALLOWED_BROWSER_ORIGINS:
             counters["denied"] += 1
             response = _error(request, 403, "ORIGIN_DENIED", "browser origin is not allowed")
@@ -636,7 +705,10 @@ def routes(
     governance_provider=None,
     economy_provider=None,
     report_provider=None,
+    auth_mode="on",
 ):
+    if auth_mode not in AUTH_MODES:
+        raise ValueError(f"auth_mode must be one of {sorted(AUTH_MODES)}")
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
     if (
@@ -692,6 +764,7 @@ def routes(
                 session_capability_issuer=session_capability_issuer,
                 session_authorizer=session_authorizer,
                 require_stream_context=require_stream_context,
+                auth_mode=auth_mode,
             )
         )
 
