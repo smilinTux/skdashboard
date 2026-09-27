@@ -218,11 +218,6 @@ def ensure_oidc(layout: Layout, cfg: Config) -> None:
     _say("OIDC client, session key and login-server secrets ready")
 
 
-def _bin(name: str) -> str:
-    candidate = Path(sys.executable).parent / name
-    return str(candidate if candidate.exists() else (shutil.which(name) or name))
-
-
 def render_units(layout: Layout, cfg: Config) -> dict[str, str]:
     home = layout.capauth_home
     idp = f"""[Unit]
@@ -267,7 +262,7 @@ Type=simple
 Environment=GNUPGHOME={layout.verify_gnupg}
 Environment=SKDASHBOARD_ALLOWED_BIND_HOSTS={cfg.bind}
 Environment=SKDASHBOARD_ALLOWED_BROWSER_ORIGINS={cfg.dashboard_url}
-ExecStart={_bin("skdashboard-read-only")} --home {cfg.agent_home} --capauth-home {home} --host {cfg.bind} --port {cfg.dashboard_port} --tls-certfile {layout.cert} --tls-keyfile {layout.key} --session-db {layout.session_db} --session-key-file {layout.session_key} --oidc-issuer {cfg.issuer} --oidc-redirect-uri {cfg.dashboard_url}/auth/callback --oidc-client-secret-file {layout.client_secret}
+ExecStart={sys.executable} -m skdashboard.read_only --home {cfg.agent_home} --capauth-home {home} --host {cfg.bind} --port {cfg.dashboard_port} --tls-certfile {layout.cert} --tls-keyfile {layout.key} --session-db {layout.session_db} --session-key-file {layout.session_key} --oidc-issuer {cfg.issuer} --oidc-redirect-uri {cfg.dashboard_url}/auth/callback --oidc-client-secret-file {layout.client_secret}
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -283,7 +278,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={_bin("skdashboard-auth")} renew-cert --state-dir {layout.root}
+ExecStart={sys.executable} -m skdashboard.auth_setup renew-cert --state-dir {layout.root}
 """
     timer = """[Unit]
 Description=Weekly SKDashboard login TLS certificate renewal
