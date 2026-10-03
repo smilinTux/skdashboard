@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0.0",
+  "registry_version": "1.0.0",
+  "approved_by": "Control Plane Governance Council",
+  "families": [
+    {"id": "portfolio", "accountable_owner": "Portfolio Measurement Steward", "data_owner": "SKCapstone Product Owner", "review_cadence": "monthly"},
+    {"id": "flow", "accountable_owner": "Flow Measurement Steward", "data_owner": "SKCoord Product Owner", "review_cadence": "monthly"},
+    {"id": "itil_sre", "accountable_owner": "Reliability Measurement Steward", "data_owner": "SKCapstone ITIL Product Owner", "review_cadence": "monthly"},
+    {"id": "delivery", "accountable_owner": "Delivery Measurement Steward", "data_owner": "SKCapstone Release Product Owner", "review_cadence": "monthly"},
+    {"id": "architecture", "accountable_owner": "Architecture Measurement Steward", "data_owner": "CMDB Product Owner", "review_cadence": "monthly"},
+    {"id": "fleet", "accountable_owner": "Fleet Measurement Steward", "data_owner": "SKCapstone Fleet Product Owner", "review_cadence": "weekly"},
+    {"id": "ai_models", "accountable_owner": "AI Evaluation Steward", "data_owner": "SKCounter Product Owner", "review_cadence": "monthly"},
+    {"id": "economy", "accountable_owner": "AI Economy Steward", "data_owner": "SKCounter Product Owner", "review_cadence": "monthly"},
+    {"id": "governance", "accountable_owner": "Metric Governance Steward", "data_owner": "CapAuth Product Owner", "review_cadence": "monthly"},
+    {"id": "legal", "accountable_owner": "Legal Measurement Steward", "data_owner": "SKLegal Product Owner", "review_cadence": "quarterly"},
+    {"id": "corpus_pipeline", "accountable_owner": "Corpus Measurement Steward", "data_owner": "HammerTime Product Owner", "review_cadence": "monthly"},
+    {"id": "operator_shell", "accountable_owner": "Operator Readiness Steward", "data_owner": "Atlas Product Owner", "review_cadence": "weekly"}
+  ],
+  "products": [
+    {"id": "production_reports", "accountable_owner": "Report Product Owner", "review_owner": "Metric Governance Steward", "review_cadence": "monthly"},
+    {"id": "probabilistic_forecasts", "accountable_owner": "Forecast Product Owner", "review_owner": "Forecast Calibration Steward", "review_cadence": "monthly_and_after_20_outcomes"},
+    {"id": "ai_evaluations", "accountable_owner": "AI Evaluation Steward", "review_owner": "Independent AI Risk Reviewer", "review_cadence": "monthly_and_before_model_promotion"},
+    {"id": "recommendation_outcomes", "accountable_owner": "Recommendation Product Owner", "review_owner": "Outcome Verification Steward", "review_cadence": "monthly_and_after_20_dispositions"},
+    {"id": "ux_task_measures", "accountable_owner": "UX Research Steward", "review_owner": "Accessibility Steward", "review_cadence": "monthly_and_before_ui_release"},
+    {"id": "accessibility_regressions", "accountable_owner": "Accessibility Steward", "review_owner": "Independent Accessibility Reviewer", "review_cadence": "every_ui_change_and_monthly"}
+  ],
+  "required_change_fields": [
+    "decision_id",
+    "proposal_version",
+    "subject_id",
+    "current_version",
+    "proposed_version",
+    "definition",
+    "target",
+    "exclusions",
+    "thresholds",
+    "balancing_measures",
+    "retirement_triggers",
+    "evidence_refs",
+    "golden_fixture_paths",
+    "fixture_hashes_before",
+    "fixture_hashes_after",
+    "data_owner_approval",
+    "accountable_owner_approval",
+    "independent_review",
+    "effective_at"
+  ],
+  "required_outcome_measures": [
+    "calibration",
+    "verified_effect",
+    "harmful_false_positives",
+    "abstention_quality",
+    "acceptance",
+    "override",
+    "rework",
+    "cost_per_accepted_outcome",
+    "user_task_success",
+    "accessibility_regression"
+  ],
+  "prohibited_dimensions": [
+    "person_id",
+    "user_id",
+    "agent_id",
+    "individual_productivity",
+    "individual_rank"
+  ]
+}
