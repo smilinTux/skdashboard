@@ -1,0 +1,22 @@
+{
+  "artifact_type": "skcp-01-read-api-qualification",
+  "candidate_commit": "79d8c47632b309addb1edb08c104359d888d8fc1",
+  "card_id": "d12b8951",
+  "dependencies": {
+    "526bb17f": "done",
+    "847e250a": "done",
+    "9442b3b3": "done",
+    "f0d2f784": "done"
+  },
+  "focused_verification": {
+    "command": "pytest -q tests/test_control_plane_read_api.py tests/test_control_plane_sse.py tests/test_control_plane_architecture.py",
+    "failed": 0,
+    "passed": 38
+  },
+  "implementation_merge_commit": "dd62165a8326006288bfd46c0bbdbfbe79aa434e",
+  "pull_request_47": {
+    "checks": "success",
+    "state": "merged"
+  },
+  "verdict": "PASS"
+}
