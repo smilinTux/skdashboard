@@ -1,0 +1,230 @@
+{
+  "schema": "skdashboard.integration-repair.v1",
+  "card": "076e9ca6",
+  "date": "2026-08-25",
+  "verdict": "PASS_CANDIDATE_READY_FOR_INDEPENDENT_REREVIEW",
+  "route": {
+    "session": "Codex Sol",
+    "board_agent": "codex-sklegal-integration-repair",
+    "repository": "/home/skuser01/work/skdashboard",
+    "worktree": "/home/skuser01/worktrees/skdashboard-076e9ca6-integration-repair",
+    "branch": "codex/076e9ca6-integration-repair"
+  },
+  "candidate": {
+    "base_commit": "843ac88261f7268dfb67f11c4c628967565b66bc",
+    "base_tree": "49865da344befe4c9dbff0d33dc17f8b4ea1adce",
+    "typed_tenant_commit": "34fed6aa26622dbcfe458859bde2f2c47b80eec9",
+    "typed_tenant_tree": "300eb8f373b750961caaacb74e0af7dcd49d9d67",
+    "lifetime_commit": "f10b96a9fd97f4294e15d612868456657adfd975",
+    "lifetime_tree": "bea5eed9192ef6239e8d6f866e9a814130f171e6",
+    "candidate_commit": "27c8f9ed4b10d8665daac724dcfed9972847f882",
+    "candidate_tree": "24df619bc79abf0fd7afc8644597af4e23e3c822",
+    "base_is_ancestor": true,
+    "base_ahead": 0,
+    "candidate_ahead": 3,
+    "network_refreshed": false,
+    "candidate_patch_sha256": "4616bb07c4a3fc53ab85084b5cef207267442a3141f6ebc15e69b7f37b769b4f"
+  },
+  "ownership": {
+    "integration_owner": "codex-sklegal-integration-repair",
+    "deltas_are_durable_and_nonduplicated": true,
+    "typed_tenant": {
+      "parent": "843ac88261f7268dfb67f11c4c628967565b66bc",
+      "commit": "34fed6aa26622dbcfe458859bde2f2c47b80eec9",
+      "tree": "300eb8f373b750961caaacb74e0af7dcd49d9d67",
+      "patch_sha256": "808b3811dd181f2432775e8c6a58f3fe6332dc83cb008c3704cea1e40402824a",
+      "paths": [
+        "CHANGELOG.md",
+        "src/skdashboard/control_plane_api.py",
+        "src/skdashboard/dashboard.py",
+        "src/skdashboard/dashboard_kanban.py",
+        "tests/test_control_plane_decision_context.py",
+        "tests/test_control_plane_read_api.py",
+        "tests/test_control_plane_sse.py"
+      ],
+      "owned_hunks": {
+        "CHANGELOG.md": "SSE Tenant and caller boundary release note plus origin-main OIDC entry preservation",
+        "src/skdashboard/control_plane_api.py": "exact typed Tenant and caller policy boundary and protected stream context requirement",
+        "src/skdashboard/dashboard.py": "explicit public publisher attribution",
+        "src/skdashboard/dashboard_kanban.py": "bounded Tenant and caller lanes, cursors, replay, delivery, and public lane separation",
+        "tests/test_control_plane_decision_context.py": "typed resource construction for boundary tests",
+        "tests/test_control_plane_read_api.py": "typed SSE fail-closed expectations plus origin-main OIDC tests",
+        "tests/test_control_plane_sse.py": "bounded replay, lane isolation, explicit typed Tenant acceptance, and generic or missing Tenant rejection"
+      }
+    },
+    "lifetime": {
+      "parent": "34fed6aa26622dbcfe458859bde2f2c47b80eec9",
+      "commit": "f10b96a9fd97f4294e15d612868456657adfd975",
+      "tree": "bea5eed9192ef6239e8d6f866e9a814130f171e6",
+      "patch_sha256": "664daea192b3c27d45683e376333cb2a25a0135b0b200e0e8b5f98c7800da690",
+      "paths": [
+        "src/skdashboard/control_plane_api.py",
+        "src/skdashboard/dashboard_kanban.py",
+        "tests/test_control_plane_decision_context.py",
+        "tests/test_control_plane_sse.py"
+      ],
+      "owned_hunks": {
+        "src/skdashboard/control_plane_api.py": "one-second currentness bound, signed authority custody, revalidation, and cleanup",
+        "src/skdashboard/dashboard_kanban.py": "authority checks before replay, live delivery, and heartbeat with bounded idle polling",
+        "tests/test_control_plane_decision_context.py": "clock, TTL, revocation, and fresh bearer controls",
+        "tests/test_control_plane_sse.py": "expiry, revocation, currentness outage, terminal reset, no-late-payload, and cleanup coverage"
+      }
+    },
+    "capauth_pin": {
+      "parent": "f10b96a9fd97f4294e15d612868456657adfd975",
+      "commit": "27c8f9ed4b10d8665daac724dcfed9972847f882",
+      "tree": "24df619bc79abf0fd7afc8644597af4e23e3c822",
+      "patch_sha256": "2683e3ba69368fbd856415b91f80e72edb3659cd06c9b9cbc033a7cd5a3caa64",
+      "paths": [
+        "pyproject.toml"
+      ]
+    }
+  },
+  "conflict_resolution": {
+    "direct_apply_exit": 1,
+    "direct_failures": [
+      "CHANGELOG.md:19",
+      "tests/test_control_plane_read_api.py:184"
+    ],
+    "three_way_apply_exit": 1,
+    "three_way_conflict_paths": [
+      "CHANGELOG.md"
+    ],
+    "three_way_clean_paths": [
+      "src/skdashboard/control_plane_api.py",
+      "src/skdashboard/dashboard.py",
+      "src/skdashboard/dashboard_kanban.py",
+      "tests/test_control_plane_decision_context.py",
+      "tests/test_control_plane_read_api.py"
+    ],
+    "changelog": {
+      "base_blob": "642bd6cb4b2152acba06cdb05f4efe6f0c453519",
+      "origin_main_blob": "06c46b89c73325dfd31b7e4773c61692aab31f3f",
+      "predecessor_target_blob": "a2c821311bf7ce1c82644f47dde64e8a3b19d679",
+      "resolved_blob": "dfb1d400d116850fb6ef3c5407a05791148b5dd1",
+      "resolution": "preserved all four origin-main OIDC entries and added the SSE Tenant and caller boundary entry"
+    },
+    "read_api": {
+      "origin_main_blob": "14d59e87daf074b3de61cf727548c62b1a5b5bba",
+      "predecessor_target_blob": "90ce5b369e50b727252e2c37254113ac4b19387a",
+      "resolved_blob": "850c8cfa7cc82dc95b2ee119d33c4f0cbcb66e08",
+      "resolution": "preserved origin-main OIDC fingerprint tests and integrated typed SSE fail-closed expectations"
+    },
+    "conflict_marker_scan": "PASS"
+  },
+  "capauth": {
+    "requirement": "capauth @ git+https://github.com/smilinTux/capauth.git@56b161415748f4c3e2bea0e7fad98c6d104376de",
+    "requirement_validation": "PEP508 exact Git pin: PASS",
+    "revision": "56b161415748f4c3e2bea0e7fad98c6d104376de",
+    "tree": "a1be093b96fc2d41234aa19e5affe3cf062a82a5",
+    "immutable": true,
+    "source_worktree": "/home/skuser01/worktrees/capauth-1b553209-artifact",
+    "source_hashes_sha256": {
+      "src/capauth/control_plane_authorizer.py": "f52cd1c729ad2537e31498dd43d0572b76eb6aeeae4716eeec26fbcc066d42f2",
+      "src/capauth/delegated.py": "8e0bf921937d2a4aee6f66f58d02c2f8fc13e840a68247692680693169443618",
+      "src/capauth/__init__.py": "f3b0c06c0771f76fbcf9f83a1d6a5fbf7e3a69053503d193c78e67bce40c6edb",
+      "pyproject.toml": "f3876e06f392d4f98fc2d3796aba10dff15fcbf045dfab458384fa2de92ebefd"
+    }
+  },
+  "candidate_files": {
+    "CHANGELOG.md": {
+      "blob": "dfb1d400d116850fb6ef3c5407a05791148b5dd1",
+      "sha256": "91a45f6c4285564cf1d64b0aeebe529634f776499c761c8b72cb714b030a88ac"
+    },
+    "pyproject.toml": {
+      "blob": "4fde41314c17f477a5a50da0a83ebeeb6bdff95e",
+      "sha256": "08d09ef45e7140ed2becd02140f2a0428b209051c947340264870e332de85cdd"
+    },
+    "src/skdashboard/control_plane_api.py": {
+      "blob": "062a52b65e210a8355c95403bfddd9461875585b",
+      "sha256": "db4352c52dd200f4a302e740f3f4cff573b3f487c13994aff9e082d7bc5760b1"
+    },
+    "src/skdashboard/dashboard.py": {
+      "blob": "e4881ee250c94364637372b7ba9699982f393edb",
+      "sha256": "5984b5120a7cc12ec3dc08a5c444a7f6938dd2306cfdac6dca1efdbb99af887a"
+    },
+    "src/skdashboard/dashboard_kanban.py": {
+      "blob": "a98eb00d9b200e81c7485b7c9e52fb3583e8183b",
+      "sha256": "8ee0cfef4efd68174c4a6d50dc4899f8ce38ef363fa5b66e00c01a9416d14f45"
+    },
+    "tests/test_control_plane_decision_context.py": {
+      "blob": "28579bdf0e2d59e0854d556d3d492bc1bf271be8",
+      "sha256": "f9fc5d92eb6d0358306fd0848990012b3c3c7885fabb473356ef02682c2c6c13"
+    },
+    "tests/test_control_plane_read_api.py": {
+      "blob": "850c8cfa7cc82dc95b2ee119d33c4f0cbcb66e08",
+      "sha256": "900ae5b8c6c330d7754eab48ff8d42709f77079acc31ad724a985858e2167f9c"
+    },
+    "tests/test_control_plane_sse.py": {
+      "blob": "8bed47ee6e0d4e44fe333abd3b1be357d9926906",
+      "sha256": "e6c56ac73825e6a0f34f03c469accea0f2eade35f79ef6810ea22aa712dc8bda"
+    }
+  },
+  "checks": {
+    "typed_intermediate": "42 passed in 1.07s",
+    "focused_sse": "16 passed in 0.24s",
+    "relevant_sse_context_read_api": "46 passed in 1.16s",
+    "ruff": "All checks passed!",
+    "candidate_diff_check": "PASS",
+    "worktree_after_checks": "clean",
+    "forward_reverse": {
+      "typed_tenant": "forward_exit=0 reverse_exit=0",
+      "lifetime": "forward_exit=0 reverse_exit=0",
+      "capauth_pin": "forward_exit=0 reverse_exit=0",
+      "candidate": "forward_exit=0 reverse_exit=0"
+    },
+    "temporary_indexes": {
+      "origin_main_final_control_plane": "/tmp/076e9ca6-final-index.3MZlXq/index",
+      "typed_tenant_forward": "/tmp/076e9ca6-typed-tenant-forward.jWcClH/index",
+      "typed_tenant_reverse": "/tmp/076e9ca6-typed-tenant-reverse.daoDJM/index",
+      "lifetime_forward": "/tmp/076e9ca6-lifetime-forward.onKEIX/index",
+      "lifetime_reverse": "/tmp/076e9ca6-lifetime-reverse.L0tQYY/index",
+      "capauth_pin_forward": "/tmp/076e9ca6-capauth-pin-forward.Lzcxia/index",
+      "capauth_pin_reverse": "/tmp/076e9ca6-capauth-pin-reverse.NlPbF7/index",
+      "candidate_forward": "/tmp/076e9ca6-candidate-forward.Ru6r51/index",
+      "candidate_reverse": "/tmp/076e9ca6-candidate-reverse.aiwO7G/index"
+    }
+  },
+  "predecessor_artifacts_sha256": {
+    "/tmp/12f022f2-complete.patch": "733e78180a504bc6cc5f48a41ac2efa8c8e1e7363c077cae835bc50b926bb064",
+    "/tmp/1b4ca98b-repair.patch": "2f331d4fad2ea57d9125eb827dbf3b934c6321e7d6e6549d4c25f0ad4dd3f546",
+    "/tmp/5ec78e00-review-evidence/complete.patch": "4fa2c20de4965f7e01dcf30ebaa2726828debbec399390916ed53e703b147107",
+    "/tmp/a4457548-exact-candidate.stream": "d9918c2988d52a0ac6c6199f3c6603eb70356ffe1e1e71628df3633439c73abc"
+  },
+  "history": {
+    "typed_tenant": [
+      "7aefb544:FAIL_PRESERVED",
+      "7ab3f69e:REPAIR",
+      "5ec78e00:PASS"
+    ],
+    "lifetime": [
+      "e71a3248:FAIL_PRESERVED",
+      "1b4ca98b:REPAIR",
+      "a4457548:PASS"
+    ],
+    "integration": [
+      "2ca5632a:BLOCKED_PRESERVED",
+      "fda6bd7f:BLOCKED_PRESERVED"
+    ]
+  },
+  "scope": {
+    "merge": false,
+    "push": false,
+    "deployment": false,
+    "restart": false,
+    "credentials": false,
+    "protected_data": false,
+    "provider_traffic": false,
+    "external_action": false,
+    "cleanup": false
+  },
+  "limitations": [
+    "Local refs were not network refreshed, so freshness beyond pinned local origin/main is not asserted.",
+    "Qualification was public-synthetic and in-process only. No socket, TLS, multiprocess, multihost, soak, capacity, deployment, or production timing test ran.",
+    "Protected replay remains process-local and ephemeral, and real dashboard publishers remain public-only.",
+    "The exact CapAuth revision is pinned because the candidate intentionally depends on private currentness internals. Any CapAuth revision change requires requalification.",
+    "The exact CapAuth source worktree has a pre-existing untracked rollback directory. Tests imported only its tracked src tree at the pinned commit.",
+    "Temporary independent-index evidence was retained under /tmp because cleanup was prohibited."
+  ],
+  "next_gate": "Distinct Codex-only independent integration rereview. This packet grants no merge, push, deployment, restart, or external-action authority."
+}
