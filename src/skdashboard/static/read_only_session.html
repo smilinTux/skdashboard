@@ -7,19 +7,84 @@
   <style>
     body{max-width:1100px;margin:2rem auto;padding:0 1rem;background:#0b1020;color:#e7ecff;font:16px system-ui}
     h1{margin-bottom:.25rem}.muted{color:#aab5d6}button,a{font:inherit}button{padding:.65rem;border-radius:.4rem;border:1px solid #526089;background:#151d36;color:#fff;cursor:pointer}pre{overflow:auto;padding:1rem;background:#11182d;border-radius:.5rem}
+    .hidden{display:none}
   </style>
 </head>
 <body>
   <h1>SK Control Plane</h1>
   <p class="muted">Read-only. CapAuth credentials remain encrypted on the server.</p>
-  <a href="/auth/login"><button type="button">Sign in</button></a>
+  <div id="auth-controls">
+    <a href="/auth/login"><button id="signin-button" type="button" class="hidden">Sign in</button></a>
+    <button id="signout-button" type="button" class="hidden">Sign out</button>
+  </div>
   <button id="load" type="button">Load overview</button>
-  <pre id="result" aria-live="polite">Health check pending...</pre>
+  <pre id="result" aria-live="polite">Session check pending...</pre>
   <script>
     const out=document.getElementById("result");
+    const signinButton=document.getElementById("signin-button");
+    const signoutButton=document.getElementById("signout-button");
+    let csrfToken=null;
+
+    async function checkSession(){
+      try{
+        const r=await fetch("/auth/session");
+        if(r.status===200){
+          const data=await r.json();
+          if(data.authenticated){
+            csrfToken=data.csrf_token;
+            signinButton.classList.add("hidden");
+            signoutButton.classList.remove("hidden");
+            out.textContent="Signed in. Health check pending...";
+            show("/api/v1/health");
+            return true;
+          }
+        }
+        signinButton.classList.remove("hidden");
+        signoutButton.classList.add("hidden");
+        out.textContent="Signed out. Health check pending...";
+        show("/api/v1/health");
+        return false;
+      }catch(e){
+        signinButton.classList.remove("hidden");
+        signoutButton.classList.add("hidden");
+        out.textContent="Session check failed: "+e.message;
+        show("/api/v1/health");
+        return false;
+      }
+    }
+
     async function show(path){const r=await fetch(path);const t=await r.text();out.textContent=`${r.status} ${r.statusText}\n${t}`;}
-    show("/api/v1/health").catch(()=>{out.textContent="Health unavailable"});
+
+    async function logout(){
+      if(!csrfToken){
+        out.textContent="No session to sign out";
+        return;
+      }
+      try{
+        const r=await fetch("/auth/logout",{
+          method:"POST",
+          headers:{"X-CSRF-Token":csrfToken,"Origin":window.location.origin}
+        });
+        if(r.status===204){
+          csrfToken=null;
+          out.textContent="Signed out. Verifying...";
+          await checkSession();
+        }else{
+          const data=r.status===204?null:await r.json().catch(()=>null);
+          out.textContent=`Sign out failed: ${r.status} ${r.statusText}`+(data?` (${data.error||""})`:"");
+          if(r.status===401||r.status===403){
+            await checkSession();
+          }
+        }
+      }catch(e){
+        out.textContent="Sign out failed: "+e.message;
+        await checkSession();
+      }
+    }
+
+    checkSession();
     document.getElementById("load").addEventListener("click",()=>{show("/api/v1/overview").catch(()=>{out.textContent="Overview unavailable"});});
+    signoutButton.addEventListener("click",logout);
   </script>
 </body>
 </html>
