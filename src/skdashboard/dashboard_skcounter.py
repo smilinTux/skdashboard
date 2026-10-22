@@ -31,6 +31,7 @@ VIEWS = frozenset(
     }
 )
 TOKEN_FIELDS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
+KNOWN_COST_STATES = frozenset({"estimated", "billed", "mixed", "unavailable"})
 MAX_OBSERVATION_BYTES = 5 * 1024 * 1024
 MAX_OBSERVATION_FILES = 10_000
 FRESH_SECONDS = 45 * 60
@@ -94,6 +95,45 @@ _PROHIBITED_FIELDS = frozenset(
 
 class SnapshotError(ValueError):
     """A snapshot cannot enter the dashboard read model."""
+
+
+def project_economy_summary(summary: Any) -> dict[str, Any]:
+    """Project canonical nested economy fields without inventing values."""
+
+    if not isinstance(summary, dict):
+        return {
+            "tokens": {field: None for field in TOKEN_FIELDS},
+            "cost_usd": None,
+            "cost_state": "unknown",
+        }
+
+    source_tokens = summary.get("tokens")
+    tokens = {
+        field: (
+            source_tokens.get(field)
+            if isinstance(source_tokens, dict)
+            and isinstance(source_tokens.get(field), int)
+            and not isinstance(source_tokens.get(field), bool)
+            and source_tokens.get(field) >= 0
+            else None
+        )
+        for field in TOKEN_FIELDS
+    }
+    cost_state = summary.get("cost_state")
+    if cost_state not in KNOWN_COST_STATES:
+        cost_state = "unknown"
+    cost = summary.get("cost_usd")
+    if cost_state == "unavailable":
+        cost = None
+    elif (
+        isinstance(cost, bool)
+        or not isinstance(cost, (int, float))
+        or not math.isfinite(float(cost))
+        or cost < 0
+    ):
+        cost = None
+        cost_state = "unknown"
+    return {"tokens": tokens, "cost_usd": cost, "cost_state": cost_state}
 
 
 def _data_root(home: Path) -> Path:

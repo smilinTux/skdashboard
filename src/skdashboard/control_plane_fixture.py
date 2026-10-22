@@ -23,6 +23,75 @@ SCOPE = {"portfolio_id": "synthetic-estate"}
 HASH = "sha256:" + "a" * 64
 
 
+def _manifest_hash(manifest: dict) -> str:
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"manifest_sha256", "signature"}
+    }
+    canonical = json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+MANIFEST = {
+    "schemaVersion": "1.3",
+    "id": "skdashboard",
+    "name": "Board",
+    "grade": "B",
+    "entry": {"url": f"{ORIGIN}/"},
+    "nav": {"icon": "dashboard", "order": 40, "label": "Board"},
+    "deeplinkPrefix": "skworld://skdashboard/",
+    "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
+    "memory": {"opt_in": False},
+    "health": f"{ORIGIN}/api/v1/health",
+    "operator": {
+        "contractVersion": 1,
+        "cli": "skdashboard operator",
+        "repos": ["skdashboard"],
+        "conditions": ["ControlPlaneReady"],
+        "proposedStandardActions": [],
+    },
+    "controlPlane": {
+        "contractVersion": "1.1.0",
+        "basePath": "/api/v1",
+        "openapi": "/api/v1/openapi.json",
+        "events": {
+            "path": "/api/v1/events",
+            "mediaType": "text/event-stream",
+            "resume": "cursor",
+        },
+        "resources": {
+            "health": "/api/v1/health",
+            "overview": "/api/v1/overview",
+            "board": "/api/v1/board/summary",
+            "fleet": "/api/v1/fleet/summary",
+            "economy": "/api/v1/economy/summary",
+            "report": "/api/v1/reports/{snapshot_id}",
+        },
+        "commands": {
+            "preview": "/api/v1/actions/preview",
+            "authorize": "/api/v1/action-previews/{preview_id}/authorize",
+            "receipt": "/api/v1/action-receipts/{receipt_id}",
+            "capabilities": {
+                "preview": "skdashboard.actions.preview",
+                "authorize": "skdashboard.actions.authorize",
+            },
+        },
+        "compatibility": {
+            "minimumClientContract": "1.1.0",
+            "unsupportedVersion": "fail_closed",
+        },
+        "deprecation": {
+            "policy": "/api/v1/deprecation-policy",
+            "sunsetHeaderRequired": True,
+        },
+    },
+}
+MANIFEST_SHA256 = _manifest_hash(MANIFEST)
+MANIFEST["manifest_sha256"] = MANIFEST_SHA256
+MANIFEST["signature"] = {"suite_id": "ed25519-v1", "value": "synthetic"}
+
+
 def _metric() -> dict:
     return {
         "schema_version": "1.1.0",
@@ -157,6 +226,58 @@ def _authorized(request) -> bool:
     return request.headers.get("authorization") == f"Bearer {BEARER}"
 
 
+def _preview(
+    recommendation_id: str = "rec-synthetic-1",
+    action_contract_id: str = "synthetic.noop",
+) -> dict:
+    return {
+        "preview_id": "apv-synthetic-action-1",
+        "preview_hash": HASH,
+        "schema_version": "1.1.0",
+        "status": "ready",
+        "action_class": "read_only",
+        "source_recommendation_id": recommendation_id,
+        "action_contract_id": action_contract_id,
+        "action_contract_version": "1.0.0",
+        "owner_service": "synthetic.fixture",
+        "owner_operation": "preview_only",
+        "target": {"resource": "synthetic"},
+        "expected_version": "v1",
+        "before_summary": "No production state is available.",
+        "proposed_effect": "No effect.",
+        "blast_radius": "none",
+        "risk": {"level": "low", "reasons": ["synthetic fixture"]},
+        "reversibility": "automatic",
+        "verification_plan": ["Verify fixture receipt."],
+        "rollback_plan": ["No state to roll back."],
+        "required_scope": "skdashboard.actions.authorize",
+        "required_approvals": [
+            {
+                "approval_type": "none",
+                "state": "approved",
+                "exact_version_required": True,
+                "current": True,
+            }
+        ],
+        "policy_decision_ref": "policy:synthetic-fixture",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+
+
+def _receipt() -> dict:
+    return {
+        "receipt_id": "cmdr-synthetic-1",
+        "preview_id": "apv-synthetic-action-1",
+        "preview_hash": HASH,
+        "status": "accepted",
+        "owner_service": "synthetic.fixture",
+        "owner_receipt_ref": "owner:synthetic-1",
+        "policy_decision_ref": "policy:synthetic-fixture",
+        "accepted_at": "2026-08-24T12:00:30Z",
+        "verification_state": "passed",
+    }
+
+
 def _error(code: str, message: str, status: int) -> JSONResponse:
     return JSONResponse(
         {
@@ -171,17 +292,7 @@ def _error(code: str, message: str, status: int) -> JSONResponse:
 
 def create_fixture_app() -> Starlette:
     async def manifest(_request):
-        return JSONResponse(
-            {
-                "schemaVersion": "1.1",
-                "id": "skdashboard-fixture",
-                "name": "SK Control Plane public synthetic fixture",
-                "grade": "B",
-                "entry": {"url": f"{ORIGIN}/"},
-                "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
-                "health": f"{ORIGIN}/api/v1/health",
-            }
-        )
+        return JSONResponse(MANIFEST)
 
     async def health(request):
         return _etag_response(request, _envelope([{"component": "fixture", "state": "current"}]))
@@ -221,6 +332,31 @@ def create_fixture_app() -> Starlette:
             return _error("INVALID_QUERY", "The synthetic query was invalid.", 400)
         return _etag_response(request, INSIGHT)
 
+    async def preview_action(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic preview was denied.", 403)
+        try:
+            body = await request.json()
+            preview = _preview(body["recommendation_id"], body["action_contract_id"])
+        except Exception:
+            return _error("INVALID_PREVIEW", "The synthetic preview was invalid.", 400)
+        return _etag_response(request, preview)
+
+    async def authorize_action(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic authorization was denied.", 403)
+        return JSONResponse(_receipt(), status_code=202)
+
+    async def receipt(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic receipt was denied.", 403)
+        if request.path_params["receipt_id"] == "cmdr-pending-1":
+            pending = dict(_receipt())
+            pending["receipt_id"] = "cmdr-pending-1"
+            pending["verification_state"] = "pending"
+            return JSONResponse(pending)
+        return JSONResponse(_receipt())
+
     async def events(request):
         if not _authorized(request):
             return _error("FORBIDDEN", "The public synthetic stream was denied.", 403)
@@ -242,9 +378,20 @@ def create_fixture_app() -> Starlette:
             Route("/api/v1/economy/summary", page),
             Route("/api/v1/reports/{snapshot_id}", report),
             Route("/api/v1/insights/query", insight, methods=["POST"]),
+            Route("/api/v1/actions/preview", preview_action, methods=["POST"]),
+            Route("/api/v1/action-previews/{preview_id}/authorize", authorize_action, methods=["POST"]),
+            Route("/api/v1/action-receipts/{receipt_id}", receipt),
             Route("/api/v1/events", events),
         ]
     )
 
 
-__all__ = ["BEARER", "INSIGHT", "ORIGIN", "REPORT", "create_fixture_app"]
+__all__ = [
+    "BEARER",
+    "INSIGHT",
+    "MANIFEST_SHA256",
+    "MANIFEST",
+    "ORIGIN",
+    "REPORT",
+    "create_fixture_app",
+]
