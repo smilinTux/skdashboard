@@ -157,6 +157,55 @@ def _authorized(request) -> bool:
     return request.headers.get("authorization") == f"Bearer {BEARER}"
 
 
+def _preview() -> dict:
+    return {
+        "preview_id": "apv-synthetic-action-1",
+        "preview_hash": HASH,
+        "schema_version": "1.1.0",
+        "status": "ready",
+        "action_class": "read_only",
+        "source_recommendation_id": "rec-synthetic-1",
+        "action_contract_id": "synthetic.noop",
+        "action_contract_version": "1.0.0",
+        "owner_service": "synthetic.fixture",
+        "owner_operation": "preview_only",
+        "target": {"resource": "synthetic"},
+        "expected_version": "v1",
+        "before_summary": "No production state is available.",
+        "proposed_effect": "No effect.",
+        "blast_radius": "none",
+        "risk": {"level": "low", "reasons": ["synthetic fixture"]},
+        "reversibility": "automatic",
+        "verification_plan": ["Verify fixture receipt."],
+        "rollback_plan": ["No state to roll back."],
+        "required_scope": "skdashboard.actions.authorize",
+        "required_approvals": [
+            {
+                "approval_type": "none",
+                "state": "approved",
+                "exact_version_required": True,
+                "current": True,
+            }
+        ],
+        "policy_decision_ref": "policy:synthetic-fixture",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+
+
+def _receipt() -> dict:
+    return {
+        "receipt_id": "cmdr-synthetic-1",
+        "preview_id": "apv-synthetic-action-1",
+        "preview_hash": HASH,
+        "status": "accepted",
+        "owner_service": "synthetic.fixture",
+        "owner_receipt_ref": "owner:synthetic-1",
+        "policy_decision_ref": "policy:synthetic-fixture",
+        "accepted_at": "2026-08-24T12:00:30Z",
+        "verification_state": "passed",
+    }
+
+
 def _error(code: str, message: str, status: int) -> JSONResponse:
     return JSONResponse(
         {
@@ -221,6 +270,25 @@ def create_fixture_app() -> Starlette:
             return _error("INVALID_QUERY", "The synthetic query was invalid.", 400)
         return _etag_response(request, INSIGHT)
 
+    async def preview_action(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic preview was denied.", 403)
+        return _etag_response(request, _preview())
+
+    async def authorize_action(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic authorization was denied.", 403)
+        return JSONResponse(_receipt(), status_code=202)
+
+    async def receipt(request):
+        if not _authorized(request):
+            return _error("FORBIDDEN", "The synthetic receipt was denied.", 403)
+        if request.path_params["receipt_id"] == "pending":
+            pending = dict(_receipt())
+            pending["verification_state"] = "pending"
+            return JSONResponse(pending)
+        return JSONResponse(_receipt())
+
     async def events(request):
         if not _authorized(request):
             return _error("FORBIDDEN", "The public synthetic stream was denied.", 403)
@@ -242,6 +310,9 @@ def create_fixture_app() -> Starlette:
             Route("/api/v1/economy/summary", page),
             Route("/api/v1/reports/{snapshot_id}", report),
             Route("/api/v1/insights/query", insight, methods=["POST"]),
+            Route("/api/v1/actions/preview", preview_action, methods=["POST"]),
+            Route("/api/v1/action-previews/{preview_id}/authorize", authorize_action, methods=["POST"]),
+            Route("/api/v1/action-receipts/{receipt_id}", receipt),
             Route("/api/v1/events", events),
         ]
     )

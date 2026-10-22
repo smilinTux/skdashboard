@@ -165,6 +165,60 @@ def test_report_insight_saved_scope_and_metric_family_follow_frozen_schemas() ->
     asyncio.run(run())
 
 
+def test_action_preview_submit_and_receipt_poll_require_explicit_capabilities() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            with pytest.raises(ControlPlaneClientError, match="explicit action capability"):
+                await client.preview_action(
+                    "rec-1", "synthetic.noop", "proposal-1", capability=""
+                )
+            preview = await client.preview_action(
+                "rec-1",
+                "synthetic.noop",
+                "proposal-1",
+                capability="skdashboard.actions.preview",
+            )
+            assert preview.data["status"] == "ready"
+            with pytest.raises(ControlPlaneClientError, match="explicit action capability"):
+                await client.submit_action(
+                    preview.data["preview_id"],
+                    preview.data["preview_hash"],
+                    "idempotency-key-0001",
+                    "synthetic approval",
+                    capability="",
+                )
+            submitted = await client.submit_action(
+                preview.data["preview_id"],
+                preview.data["preview_hash"],
+                "idempotency-key-0001",
+                "synthetic approval",
+                capability="skdashboard.actions.authorize",
+            )
+            receipt = await client.poll_receipt(submitted.data["receipt_id"])
+            assert receipt.data["verification_state"] == "passed"
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_receipt_poll_timeout_and_cancellation_are_fail_closed() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            with pytest.raises(TimeoutError):
+                await client.poll_receipt("pending", timeout=0.01, interval=0.005)
+            cancelled = asyncio.Event()
+            cancelled.set()
+            with pytest.raises(asyncio.CancelledError):
+                await client.poll_receipt("pending", cancel_event=cancelled)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
 def test_pagination_event_resume_and_reset_are_bounded() -> None:
     async def run() -> None:
         client = await _client()
