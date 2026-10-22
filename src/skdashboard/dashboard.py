@@ -775,8 +775,8 @@ def create_app(
     control_plane_schedule_forecast_provider=None,
     control_plane_reliability_provider=None,
     control_plane_architecture_provider=None,
-    control_plane_governance_provider=None,
-    control_plane_report_provider=None,
+    control_plane_governance_provider=None, control_plane_insight_provider=None,
+    control_plane_report_provider=None, control_plane_workload_manager=None,
 ):
     """Build the Starlette ASGI app for the dashboard.
 
@@ -1955,6 +1955,10 @@ def create_app(
         Route("/api/fleet/drift", api_fleet_drift),
     ]
     from .control_plane_api import routes as control_plane_routes
+    from .workload_isolation import BoundedWorkloadManager
+
+    owns_workload_manager = control_plane_workload_manager is None
+    control_plane_workload_manager = control_plane_workload_manager or BoundedWorkloadManager()
 
     routes.extend(
         control_plane_routes(
@@ -1971,6 +1975,8 @@ def create_app(
             architecture_provider=control_plane_architecture_provider,
             governance_provider=control_plane_governance_provider,
             report_provider=control_plane_report_provider,
+            insight_provider=control_plane_insight_provider,
+            workload_manager=control_plane_workload_manager,
         )
     )
     if static_dir.exists():
@@ -1989,6 +1995,8 @@ def create_app(
             task = getattr(app.state, "poll_task", None)
             if task is not None:
                 task.cancel()
+            if owns_workload_manager:
+                control_plane_workload_manager.close()
 
     app = Starlette(routes=routes, lifespan=_lifespan)
 

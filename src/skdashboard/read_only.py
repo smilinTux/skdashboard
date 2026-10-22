@@ -104,6 +104,8 @@ def create_read_only_app(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    insight_provider=None,
+    workload_manager=None,
 ) -> Starlette:
     """Build the least-privilege app without importing legacy route tables."""
 
@@ -162,6 +164,9 @@ def create_read_only_app(
             architecture_provider=architecture_provider,
             governance_provider=governance_provider,
             report_provider=report_provider,
+            insight_provider=insight_provider,
+            workload_manager=workload_manager,
+            include_insight_route=False,
         )
     )
     if session_adapter is not None:

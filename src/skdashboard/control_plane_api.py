@@ -16,9 +16,17 @@ from uuid import uuid4
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .workload_isolation import (
+    BoundedWorkloadManager,
+    WorkloadQueueFull,
+    WorkloadTimedOut,
+)
+
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
+MAX_INSIGHT_REQUEST_BYTES = 64 * 1024
+MAX_PROJECTION_RESPONSE_BYTES = 2 * 1024 * 1024
 TENANT_RESOURCE_TYPE = "tenant"
 ALLOWED_BROWSER_ORIGINS = frozenset({"https://10.0.0.139:7778", "https://100.81.238.58:7778"})
 SSE_CURRENTNESS_SECONDS = 1
@@ -630,6 +638,9 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    insight_provider=None,
+    workload_manager=None,
+    include_insight_route=True,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -641,8 +652,10 @@ def routes(
         or architecture_provider is not None
         or governance_provider is not None
         or report_provider is not None
+        or insight_provider is not None
     ) and decision_authorizer is None:
         raise ValueError("owner projection requires typed control-plane authorization")
+    workload_manager = workload_manager or BoundedWorkloadManager()
     hits: dict[str, deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
     authorize = authorizer or (
@@ -682,6 +695,15 @@ def routes(
                 require_stream_context=require_stream_context,
             )
         )
+
+    def post_protected(handler, capability: str):
+        endpoint = protected(handler, capability)
+
+        async def gated(request):
+            # _capability_gate: the typed wrapper authorizes before the handler.
+            return await endpoint(request)
+
+        return gated
 
     async def health(request):
         raw = health_reader(home)
@@ -1184,12 +1206,33 @@ def routes(
                 retryable=True,
             )
         try:
-            projection = report_provider.read(context, query, home, currentness_verifier=verifier)
+            projection = await workload_manager.run(
+                "report",
+                lambda: report_provider.read(
+                    context, query, home, currentness_verifier=verifier
+                ),
+            )
         except KeyError:
             return _error(
                 request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
             )
-        except ValueError:
+        except WorkloadQueueFull:
+            return _error(
+                request,
+                503,
+                "REPORT_WORKLOAD_QUEUE_FULL",
+                "the report workload queue is full",
+                retryable=True,
+            )
+        except WorkloadTimedOut:
+            return _error(
+                request,
+                503,
+                "REPORT_WORKLOAD_TIMEOUT",
+                "the report workload exceeded its execution bound",
+                retryable=True,
+            )
+        except (PermissionError, ValueError, RuntimeError):
             return _error(
                 request,
                 503,
@@ -1199,7 +1242,108 @@ def routes(
             )
         if not isinstance(projection, dict):
             return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report projection")
-        serialized = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            serialized = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode()
+        except (TypeError, ValueError):
+            return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report projection")
+        if len(serialized) > MAX_PROJECTION_RESPONSE_BYTES:
+            return _error(request, 503, "REPORTS_UNAVAILABLE", "report projection exceeds its bound")
+        etag = f'"{hashlib.sha256(serialized).hexdigest()}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(serialized, media_type="application/json", headers={"ETag": etag})
+
+    async def insights(request):
+        try:
+            content_length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            return _error(request, 400, "INVALID_QUERY", "content length is invalid")
+        if content_length > MAX_INSIGHT_REQUEST_BYTES:
+            return _error(request, 413, "QUERY_TOO_LARGE", "insight query exceeds its bound")
+        body_parts = []
+        body_size = 0
+        try:
+            async for chunk in request.stream():
+                body_size += len(chunk)
+                if body_size > MAX_INSIGHT_REQUEST_BYTES:
+                    return _error(request, 413, "QUERY_TOO_LARGE", "insight query exceeds its bound")
+                body_parts.append(chunk)
+        except Exception:
+            return _error(request, 400, "INVALID_QUERY", "insight query is invalid")
+        body = b"".join(body_parts)
+        try:
+            query = json.loads(body)
+            from .control_plane_client import ContractValidators
+
+            ContractValidators().validate("insight_query", query)
+        except Exception:
+            return _error(request, 400, "INVALID_QUERY", "insight query is invalid")
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        if insight_provider is None or context is None or verifier is None:
+            return _error(
+                request,
+                503,
+                "INSIGHTS_UNAVAILABLE",
+                "the authorized insight workload is unavailable",
+                retryable=True,
+            )
+        query_method = getattr(insight_provider, "query", None)
+        if not callable(query_method):
+            query_method = getattr(insight_provider, "read", None)
+        if not callable(query_method):
+            return _error(
+                request,
+                503,
+                "INSIGHTS_UNAVAILABLE",
+                "the authorized insight workload is unavailable",
+                retryable=True,
+            )
+        try:
+            insight = await workload_manager.run(
+                "insight",
+                lambda: query_method(
+                    context, query, home, currentness_verifier=verifier
+                ),
+            )
+        except WorkloadQueueFull:
+            return _error(
+                request,
+                503,
+                "INSIGHT_WORKLOAD_QUEUE_FULL",
+                "the insight workload queue is full",
+                retryable=True,
+            )
+        except WorkloadTimedOut:
+            return _error(
+                request,
+                503,
+                "INSIGHT_WORKLOAD_TIMEOUT",
+                "the insight workload exceeded its execution bound",
+                retryable=True,
+            )
+        except (PermissionError, ValueError, RuntimeError):
+            return _error(
+                request,
+                503,
+                "INSIGHTS_UNAVAILABLE",
+                "the authorized insight workload is unavailable",
+                retryable=True,
+            )
+        if not isinstance(insight, dict):
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "invalid insight proposal")
+        try:
+            from .control_plane_client import ContractValidators
+
+            ContractValidators().validate("insight", insight)
+        except Exception:
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "invalid insight proposal")
+        try:
+            serialized = json.dumps(insight, sort_keys=True, separators=(",", ":")).encode()
+        except (TypeError, ValueError):
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "invalid insight proposal")
+        if len(serialized) > MAX_PROJECTION_RESPONSE_BYTES:
+            return _error(request, 503, "INSIGHTS_UNAVAILABLE", "insight exceeds its bound")
         etag = f'"{hashlib.sha256(serialized).hexdigest()}"'
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag})
@@ -1222,21 +1366,52 @@ def routes(
                 retryable=True,
             )
         try:
-            snapshot = report_provider.read_snapshot(
-                context, snapshot_id, home, currentness_verifier=verifier
+            snapshot = await workload_manager.run(
+                "report",
+                lambda: report_provider.read_snapshot(
+                    context, snapshot_id, home, currentness_verifier=verifier
+                ),
             )
         except KeyError:
             return _error(
                 request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
             )
-        except ValueError:
+        except WorkloadQueueFull:
             return _error(
-                request, 404, "REPORT_NOT_FOUND", "the immutable report snapshot was not found"
+                request,
+                503,
+                "REPORT_WORKLOAD_QUEUE_FULL",
+                "the report workload queue is full",
+                retryable=True,
+            )
+        except WorkloadTimedOut:
+            return _error(
+                request,
+                503,
+                "REPORT_WORKLOAD_TIMEOUT",
+                "the report workload exceeded its execution bound",
+                retryable=True,
+            )
+        except (PermissionError, ValueError, RuntimeError):
+            return _error(
+                request,
+                503,
+                "REPORTS_UNAVAILABLE",
+                "the authorized report snapshot is unavailable",
+                retryable=True,
             )
         if not isinstance(snapshot, dict):
             return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report snapshot")
-        serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
-        etag = f'"{snapshot["report_hash"].removeprefix("sha256:")}"'
+        try:
+            serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+            report_hash = snapshot["report_hash"]
+            if not isinstance(report_hash, str) or not report_hash.startswith("sha256:"):
+                raise ValueError("report hash is invalid")
+            if len(serialized) > MAX_PROJECTION_RESPONSE_BYTES:
+                raise ValueError("report snapshot exceeds its bound")
+            etag = f'"{report_hash.removeprefix("sha256:")}"'
+        except (KeyError, TypeError, ValueError):
+            return _error(request, 503, "REPORTS_UNAVAILABLE", "invalid report snapshot")
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag})
         return Response(serialized, media_type="application/json", headers={"ETag": etag})
@@ -1305,8 +1480,40 @@ def routes(
             "# TYPE skdashboard_control_plane_denied_total counter",
             f"skdashboard_control_plane_denied_total {counters['denied']}",
         ]
+        for workload, values in sorted(workload_manager.snapshot().items()):
+            metric_prefix = f"skdashboard_workload_{workload}"
+            lines.extend(
+                [
+                    f"# HELP {metric_prefix}_pending Admitted running and queued work.",
+                    f"# TYPE {metric_prefix}_pending gauge",
+                    f"{metric_prefix}_pending {values['pending']}",
+                    f"# HELP {metric_prefix}_queue_full_total Rejected work due to admission bounds.",
+                    f"# TYPE {metric_prefix}_queue_full_total counter",
+                    f"{metric_prefix}_queue_full_total {values['rejected']}",
+                    f"# HELP {metric_prefix}_timeouts_total Workloads that exceeded their timeout.",
+                    f"# TYPE {metric_prefix}_timeouts_total counter",
+                    f"{metric_prefix}_timeouts_total {values['timeouts']}",
+                    f"# HELP {metric_prefix}_cancelled_total Workloads cancelled by their caller.",
+                    f"# TYPE {metric_prefix}_cancelled_total counter",
+                    f"{metric_prefix}_cancelled_total {values['cancelled']}",
+                    f"# HELP {metric_prefix}_failed_total Workloads that failed in their owner.",
+                    f"# TYPE {metric_prefix}_failed_total counter",
+                    f"{metric_prefix}_failed_total {values['failed']}",
+                ]
+            )
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    insight_route = (
+        [
+            Route(
+                "/api/v1/insights/query",
+                post_protected(insights, "skdashboard.insights.query"),
+                methods=["POST"],
+            )
+        ]
+        if include_insight_route
+        else []
+    )
     return [
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
@@ -1316,6 +1523,7 @@ def routes(
         Route("/api/v1/architecture/projection", protected(architecture, "skdashboard.read")),
         Route("/api/v1/governance/projection", protected(governance, "skdashboard.read")),
         Route("/api/v1/reports/projection", protected(reports, "skdashboard.read")),
+        *insight_route,
         Route(
             "/api/v1/reports/{snapshot_id}",
             protected(report_snapshot, "skdashboard.reports.read"),
