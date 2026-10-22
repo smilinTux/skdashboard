@@ -16,9 +16,18 @@ from uuid import uuid4
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .control_plane_actions import (
+    ActionPreviewError,
+    ActionPreviewStore,
+    IdempotencyConflict,
+    normalize_preview,
+)
+
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
+MAX_ACTION_REQUEST_BYTES = 64 * 1024
+MAX_ACTION_RESPONSE_BYTES = 256 * 1024
 TENANT_RESOURCE_TYPE = "tenant"
 ALLOWED_BROWSER_ORIGINS = frozenset({"https://10.0.0.139:7778", "https://100.81.238.58:7778"})
 SSE_CURRENTNESS_SECONDS = 1
@@ -630,6 +639,9 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    action_provider=None,
+    action_store=None,
+    include_action_routes=True,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -641,8 +653,10 @@ def routes(
         or architecture_provider is not None
         or governance_provider is not None
         or report_provider is not None
+        or action_provider is not None
     ) and decision_authorizer is None:
         raise ValueError("owner projection requires typed control-plane authorization")
+    action_store = action_store or ActionPreviewStore()
     hits: dict[str, deque[float]] = defaultdict(deque)
     counters = {"requests": 0, "denied": 0}
     authorize = authorizer or (
@@ -682,6 +696,82 @@ def routes(
                 require_stream_context=require_stream_context,
             )
         )
+
+    def post_protected(handler, capability: str):
+        endpoint = protected(handler, capability)
+
+        async def gated(request):
+            # _capability_gate: authorization runs before the action handler.
+            return await endpoint(request)
+
+        return gated
+
+    async def _bounded_json(request, *, limit: int):
+        try:
+            content_length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            return None, _error(request, 400, "INVALID_QUERY", "request content length is invalid")
+        if content_length > limit:
+            return None, _error(request, 413, "QUERY_TOO_LARGE", "request exceeds its bound")
+        chunks = []
+        size = 0
+        try:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    return None, _error(request, 413, "QUERY_TOO_LARGE", "request exceeds its bound")
+                chunks.append(chunk)
+            return json.loads(b"".join(chunks)), None
+        except Exception:
+            return None, _error(request, 400, "INVALID_QUERY", "request JSON is invalid")
+
+    def _validate_action(family: str, value: object) -> bool:
+        try:
+            from .control_plane_client import ContractValidators
+
+            ContractValidators().validate(family, value)
+            return True
+        except Exception:
+            return False
+
+    def _action_response(request, value: dict, *, status_code: int = 200):
+        try:
+            serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        except (TypeError, ValueError):
+            return _error(request, 503, "ACTIONS_UNAVAILABLE", "the action response is invalid")
+        if len(serialized) > MAX_ACTION_RESPONSE_BYTES:
+            return _error(request, 503, "ACTIONS_UNAVAILABLE", "the action response exceeds its bound")
+        etag = f'"{hashlib.sha256(serialized).hexdigest()}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(
+            serialized,
+            status_code=status_code,
+            media_type="application/json",
+            headers={"ETag": etag},
+        )
+
+    def _expiry(value: object):
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else None
+
+    def _current(context, verifier, *, phase: str) -> bool:
+        from capauth import DecisionState
+
+        try:
+            check = (
+                verifier.check_before_owner_read
+                if phase == "before"
+                else verifier.check_after_owner_read
+            )
+            return check(context) is DecisionState.ALLOW
+        except Exception:
+            return False
 
     async def health(request):
         raw = health_reader(home)
@@ -1205,6 +1295,275 @@ def routes(
             return Response(status_code=304, headers={"ETag": etag})
         return Response(serialized, media_type="application/json", headers={"ETag": etag})
 
+    async def action_preview(request):
+        payload, response = await _bounded_json(request, limit=MAX_ACTION_REQUEST_BYTES)
+        if response is not None:
+            return response
+        if not _validate_action("action_preview_request", payload):
+            return _error(
+                request,
+                400,
+                "INVALID_ACTION_PREVIEW",
+                "the action preview request is invalid",
+            )
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        provider = getattr(action_provider, "preview", None)
+        if not callable(provider):
+            provider = getattr(action_provider, "build_preview", None)
+        if not callable(provider) or context is None or verifier is None:
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the authorized action preview provider is unavailable",
+                retryable=True,
+            )
+        if not _current(context, verifier, phase="before"):
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the action preview policy is unavailable",
+                retryable=True,
+            )
+        try:
+            preview = provider(context, payload, home, currentness_verifier=verifier)
+        except (PermissionError, RuntimeError, ValueError):
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the action preview provider is unavailable",
+                retryable=True,
+            )
+        if not _current(context, verifier, phase="after") or not isinstance(preview, dict):
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the action preview policy is unavailable",
+                retryable=True,
+            )
+        try:
+            preview = normalize_preview(preview)
+        except (ActionPreviewError, TypeError, ValueError):
+            return _error(request, 409, "INVALID_ACTION_PREVIEW", "the action preview is not exact")
+        if not _validate_action("action_preview", preview):
+            return _error(request, 503, "ACTIONS_UNAVAILABLE", "the action preview is invalid")
+        try:
+            stored = action_store.put_preview(preview)
+        except ActionPreviewError:
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_CONFLICT",
+                "the preview identity is already bound",
+            )
+        return _action_response(request, stored)
+
+    async def action_authorize(request):
+        preview_id = request.path_params.get("preview_id", "")
+        if not isinstance(preview_id, str) or not preview_id or len(preview_id) > 96:
+            return _error(request, 404, "ACTION_PREVIEW_NOT_FOUND", "the action preview was not found")
+        payload, response = await _bounded_json(request, limit=MAX_ACTION_REQUEST_BYTES)
+        if response is not None:
+            return response
+        if not _validate_action("action_authorization_request", payload):
+            return _error(
+                request,
+                400,
+                "INVALID_ACTION_AUTHORIZATION",
+                "the action authorization request is invalid",
+            )
+        context = getattr(request.state, "control_plane_decision", None)
+        verifier = getattr(request.state, "control_plane_currentness_verifier", None)
+        if context is None or verifier is None:
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the authorized action boundary is unavailable",
+                retryable=True,
+            )
+        preview = action_store.get_preview(preview_id)
+        if preview is None:
+            return _error(request, 404, "ACTION_PREVIEW_NOT_FOUND", "the action preview was not found")
+        try:
+            exact_preview = normalize_preview(preview)
+        except (ActionPreviewError, TypeError, ValueError):
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_CONFLICT",
+                "the stored action preview is not exact",
+            )
+        if exact_preview != preview:
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_CONFLICT",
+                "the stored action preview is not exact",
+            )
+        if payload["preview_hash"] != preview.get("preview_hash"):
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_CONFLICT",
+                "the preview hash is not the exact authorized value",
+            )
+        expires_at = _expiry(preview.get("expires_at"))
+        if expires_at is None or expires_at <= datetime.now(timezone.utc):
+            return _error(request, 409, "ACTION_PREVIEW_EXPIRED", "the action preview has expired")
+        if preview.get("status") != "ready":
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_NOT_READY",
+                "the action preview is not ready for authorization",
+            )
+        approvals = preview.get("required_approvals")
+        sensitive = {"high_risk", "external", "destructive", "protected_matter"}
+        if not isinstance(approvals, list) or any(
+            not isinstance(item, dict)
+            or item.get("state") != "approved"
+            or item.get("exact_version_required") is not True
+            or item.get("current") is not True
+            for item in approvals
+            ):
+            return _error(
+                request,
+                409,
+                "ACTION_APPROVAL_REQUIRED",
+                "the exact current approvals are not satisfied",
+            )
+        if preview.get("action_class") in sensitive and not approvals:
+            return _error(
+                request,
+                409,
+                "ACTION_APPROVAL_REQUIRED",
+                "a sensitive action requires an exact current approval",
+            )
+        if preview.get("action_class") != "read_only" and (
+            not isinstance(preview.get("target"), dict)
+            or not preview.get("target")
+            or not isinstance(preview.get("expected_version"), str)
+            or not preview.get("expected_version").strip()
+        ):
+            return _error(
+                request,
+                409,
+                "ACTION_PREVIEW_NOT_READY",
+                "the action preview is missing its exact target version",
+            )
+        subject = getattr(getattr(context.binding, "principal", None), "subject", "")
+        if not isinstance(subject, str) or not subject:
+            return _error(request, 403, "FORBIDDEN", "the caller identity is unavailable")
+        provider = getattr(action_provider, "authorize", None)
+        if not callable(provider):
+            provider = getattr(action_provider, "queue", None)
+        if not callable(provider):
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the owner command provider is unavailable",
+                retryable=True,
+            )
+        if not _current(context, verifier, phase="before"):
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the action authorization policy is unavailable",
+                retryable=True,
+            )
+        try:
+            prior = action_store.reserve_receipt(
+                subject, payload["idempotency_key"], preview["preview_hash"]
+            )
+        except IdempotencyConflict:
+            return _error(
+                request,
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "the idempotency key belongs to another preview",
+            )
+        except ActionPreviewError:
+            return _error(
+                request,
+                409,
+                "IDEMPOTENCY_IN_PROGRESS",
+                "the idempotency key is already being processed",
+                retryable=True,
+            )
+        if prior is not None:
+            duplicate = dict(prior)
+            duplicate["status"] = "duplicate"
+            return _action_response(request, duplicate, status_code=202)
+        try:
+            receipt = provider(
+                context,
+                preview,
+                payload,
+                home,
+                currentness_verifier=verifier,
+            )
+        except (PermissionError, RuntimeError, ValueError):
+            action_store.release_receipt(
+                subject, payload["idempotency_key"], preview["preview_hash"]
+            )
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the owner command provider is unavailable",
+                retryable=True,
+            )
+        if not _current(context, verifier, phase="after"):
+            action_store.release_receipt(
+                subject, payload["idempotency_key"], preview["preview_hash"]
+            )
+            return _error(
+                request,
+                503,
+                "ACTIONS_UNAVAILABLE",
+                "the action authorization policy is unavailable",
+                retryable=True,
+            )
+        if receipt is None:
+            receipt = {
+                "receipt_id": "rcp-" + preview_id,
+                "preview_id": preview_id,
+                "preview_hash": preview["preview_hash"],
+                "status": "queued",
+                "owner_service": preview["owner_service"],
+                "owner_receipt_ref": None,
+                "policy_decision_ref": preview["policy_decision_ref"],
+                "accepted_at": _now(),
+                "verification_state": "pending",
+            }
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("preview_id") != preview_id
+            or receipt.get("preview_hash") != preview["preview_hash"]
+            or not _validate_action("command_receipt", receipt)
+        ):
+            action_store.release_receipt(
+                subject, payload["idempotency_key"], preview["preview_hash"]
+            )
+            return _error(request, 503, "ACTIONS_UNAVAILABLE", "the owner receipt is invalid")
+        try:
+            stored = action_store.record_receipt(subject, payload["idempotency_key"], receipt)
+        except IdempotencyConflict:
+            return _error(
+                request,
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "the idempotency key belongs to another preview",
+            )
+        return _action_response(request, stored, status_code=202)
+
     async def report_snapshot(request):
         snapshot_id = request.path_params.get("snapshot_id", "")
         if len(snapshot_id) > 96:
@@ -1307,7 +1666,25 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
+    action_routes = (
+        [
+            Route(
+                "/api/v1/actions/preview",
+                post_protected(action_preview, "skdashboard.actions.preview"),
+                methods=["POST"],
+            ),
+            Route(
+                "/api/v1/action-previews/{preview_id}/authorize",
+                post_protected(action_authorize, "skdashboard.actions.authorize"),
+                methods=["POST"],
+            ),
+        ]
+        if include_action_routes
+        else []
+    )
+
     return [
+        *action_routes,
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),

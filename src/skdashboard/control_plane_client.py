@@ -57,14 +57,23 @@ class ClientResponse:
 
 def _contract_documents() -> dict[str, dict]:
     root = Path(__file__).parent / "contracts" / "v1.1.0"
+    repository_root = root.parents[3]
     names = (
         "openapi.control-plane.v1.1.0.json",
         "control-plane-metric-result.v1.1.0.schema.json",
         "control-plane-recommendation.v1.1.0.schema.json",
         "control-plane-insight.v1.1.0.schema.json",
         "control-plane-report-snapshot.v1.1.0.schema.json",
+        "control-plane-action-preview.v1.1.0.schema.json",
     )
-    return {name: json.loads((root / name).read_text(encoding="utf-8")) for name in names}
+    documents = {}
+    for name in names:
+        path = root / name
+        if not path.is_file():
+            path = repository_root / "docs" / "contracts" / "v1.1.0" / name
+        if path.is_file():
+            documents[name] = json.loads(path.read_text(encoding="utf-8"))
+    return documents
 
 
 class ContractValidators:
@@ -123,6 +132,31 @@ class ContractValidators:
         self.validators["error"] = Draft202012Validator(
             error, registry=self.registry, format_checker=self.format_checker
         )
+        action_schema = documents.get("control-plane-action-preview.v1.1.0.schema.json")
+        if action_schema is not None:
+            self.validators["action_preview"] = Draft202012Validator(
+                action_schema,
+                registry=self.registry,
+                format_checker=self.format_checker,
+            )
+        for family, reference in (
+            ("action_preview_request", "ActionPreviewRequest"),
+            ("action_authorization_request", "ActionAuthorizationRequest"),
+            ("command_receipt", "CommandReceipt"),
+        ):
+            document = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
+            document.update(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$id": f"https://schemas.skworld.local/skdashboard/{family}.v1.1.0.json",
+                    "$ref": f"#/components/schemas/{reference}",
+                }
+            )
+            self.validators[family] = Draft202012Validator(
+                document,
+                registry=self.registry,
+                format_checker=self.format_checker,
+            )
 
     def validate(self, family: str, value: object) -> None:
         try:
