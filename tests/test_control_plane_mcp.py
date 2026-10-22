@@ -30,12 +30,17 @@ from skdashboard.control_plane_mcp import (
 )
 
 
+def _verify_signature(_payload: bytes, value: str) -> bool:
+    return value == "synthetic"
+
+
 async def _client() -> ControlPlaneClient:
     return await ControlPlaneClient.discover(
         ORIGIN + "/.well-known/skworld-module.json",
         BEARER,
         transport=httpx.ASGITransport(app=create_fixture_app()),
         manifest_sha256=MANIFEST_SHA256,
+        signature_verifier=_verify_signature,
     )
 
 

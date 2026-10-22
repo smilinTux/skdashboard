@@ -27,8 +27,16 @@ from skdashboard.control_plane_fixture import (
     WINDOW,
     create_fixture_app,
 )
+from skdashboard.skdashboard_manifest import skdashboard_module_manifest
 
 DISCOVERY = ORIGIN + "/.well-known/skworld-module.json"
+
+
+def _verify_signature(_payload: bytes, value: str) -> bool:
+    return value == "synthetic"
+
+
+SIGNATURE_VERIFIER = _verify_signature
 
 
 async def _client() -> ControlPlaneClient:
@@ -37,6 +45,7 @@ async def _client() -> ControlPlaneClient:
         BEARER,
         transport=httpx.ASGITransport(app=create_fixture_app()),
         manifest_sha256=MANIFEST_SHA256,
+        signature_verifier=SIGNATURE_VERIFIER,
     )
 
 
@@ -66,13 +75,9 @@ def test_client_discovers_same_origin_and_never_discloses_bearer() -> None:
 
 
 def test_discovery_rejects_redirects_cross_origin_and_non_https() -> None:
-    manifest = {
-        "schemaVersion": "1.1",
-        "entry": {"url": "https://other.test/"},
-        "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
-        "health": "https://other.test/api/v1/health",
-    }
-    manifest["manifest_sha256"] = canonical_manifest_hash(manifest)
+    manifest = copy.deepcopy(MANIFEST)
+    manifest["entry"] = {"url": "https://other.test/"}
+    manifest["health"] = "https://other.test/api/v1/health"
 
     async def handler(_request):
         return httpx.Response(200, json=manifest)
@@ -118,9 +123,103 @@ def test_discovery_requires_exact_caller_pinned_hash_and_rejects_origin_change()
                 BEARER,
                 transport=httpx.MockTransport(handler),
                 manifest_sha256=MANIFEST_SHA256,
+                signature_verifier=SIGNATURE_VERIFIER,
             )
 
     asyncio.run(run())
+
+
+def _manifest_variant(mutator) -> dict:
+    manifest = copy.deepcopy(MANIFEST)
+    mutator(manifest)
+    manifest["manifest_sha256"] = canonical_manifest_hash(manifest)
+    return manifest
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda value: value.update(schemaVersion="1.2"), "incompatible"),
+        (lambda value: value.update(schemaVersion="9.9"), "incompatible"),
+        (
+            lambda value: value.update(
+                entry={"url": "https://other.test/"},
+            ),
+            "origin",
+        ),
+        (
+            lambda value: value.update(
+                auth={"audience": "other-service", "scopes": ["skdashboard.read"]}
+            ),
+            "audience",
+        ),
+        (
+            lambda value: value["controlPlane"].update(contractVersion="2.0.0"),
+            "incompatible contract",
+        ),
+        (
+            lambda value: value["controlPlane"]["events"].update(path="../events"),
+            "malformed events",
+        ),
+    ],
+)
+def test_discovery_rejects_manifest_downgrade_origin_audience_and_contract(
+    mutator, message: str
+) -> None:
+    manifest = _manifest_variant(mutator)
+
+    async def handler(_request):
+        return httpx.Response(200, json=manifest)
+
+    async def run() -> None:
+        with pytest.raises(ControlPlaneClientError, match=message):
+            await ControlPlaneClient.discover(
+                DISCOVERY,
+                BEARER,
+                transport=httpx.MockTransport(handler),
+                manifest_sha256=manifest["manifest_sha256"],
+                signature_verifier=SIGNATURE_VERIFIER,
+            )
+
+    asyncio.run(run())
+
+
+def test_discovery_rejects_unsigned_tampered_and_malformed_suite_manifests() -> None:
+    variants = []
+    unsigned = copy.deepcopy(MANIFEST)
+    unsigned.pop("signature")
+    variants.append((unsigned, "unsigned"))
+    tampered = copy.deepcopy(MANIFEST)
+    tampered["signature"]["value"] = "tampered"
+    variants.append((tampered, "verification failed"))
+    malformed_suite = copy.deepcopy(MANIFEST)
+    malformed_suite["signature"]["suite_id"] = "unknown-v1"
+    variants.append((malformed_suite, "suite is unsupported"))
+
+    async def run() -> None:
+        for manifest, message in variants:
+            with pytest.raises(ControlPlaneClientError, match=message):
+                await ControlPlaneClient.discover(
+                    DISCOVERY,
+                    BEARER,
+                    transport=httpx.MockTransport(
+                        lambda _request, value=manifest: httpx.Response(200, json=value)
+                    ),
+                    manifest_sha256=MANIFEST_SHA256,
+                    signature_verifier=SIGNATURE_VERIFIER,
+                )
+
+    asyncio.run(run())
+
+
+def test_producer_matches_shared_schema_and_keeps_contract_version_separate() -> None:
+    expected = copy.deepcopy(MANIFEST)
+    expected.pop("manifest_sha256")
+    expected.pop("signature")
+    assert skdashboard_module_manifest(ORIGIN + "/") == expected
+    assert expected["schemaVersion"] == "1.3"
+    assert expected["controlPlane"]["contractVersion"] == "1.1.0"
+    assert expected["schemaVersion"] != expected["controlPlane"]["contractVersion"]
 
 
 def test_client_reads_validates_etag_and_keeps_cached_data_immutable() -> None:
@@ -258,6 +357,7 @@ def test_changed_preview_hash_is_rejected_before_authorize_transport() -> None:
             BEARER,
             transport=CountingTransport(),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             preview = await client.preview_action(
@@ -294,6 +394,7 @@ def test_unrelated_valid_receipt_id_is_rejected_before_receipt_transport() -> No
             BEARER,
             transport=CountingTransport(),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             before = len(paths)
@@ -322,6 +423,7 @@ def test_preview_is_one_use_across_changed_key_and_concurrent_submissions() -> N
             BEARER,
             transport=CountingTransport(),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             preview = await client.preview_action(
@@ -371,6 +473,7 @@ def test_preview_is_consumed_before_first_dispatch_failure() -> None:
             BEARER,
             transport=FailingTransport(),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             preview = await client.preview_action(
@@ -592,6 +695,7 @@ def test_client_validates_frozen_error_contract_before_exposing_status() -> None
             BEARER,
             transport=httpx.MockTransport(valid_error),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             with pytest.raises(ControlPlaneClientError, match="503 SOURCE_UNAVAILABLE"):
@@ -603,6 +707,7 @@ def test_client_validates_frozen_error_contract_before_exposing_status() -> None
             BEARER,
             transport=httpx.MockTransport(invalid_error),
             manifest_sha256=MANIFEST_SHA256,
+            signature_verifier=SIGNATURE_VERIFIER,
         )
         try:
             with pytest.raises(ControlPlaneClientError, match="schema validation"):

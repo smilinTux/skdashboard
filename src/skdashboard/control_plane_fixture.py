@@ -24,21 +24,72 @@ HASH = "sha256:" + "a" * 64
 
 
 def _manifest_hash(manifest: dict) -> str:
-    canonical = json.dumps(manifest, allow_nan=False, sort_keys=True, separators=(",", ":"))
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"manifest_sha256", "signature"}
+    }
+    canonical = json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 MANIFEST = {
-    "schemaVersion": "1.1",
-    "id": "skdashboard-fixture",
-    "name": "SK Control Plane public synthetic fixture",
+    "schemaVersion": "1.3",
+    "id": "skdashboard",
+    "name": "Board",
     "grade": "B",
     "entry": {"url": f"{ORIGIN}/"},
+    "nav": {"icon": "dashboard", "order": 40, "label": "Board"},
+    "deeplinkPrefix": "skworld://skdashboard/",
     "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
+    "memory": {"opt_in": False},
     "health": f"{ORIGIN}/api/v1/health",
+    "operator": {
+        "contractVersion": 1,
+        "cli": "skdashboard operator",
+        "repos": ["skdashboard"],
+        "conditions": ["ControlPlaneReady"],
+        "proposedStandardActions": [],
+    },
+    "controlPlane": {
+        "contractVersion": "1.1.0",
+        "basePath": "/api/v1",
+        "openapi": "/api/v1/openapi.json",
+        "events": {
+            "path": "/api/v1/events",
+            "mediaType": "text/event-stream",
+            "resume": "cursor",
+        },
+        "resources": {
+            "health": "/api/v1/health",
+            "overview": "/api/v1/overview",
+            "board": "/api/v1/board/summary",
+            "fleet": "/api/v1/fleet/summary",
+            "economy": "/api/v1/economy/summary",
+            "report": "/api/v1/reports/{snapshot_id}",
+        },
+        "commands": {
+            "preview": "/api/v1/actions/preview",
+            "authorize": "/api/v1/action-previews/{preview_id}/authorize",
+            "receipt": "/api/v1/action-receipts/{receipt_id}",
+            "capabilities": {
+                "preview": "skdashboard.actions.preview",
+                "authorize": "skdashboard.actions.authorize",
+            },
+        },
+        "compatibility": {
+            "minimumClientContract": "1.1.0",
+            "unsupportedVersion": "fail_closed",
+        },
+        "deprecation": {
+            "policy": "/api/v1/deprecation-policy",
+            "sunsetHeaderRequired": True,
+        },
+    },
 }
 MANIFEST_SHA256 = _manifest_hash(MANIFEST)
 MANIFEST["manifest_sha256"] = MANIFEST_SHA256
+MANIFEST["signature"] = {"suite_id": "ed25519-v1", "value": "synthetic"}
 
 
 def _metric() -> dict:

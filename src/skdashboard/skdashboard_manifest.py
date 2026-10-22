@@ -32,8 +32,9 @@ two locked together.
 
 from __future__ import annotations
 
-#: The manifest schema version (sk-standards manifest schema v1.1, +operator block).
-SCHEMA_VERSION = "1.1"
+#: The signed SKWorld module manifest schema. This is independent of the
+#: control-plane API contract advertised inside the manifest.
+SCHEMA_VERSION = "1.3"
 #: The audience skdashboard tokens are minted for. Mirrors the capauth
 #: AUDIENCE_SCOPES convention (a minimal read-only ``<app>.read`` scope until the
 #: dashboard needs a wider verb set); tighten/expand there when it does.
@@ -69,18 +70,51 @@ def skdashboard_module_manifest(base_url: str) -> dict:
             "audience": AUDIENCE,
             "scopes": ["skdashboard.read"],
         },
-        "memory": {"opt_in": True, "scope": "skdashboard"},
-        "health": f"{base}/api/status",
+        "memory": {"opt_in": False},
+        "health": f"{base}/api/v1/health",
         # Operator facet: what Atlas's skdashboard adapter observes and may act on.
         "operator": {
             "contractVersion": 1,
-            "cli": "skcapstone dashboard operator",
-            "repos": ["skcapstone"],
-            "conditions": [
-                "DashboardReady",
-                "BoardReadable",
-            ],
-            "proposedStandardActions": ["restart-dashboard"],
+            "cli": "skdashboard operator",
+            "repos": ["skdashboard"],
+            "conditions": ["ControlPlaneReady"],
+            "proposedStandardActions": [],
+        },
+        # The API contract version is deliberately separate from SCHEMA_VERSION.
+        "controlPlane": {
+            "contractVersion": "1.1.0",
+            "basePath": "/api/v1",
+            "openapi": "/api/v1/openapi.json",
+            "events": {
+                "path": "/api/v1/events",
+                "mediaType": "text/event-stream",
+                "resume": "cursor",
+            },
+            "resources": {
+                "health": "/api/v1/health",
+                "overview": "/api/v1/overview",
+                "board": "/api/v1/board/summary",
+                "fleet": "/api/v1/fleet/summary",
+                "economy": "/api/v1/economy/summary",
+                "report": "/api/v1/reports/{snapshot_id}",
+            },
+            "commands": {
+                "preview": "/api/v1/actions/preview",
+                "authorize": "/api/v1/action-previews/{preview_id}/authorize",
+                "receipt": "/api/v1/action-receipts/{receipt_id}",
+                "capabilities": {
+                    "preview": "skdashboard.actions.preview",
+                    "authorize": "skdashboard.actions.authorize",
+                },
+            },
+            "compatibility": {
+                "minimumClientContract": "1.1.0",
+                "unsupportedVersion": "fail_closed",
+            },
+            "deprecation": {
+                "policy": "/api/v1/deprecation-policy",
+                "sunsetHeaderRequired": True,
+            },
         },
     }
 

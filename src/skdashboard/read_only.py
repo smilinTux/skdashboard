@@ -115,19 +115,11 @@ def create_read_only_app(
         return HTMLResponse((static_dir / name).read_text(encoding="utf-8"))
 
     async def manifest(request):
-        base = str(request.base_url).rstrip("/")
-        return JSONResponse(
-            {
-                "schemaVersion": "1.1",
-                "id": "skdashboard-read-only",
-                "name": "SK Control Plane",
-                "grade": "B",
-                "entry": {"url": f"{base}/"},
-                "nav": {"icon": "dashboard", "order": 40, "label": "Control Plane"},
-                "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
-                "health": f"{base}/api/v1/health",
-            }
-        )
+        from .skdashboard_manifest import skdashboard_module_manifest
+
+        manifest = skdashboard_module_manifest(str(request.base_url))
+        manifest.pop("operator")
+        return JSONResponse(manifest)
 
     routes = [Route("/", index), Route("/.well-known/skworld-module.json", manifest)]
     routes.extend(

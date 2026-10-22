@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import AsyncIterator, Mapping
+from typing import AsyncIterator, Callable, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -20,6 +20,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
 CONTRACT_VERSION = "1.1.0"
+MODULE_SCHEMA_VERSION = "1.3"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_EVENT_TOPICS = 16
 REPORT_ID = re.compile(r"^rpt-[a-z0-9][a-z0-9-]{7,95}$")
@@ -45,6 +46,11 @@ PREVIEW_ID = re.compile(r"^apv-[a-z0-9][a-z0-9-]{7,95}$")
 RECEIPT_ID = re.compile(r"^cmdr-[a-z0-9][a-z0-9-]{7,95}$")
 HASH = re.compile(r"^sha256:[a-f0-9]{64}$")
 MANIFEST_HASH = re.compile(r"^[a-f0-9]{64}$")
+MANIFEST_ORIGIN = re.compile(r"^https://[^/?#]+$")
+CONTROL_PLANE_PATH = re.compile(
+    r"^/(?!/)(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9._~!$&'()*+,;=:@%{}/-]+$"
+)
+SIGNATURE_SUITES = frozenset({"ed25519-v1", "capauth-pgp-v1"})
 
 _OPERATIONS = {
     "health": ("GET", "/api/v1/health", "envelope", False),
@@ -81,11 +87,21 @@ class _PreviewBinding:
 
 
 def canonical_manifest_hash(manifest: Mapping[str, object]) -> str:
-    """Hash the canonical manifest, excluding its caller-verifiable binding."""
+    """Hash the canonical manifest without mutable hash or signature metadata."""
     unsigned = dict(manifest)
     unsigned.pop("manifest_sha256", None)
+    unsigned.pop("signature", None)
     encoded = json.dumps(unsigned, allow_nan=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def canonical_manifest_signature_bytes(manifest: Mapping[str, object]) -> bytes:
+    """Return deterministic bytes for detached signature verification."""
+    unsigned = dict(manifest)
+    unsigned.pop("signature", None)
+    return json.dumps(unsigned, allow_nan=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def _reject_protected(value: object) -> None:
@@ -263,6 +279,7 @@ class ControlPlaneClient:
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 5.0,
         manifest_sha256: str | None = None,
+        signature_verifier: Callable[[bytes, str], bool] | None = None,
     ) -> "ControlPlaneClient":
         parsed = urlsplit(discovery_url)
         if (
@@ -285,7 +302,9 @@ class ControlPlaneClient:
                 raise ControlPlaneClientError("control-plane discovery failed")
             manifest = response.json()
             origin = f"{parsed.scheme}://{parsed.netloc}"
-            cls._validate_manifest(manifest, origin, manifest_sha256)
+            cls._validate_manifest(
+                manifest, origin, manifest_sha256, signature_verifier=signature_verifier
+            )
             return cls(origin, bearer, http, manifest=manifest, owns_http=True)
         except Exception:
             await http.aclose()
@@ -293,12 +312,19 @@ class ControlPlaneClient:
 
     @staticmethod
     def _validate_manifest(
-        manifest: object, origin: str, approved_hash: str | None
+        manifest: object,
+        origin: str,
+        approved_hash: str | None,
+        *,
+        signature_verifier: Callable[[bytes, str], bool] | None = None,
     ) -> None:
-        if not isinstance(manifest, dict) or manifest.get("schemaVersion") != "1.1":
+        if not isinstance(manifest, dict) or manifest.get("schemaVersion") != MODULE_SCHEMA_VERSION:
             raise ControlPlaneClientError("discovery manifest is incompatible")
         auth = manifest.get("auth")
-        if not isinstance(auth, dict) or auth.get("audience") != "skdashboard":
+        if not isinstance(auth, dict) or auth != {
+            "audience": "skdashboard",
+            "scopes": ["skdashboard.read"],
+        }:
             raise ControlPlaneClientError("discovery manifest has the wrong audience")
         health = manifest.get("health")
         if health != origin + "/api/v1/health":
@@ -308,6 +334,53 @@ class ControlPlaneClient:
         parsed_entry = urlsplit(entry_url) if isinstance(entry_url, str) else None
         if parsed_entry is None or entry_url.rstrip("/") != origin:
             raise ControlPlaneClientError("discovery entry crosses origins")
+        if not MANIFEST_ORIGIN.fullmatch(origin):
+            raise ControlPlaneClientError("discovery origin is not canonical")
+        profile = manifest.get("controlPlane")
+        if not isinstance(profile, dict) or profile.get("contractVersion") != CONTRACT_VERSION:
+            raise ControlPlaneClientError("discovery manifest has an incompatible contract")
+        if profile.get("basePath") != "/api/v1":
+            raise ControlPlaneClientError("discovery manifest has an incompatible base path")
+        if profile.get("compatibility") != {
+            "minimumClientContract": CONTRACT_VERSION,
+            "unsupportedVersion": "fail_closed",
+        }:
+            raise ControlPlaneClientError("discovery manifest has an incompatible compatibility policy")
+        commands = profile.get("commands")
+        if not isinstance(commands, dict) or commands.get("capabilities") != {
+            "preview": "skdashboard.actions.preview",
+            "authorize": "skdashboard.actions.authorize",
+        }:
+            raise ControlPlaneClientError("discovery manifest has incompatible command capabilities")
+        resources = profile.get("resources")
+        if not isinstance(resources, dict) or set(resources) != {
+            "health",
+            "overview",
+            "board",
+            "fleet",
+            "economy",
+            "report",
+        }:
+            raise ControlPlaneClientError("discovery manifest has incomplete resources")
+        paths = [profile.get("basePath"), profile.get("openapi"), *resources.values()]
+        events = profile.get("events")
+        if events != {
+            "path": "/api/v1/events",
+            "mediaType": "text/event-stream",
+            "resume": "cursor",
+        }:
+            raise ControlPlaneClientError("discovery manifest has malformed events")
+        paths.append(events["path"])
+        paths.extend(commands.get(key) for key in ("preview", "authorize", "receipt"))
+        deprecation = profile.get("deprecation")
+        if deprecation != {
+            "policy": "/api/v1/deprecation-policy",
+            "sunsetHeaderRequired": True,
+        }:
+            raise ControlPlaneClientError("discovery manifest has malformed deprecation policy")
+        paths.append(deprecation["policy"])
+        if any(not isinstance(path, str) or not CONTROL_PLANE_PATH.fullmatch(path) for path in paths):
+            raise ControlPlaneClientError("discovery manifest contains a non-relative path")
         if (
             not isinstance(approved_hash, str)
             or not MANIFEST_HASH.fullmatch(approved_hash)
@@ -315,6 +388,26 @@ class ControlPlaneClient:
             or not hmac.compare_digest(canonical_manifest_hash(manifest), approved_hash)
         ):
             raise ControlPlaneClientError("discovery manifest is not caller-pinned")
+        signature = manifest.get("signature")
+        if not isinstance(signature, dict):
+            raise ControlPlaneClientError("discovery manifest is unsigned")
+        if set(signature) - {"suite_id", "alg", "value"}:
+            raise ControlPlaneClientError("discovery manifest signature is malformed")
+        if signature.get("suite_id") not in SIGNATURE_SUITES:
+            raise ControlPlaneClientError("discovery manifest signature suite is unsupported")
+        if signature.get("alg") not in {None, "capauth"}:
+            raise ControlPlaneClientError("discovery manifest signature algorithm is unsupported")
+        value = signature.get("value")
+        if not isinstance(value, str) or not value.strip():
+            raise ControlPlaneClientError("discovery manifest signature is malformed")
+        if not callable(signature_verifier):
+            raise ControlPlaneClientError("discovery manifest signature verifier is unavailable")
+        try:
+            verified = signature_verifier(canonical_manifest_signature_bytes(manifest), value)
+        except Exception as error:
+            raise ControlPlaneClientError("discovery manifest signature verification failed") from error
+        if not verified:
+            raise ControlPlaneClientError("discovery manifest signature verification failed")
 
     async def aclose(self) -> None:
         if self._owns_http:
