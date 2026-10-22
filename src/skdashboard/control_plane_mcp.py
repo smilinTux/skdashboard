@@ -14,7 +14,12 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 
-from .control_plane_client import ClientResponse, ControlPlaneClient, ControlPlaneClientError
+from .control_plane_client import (
+    ClientResponse,
+    ControlPlaneClient,
+    ControlPlaneClientError,
+    _reject_protected,
+)
 
 _FIXED = {
     "skdashboard://control-plane/health": ("Control-plane health", "health"),
@@ -23,30 +28,7 @@ _FIXED = {
     "skdashboard://control-plane/fleet": ("Fleet summary", "fleet"),
     "skdashboard://control-plane/economy": ("Economy summary", "economy"),
 }
-_PROTECTED_KEYS = frozenset(
-    {
-        "tenant_id",
-        "matter_id",
-        "raw_content",
-        "content_bytes",
-        "capability_token",
-        "bearer_token",
-        "secret",
-        "credential",
-    }
-)
 _MAX_BEARER_BYTES = 64 * 1024
-
-
-def _reject_protected(value: object) -> None:
-    if isinstance(value, dict):
-        if _PROTECTED_KEYS.intersection(value):
-            raise ControlPlaneClientError("MCP resource contains protected fields")
-        for child in value.values():
-            _reject_protected(child)
-    elif isinstance(value, list):
-        for child in value:
-            _reject_protected(child)
 
 
 def _read_bearer(path: Path) -> str:
@@ -129,8 +111,50 @@ class ControlPlaneResources:
         raise ControlPlaneClientError("MCP resource URI is not allowlisted")
 
 
+class ControlPlaneTools:
+    """Explicit-capability command tools over the same canonical client."""
+
+    def __init__(self, client: ControlPlaneClient):
+        self.client = client
+
+    async def preview(self, arguments: dict[str, object]) -> ClientResponse:
+        allowed = {
+            "recommendation_id",
+            "action_contract_id",
+            "parameter_proposal_ref",
+            "capability",
+        }
+        if set(arguments) != allowed:
+            raise ControlPlaneClientError("MCP tool arguments are outside the contract")
+        return await self.client.preview_action(
+            str(arguments.get("recommendation_id", "")),
+            str(arguments.get("action_contract_id", "")),
+            str(arguments.get("parameter_proposal_ref", "")),
+            capability=str(arguments.get("capability", "")),
+        )
+
+    async def submit(self, arguments: dict[str, object]) -> ClientResponse:
+        allowed = {
+            "preview_id",
+            "preview_hash",
+            "idempotency_key",
+            "approval_reason",
+            "capability",
+        }
+        if set(arguments) != allowed:
+            raise ControlPlaneClientError("MCP tool arguments are outside the contract")
+        return await self.client.submit_action(
+            str(arguments.get("preview_id", "")),
+            str(arguments.get("preview_hash", "")),
+            str(arguments.get("idempotency_key", "")),
+            str(arguments.get("approval_reason", "")),
+            capability=str(arguments.get("capability", "")),
+        )
+
+
 def create_mcp_server(client: ControlPlaneClient) -> Server:
     resources = ControlPlaneResources(client)
+    tools = ControlPlaneTools(client)
     server = Server("skdashboard-read-only")
 
     @server.list_resources()
@@ -151,6 +175,64 @@ def create_mcp_server(client: ControlPlaneClient) -> Server:
                 meta={"etag": response.etag} if response.etag else None,
             )
         ]
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name="skdashboard_preview_action",
+                description="Preview one allowlisted action with an explicit capability.",
+                inputSchema={
+                    "type": "object",
+                    "required": [
+                        "recommendation_id",
+                        "action_contract_id",
+                        "parameter_proposal_ref",
+                        "capability",
+                    ],
+                    "additionalProperties": False,
+                    "properties": {
+                        "recommendation_id": {"type": "string"},
+                        "action_contract_id": {"type": "string"},
+                        "parameter_proposal_ref": {"type": "string"},
+                        "capability": {"const": "skdashboard.actions.preview"},
+                    },
+                },
+            ),
+            types.Tool(
+                name="skdashboard_submit_action",
+                description="Submit one exact approved preview with an explicit capability.",
+                inputSchema={
+                    "type": "object",
+                    "required": [
+                        "preview_id",
+                        "preview_hash",
+                        "idempotency_key",
+                        "approval_reason",
+                        "capability",
+                    ],
+                    "additionalProperties": False,
+                    "properties": {
+                        "preview_id": {"type": "string"},
+                        "preview_hash": {"type": "string"},
+                        "idempotency_key": {"type": "string"},
+                        "approval_reason": {"type": "string"},
+                        "capability": {"const": "skdashboard.actions.authorize"},
+                    },
+                },
+            ),
+        ]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict[str, object]) -> list[types.TextContent]:
+        if name == "skdashboard_preview_action":
+            response = await tools.preview(arguments)
+        elif name == "skdashboard_submit_action":
+            response = await tools.submit(arguments)
+        else:
+            raise ControlPlaneClientError("MCP tool is not allowlisted")
+        _reject_protected(response.data)
+        return [types.TextContent(type="text", text=json.dumps(response.data, sort_keys=True))]
 
     return server
 
@@ -180,4 +262,4 @@ def main(argv: list[str] | None = None) -> None:
     asyncio.run(_run(args.discovery_url, args.bearer_file))
 
 
-__all__ = ["ControlPlaneResources", "create_mcp_server", "main"]
+__all__ = ["ControlPlaneResources", "ControlPlaneTools", "create_mcp_server", "main"]

@@ -193,7 +193,18 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         total = 10 if lane == "harness_reported" else 20
         return {
             "generated_at": NOW.isoformat(),
-            "summary": {"total": total, "cost_state": "unavailable"},
+            "summary": {
+                "tokens": {
+                    "input": 1,
+                    "output": 2,
+                    "cache_read": 3,
+                    "cache_write": 0,
+                    "reasoning": 4,
+                    "total": total,
+                },
+                "cost_usd": 0.0,
+                "cost_state": "billed",
+            },
             "coverage": {
                 "expected_nodes": 1,
                 "reporting_nodes": 1,
@@ -241,6 +252,8 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
     }
     assert by_id["skcounter.harness"]["aggregate"]["tokens_total"] == 10
     assert by_id["skgateway.observed"]["aggregate"]["tokens_total"] == 20
+    assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 0.0
+    assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "billed"
     assert by_id["skjoule.wallet"]["aggregate"] == {"total_supply": 7, "active_agents": 1}
 
 

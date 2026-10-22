@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import hashlib
+import hmac
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import AsyncIterator, Mapping
 from urllib.parse import urlsplit
 
@@ -33,6 +38,13 @@ METRIC_FAMILIES = frozenset(
 )
 SCOPE_KEYS = frozenset({"project_id", "service_id", "environment", "baseline"})
 PAGE_OPERATIONS = frozenset({"board", "fleet", "economy"})
+ACTION_CAPABILITIES = frozenset(
+    {"skdashboard.actions.preview", "skdashboard.actions.authorize"}
+)
+PREVIEW_ID = re.compile(r"^apv-[a-z0-9][a-z0-9-]{7,95}$")
+RECEIPT_ID = re.compile(r"^cmdr-[a-z0-9][a-z0-9-]{7,95}$")
+HASH = re.compile(r"^sha256:[a-f0-9]{64}$")
+MANIFEST_HASH = re.compile(r"^[a-f0-9]{64}$")
 
 _OPERATIONS = {
     "health": ("GET", "/api/v1/health", "envelope", False),
@@ -41,6 +53,9 @@ _OPERATIONS = {
     "fleet": ("GET", "/api/v1/fleet/summary", "envelope", True),
     "economy": ("GET", "/api/v1/economy/summary", "envelope", True),
     "insight": ("POST", "/api/v1/insights/query", "insight", True),
+    "preview_action": ("POST", "/api/v1/actions/preview", "action_preview", True),
+    "authorize_action": ("POST", None, "receipt", True),
+    "receipt": ("GET", None, "receipt", True),
 }
 
 
@@ -55,12 +70,70 @@ class ClientResponse:
     not_modified: bool = False
 
 
+@dataclass(frozen=True)
+class _PreviewBinding:
+    preview_id: str
+    preview_hash: str
+    status: str
+    expires_at: str
+    target: tuple[tuple[str, str], ...]
+    parameters: tuple[str, str, str]
+
+
+def canonical_manifest_hash(manifest: Mapping[str, object]) -> str:
+    """Hash the canonical manifest, excluding its caller-verifiable binding."""
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    encoded = json.dumps(unsigned, allow_nan=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _reject_protected(value: object) -> None:
+    """Reject protected Matter aliases without including the value in errors."""
+    aliases = {
+        "tenant",
+        "tenantid",
+        "tenantref",
+        "tenantreference",
+        "matter",
+        "matterid",
+        "matterref",
+        "matterreference",
+        "matterpayload",
+        "protectedmatter",
+    }
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                if normalized in aliases:
+                    raise ControlPlaneClientError("MCP resource contains protected fields")
+                if normalized in {"classification", "actionclass"} and isinstance(child, str):
+                    if re.sub(r"[^a-z0-9]", "", child.lower()) == "protectedmatter":
+                        raise ControlPlaneClientError("MCP resource contains protected fields")
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+        elif isinstance(item, str):
+            if re.search(r"(?:^|[^a-z])protected[_ -]?matter(?:$|[^a-z])", item, re.I):
+                raise ControlPlaneClientError("MCP resource contains protected fields")
+            if re.search(r"\bclassified\s+matter\s+summary\b", item, re.I):
+                raise ControlPlaneClientError("MCP resource contains protected fields")
+            if re.search(r"(?:^|[^a-z])matter(?:[-_:/.]|\d)", item, re.I):
+                raise ControlPlaneClientError("MCP resource contains protected fields")
+
+    visit(value)
+
+
 def _contract_documents() -> dict[str, dict]:
     root = Path(__file__).parent / "contracts" / "v1.1.0"
     names = (
         "openapi.control-plane.v1.1.0.json",
         "control-plane-metric-result.v1.1.0.schema.json",
         "control-plane-recommendation.v1.1.0.schema.json",
+        "control-plane-action-preview.v1.1.0.schema.json",
         "control-plane-insight.v1.1.0.schema.json",
         "control-plane-report-snapshot.v1.1.0.schema.json",
     )
@@ -101,6 +174,28 @@ class ContractValidators:
                 format_checker=self.format_checker,
             ),
         }
+        action = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
+        action.update(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://schemas.skworld.local/skdashboard/action-preview.v1.1.0.json",
+                "$ref": "https://schemas.skworld.local/skdashboard/control-plane-action-preview.v1.1.0.schema.json",
+            }
+        )
+        self.validators["action_preview"] = Draft202012Validator(
+            action, registry=self.registry, format_checker=self.format_checker
+        )
+        receipt = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
+        receipt.update(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://schemas.skworld.local/skdashboard/command-receipt.v1.1.0.json",
+                "$ref": "#/components/schemas/CommandReceipt",
+            }
+        )
+        self.validators["receipt"] = Draft202012Validator(
+            receipt, registry=self.registry, format_checker=self.format_checker
+        )
         query = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
         query.update(
             {
@@ -151,6 +246,10 @@ class ControlPlaneClient:
         self.manifest = copy.deepcopy(dict(manifest))
         self.validators = validators or ContractValidators()
         self._cache: dict[str, ClientResponse] = {}
+        self._previews: dict[str, _PreviewBinding] = {}
+        self._consumed_previews: set[tuple[str, str]] = set()
+        self._preview_lock = Lock()
+        self._receipts: dict[str, tuple[str, str]] = {}
 
     def __repr__(self) -> str:
         return f"ControlPlaneClient(origin={self.origin!r})"
@@ -163,6 +262,7 @@ class ControlPlaneClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 5.0,
+        manifest_sha256: str | None = None,
     ) -> "ControlPlaneClient":
         parsed = urlsplit(discovery_url)
         if (
@@ -185,14 +285,16 @@ class ControlPlaneClient:
                 raise ControlPlaneClientError("control-plane discovery failed")
             manifest = response.json()
             origin = f"{parsed.scheme}://{parsed.netloc}"
-            cls._validate_manifest(manifest, origin)
+            cls._validate_manifest(manifest, origin, manifest_sha256)
             return cls(origin, bearer, http, manifest=manifest, owns_http=True)
         except Exception:
             await http.aclose()
             raise
 
     @staticmethod
-    def _validate_manifest(manifest: object, origin: str) -> None:
+    def _validate_manifest(
+        manifest: object, origin: str, approved_hash: str | None
+    ) -> None:
         if not isinstance(manifest, dict) or manifest.get("schemaVersion") != "1.1":
             raise ControlPlaneClientError("discovery manifest is incompatible")
         auth = manifest.get("auth")
@@ -206,6 +308,13 @@ class ControlPlaneClient:
         parsed_entry = urlsplit(entry_url) if isinstance(entry_url, str) else None
         if parsed_entry is None or entry_url.rstrip("/") != origin:
             raise ControlPlaneClientError("discovery entry crosses origins")
+        if (
+            not isinstance(approved_hash, str)
+            or not MANIFEST_HASH.fullmatch(approved_hash)
+            or manifest.get("manifest_sha256") != approved_hash
+            or not hmac.compare_digest(canonical_manifest_hash(manifest), approved_hash)
+        ):
+            raise ControlPlaneClientError("discovery manifest is not caller-pinned")
 
     async def aclose(self) -> None:
         if self._owns_http:
@@ -236,7 +345,14 @@ class ControlPlaneClient:
         schema: str | None = None,
         protected: bool | None = None,
     ) -> ClientResponse:
-        if operation in _OPERATIONS:
+        if operation in {"authorize_action", "receipt"} and path is not None:
+            method, fixed_path, family, requires_auth = (
+                _OPERATIONS[operation][0],
+                path,
+                _OPERATIONS[operation][2],
+                _OPERATIONS[operation][3],
+            )
+        elif operation in _OPERATIONS:
             method, fixed_path, family, requires_auth = _OPERATIONS[operation]
         elif operation == "report" and path is not None:
             method, fixed_path, family, requires_auth = "GET", path, "report", True
@@ -253,6 +369,7 @@ class ControlPlaneClient:
             headers["If-None-Match"] = self._cache[cache_key].etag or ""
         encoded = None
         if body is not None:
+            _reject_protected(body)
             if operation == "insight":
                 self.validators.validate("insight_query", body)
             encoded = json.dumps(body, allow_nan=False, sort_keys=True, separators=(",", ":"))
@@ -267,7 +384,8 @@ class ControlPlaneClient:
             if cached is None:
                 raise ControlPlaneClientError("server returned 304 without a validated baseline")
             return ClientResponse(copy.deepcopy(cached.data), cached.etag, True)
-        if response.status_code != 200:
+        expected_statuses = {200, 202} if operation == "authorize_action" else {200}
+        if response.status_code not in expected_statuses:
             try:
                 error = response.json()
             except ValueError as exc:
@@ -285,6 +403,8 @@ class ControlPlaneClient:
         except ValueError as error:
             raise ControlPlaneClientError("response is not JSON") from error
         self.validators.validate(family, data)
+        if family in {"action_preview", "receipt"}:
+            _reject_protected(data)
         result = ClientResponse(copy.deepcopy(data), response.headers.get("etag"))
         if method == "GET":
             self._cache[cache_key] = ClientResponse(copy.deepcopy(data), result.etag)
@@ -330,6 +450,140 @@ class ControlPlaneClient:
 
     async def insight(self, query: dict) -> ClientResponse:
         return await self._request("insight", body=query)
+
+    @staticmethod
+    def _capability(capability: str, expected: str) -> None:
+        if capability != expected or capability not in ACTION_CAPABILITIES:
+            raise ControlPlaneClientError("explicit action capability is required")
+
+    async def preview_action(
+        self,
+        recommendation_id: str,
+        action_contract_id: str,
+        parameter_proposal_ref: str,
+        *,
+        capability: str,
+    ) -> ClientResponse:
+        self._capability(capability, "skdashboard.actions.preview")
+        if not recommendation_id or len(recommendation_id) > 96:
+            raise ControlPlaneClientError("recommendation id is invalid")
+        if not action_contract_id or len(action_contract_id) > 128:
+            raise ControlPlaneClientError("action contract id is invalid")
+        if not parameter_proposal_ref or len(parameter_proposal_ref) > 512:
+            raise ControlPlaneClientError("parameter proposal reference is invalid")
+        response = await self._request(
+            "preview_action",
+            body={
+                "recommendation_id": recommendation_id,
+                "action_contract_id": action_contract_id,
+                "parameter_proposal_ref": parameter_proposal_ref,
+            },
+        )
+        preview = response.data
+        if (
+            preview["source_recommendation_id"] != recommendation_id
+            or preview["action_contract_id"] != action_contract_id
+        ):
+            raise ControlPlaneClientError("action preview does not match request")
+        self._previews[preview["preview_id"]] = _PreviewBinding(
+            preview_id=preview["preview_id"],
+            preview_hash=preview["preview_hash"],
+            status=preview["status"],
+            expires_at=preview["expires_at"],
+            target=tuple(sorted(preview["target"].items())),
+            parameters=(recommendation_id, action_contract_id, parameter_proposal_ref),
+        )
+        return response
+
+    async def submit_action(
+        self,
+        preview_id: str,
+        preview_hash: str,
+        idempotency_key: str,
+        approval_reason: str,
+        *,
+        capability: str,
+    ) -> ClientResponse:
+        self._capability(capability, "skdashboard.actions.authorize")
+        if not PREVIEW_ID.fullmatch(preview_id) or not HASH.fullmatch(preview_hash):
+            raise ControlPlaneClientError("action preview identity is invalid")
+        binding = self._previews.get(preview_id)
+        if binding is None or not hmac.compare_digest(binding.preview_hash, preview_hash):
+            raise ControlPlaneClientError("action preview is unknown or changed")
+        try:
+            expires_at = datetime.fromisoformat(binding.expires_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ControlPlaneClientError("action preview expiry is invalid") from error
+        if (
+            expires_at.tzinfo is None
+            or binding.status != "ready"
+            or expires_at <= datetime.now(timezone.utc)
+        ):
+            raise ControlPlaneClientError("action preview is stale or expired")
+        if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+            raise ControlPlaneClientError("idempotency key is invalid")
+        if not approval_reason or len(approval_reason) > 1000:
+            raise ControlPlaneClientError("approval reason is invalid")
+        consumed = (preview_id, preview_hash)
+        with self._preview_lock:
+            if consumed in self._consumed_previews:
+                raise ControlPlaneClientError("action preview has already been used")
+            self._consumed_previews.add(consumed)
+        response = await self._request(
+            "authorize_action",
+            path=f"/api/v1/action-previews/{preview_id}/authorize",
+            body={
+                "preview_hash": preview_hash,
+                "idempotency_key": idempotency_key,
+                "approval_reason": approval_reason,
+            },
+            schema="receipt",
+        )
+        receipt = response.data
+        if (
+            receipt["preview_id"] != preview_id
+            or not hmac.compare_digest(receipt["preview_hash"], preview_hash)
+        ):
+            raise ControlPlaneClientError("receipt is not bound to the submitted preview")
+        self._receipts[receipt["receipt_id"]] = (preview_id, preview_hash)
+        return response
+
+    async def poll_receipt(
+        self,
+        receipt_id: str,
+        *,
+        timeout: float = 10.0,
+        interval: float = 0.05,
+        cancel_event: asyncio.Event | None = None,
+    ) -> ClientResponse:
+        if not RECEIPT_ID.fullmatch(receipt_id):
+            raise ControlPlaneClientError("receipt id is invalid")
+        binding = self._receipts.get(receipt_id)
+        if binding is None:
+            raise ControlPlaneClientError("receipt id is unknown")
+        if timeout <= 0 or interval <= 0 or interval > timeout:
+            raise ControlPlaneClientError("receipt polling bounds are invalid")
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise asyncio.CancelledError
+            response = await self._request(
+                "receipt",
+                path=f"/api/v1/action-receipts/{receipt_id}",
+                schema="receipt",
+            )
+            if response.data.get("verification_state") != "pending":
+                if (
+                    response.data.get("receipt_id") != receipt_id
+                    or response.data.get("preview_id") != binding[0]
+                    or response.data.get("preview_hash") != binding[1]
+                ):
+                    raise ControlPlaneClientError("receipt identity does not match request")
+                return response
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("receipt polling timed out")
+            await asyncio.sleep(min(interval, remaining))
 
     async def metric_family(
         self, family: str, scope: Mapping[str, object] | None = None
@@ -422,6 +676,7 @@ class ControlPlaneClient:
 
 
 __all__ = [
+    "canonical_manifest_hash",
     "ClientResponse",
     "ContractValidators",
     "ControlPlaneClient",
