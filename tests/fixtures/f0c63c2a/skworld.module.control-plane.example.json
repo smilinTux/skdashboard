@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "1.3",
+  "id": "skdashboard",
+  "name": "Board",
+  "grade": "B",
+  "entry": {"url": "https://synthetic.test/"},
+  "nav": {"icon": "dashboard", "order": 40, "label": "Board"},
+  "deeplinkPrefix": "skworld://skdashboard/",
+  "auth": {
+    "audience": "skdashboard",
+    "scopes": ["skdashboard.read"]
+  },
+  "memory": {"opt_in": false},
+  "health": "https://synthetic.test/api/v1/health",
+  "operator": {
+    "contractVersion": 1,
+    "cli": "skdashboard operator",
+    "repos": ["skdashboard"],
+    "conditions": ["ControlPlaneReady"],
+    "proposedStandardActions": []
+  },
+  "controlPlane": {
+    "contractVersion": "1.1.0",
+    "basePath": "/api/v1",
+    "openapi": "/api/v1/openapi.json",
+    "events": {
+      "path": "/api/v1/events",
+      "mediaType": "text/event-stream",
+      "resume": "cursor"
+    },
+    "resources": {
+      "health": "/api/v1/health",
+      "overview": "/api/v1/overview",
+      "board": "/api/v1/board/summary",
+      "fleet": "/api/v1/fleet/summary",
+      "economy": "/api/v1/economy/summary",
+      "report": "/api/v1/reports/{snapshot_id}"
+    },
+    "commands": {
+      "preview": "/api/v1/actions/preview",
+      "authorize": "/api/v1/action-previews/{preview_id}/authorize",
+      "receipt": "/api/v1/action-receipts/{receipt_id}",
+      "capabilities": {
+        "preview": "skdashboard.actions.preview",
+        "authorize": "skdashboard.actions.authorize"
+      }
+    },
+    "compatibility": {
+      "minimumClientContract": "1.1.0",
+      "unsupportedVersion": "fail_closed"
+    },
+    "deprecation": {
+      "policy": "/api/v1/deprecation-policy",
+      "sunsetHeaderRequired": true
+    }
+  }
+}

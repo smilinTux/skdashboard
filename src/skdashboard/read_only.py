@@ -12,6 +12,7 @@ from starlette.routing import Route
 
 from .control_plane_api import ALLOWED_BROWSER_ORIGINS
 from .control_plane_api import routes as control_plane_routes
+from .control_plane_discovery import SCHEMA_VERSION, control_plane_profile
 from .dashboard import _get_agent_status, _get_board_state
 
 ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "10.0.0.139", "100.81.238.58"})
@@ -88,6 +89,7 @@ def create_read_only_app(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    command_gateway=None,
 ) -> Starlette:
     """Build the least-privilege app without importing legacy route tables."""
 
@@ -117,14 +119,17 @@ def create_read_only_app(
         base = str(request.base_url).rstrip("/")
         return JSONResponse(
             {
-                "schemaVersion": "1.1",
+                "schemaVersion": SCHEMA_VERSION,
                 "id": "skdashboard-read-only",
                 "name": "SK Control Plane",
                 "grade": "B",
                 "entry": {"url": f"{base}/"},
                 "nav": {"icon": "dashboard", "order": 40, "label": "Control Plane"},
+                "deeplinkPrefix": "skworld://skdashboard-read-only/",
                 "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
+                "memory": {"opt_in": False},
                 "health": f"{base}/api/v1/health",
+                "controlPlane": control_plane_profile(),
             }
         )
 
@@ -144,6 +149,7 @@ def create_read_only_app(
             architecture_provider=architecture_provider,
             governance_provider=governance_provider,
             report_provider=report_provider,
+            command_gateway=command_gateway,
         )
     )
     if session_adapter is not None:

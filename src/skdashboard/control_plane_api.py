@@ -29,6 +29,10 @@ class ControlPlaneInvocationFactory(Protocol):
     def __call__(self, request, capability: str, target: str): ...
 
 
+class _PolicyUnavailable(Exception):
+    """The canonical authorization dependencies could not decide."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -287,6 +291,10 @@ def _typed_context(
         if type(verifier) is ControlPlaneCurrentnessVerifier:
             verifier.close()
         return None
+    if result.state is DecisionState.UNAVAILABLE:
+        if type(verifier) is ControlPlaneCurrentnessVerifier:
+            verifier.close()
+        raise _PolicyUnavailable
     if (
         not result.allow
         or result.state is not DecisionState.ALLOW
@@ -392,6 +400,18 @@ def _protected_handler(
                     decision_authorizer=decision_authorizer,
                     invocation_factory=invocation_factory,
                 )
+            except _PolicyUnavailable:
+                counters["denied"] += 1
+                response = _error(
+                    request,
+                    503,
+                    "POLICY_UNAVAILABLE",
+                    "the capability decision is temporarily unavailable",
+                    retryable=True,
+                )
+                response.headers["Retry-After"] = "5"
+                response.headers["Cache-Control"] = "no-store"
+                return response
             except Exception:
                 authority = None
             if authority is None:
@@ -442,6 +462,7 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    command_gateway=None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -461,6 +482,24 @@ def routes(
             home, bearer, capability, target
         )
     )
+    openapi_document = json.loads(
+        (Path(__file__).parent / "contracts/v1.1.0/openapi.control-plane.v1.1.0.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    async def openapi(_request):
+        return JSONResponse(openapi_document)
+
+    async def deprecation_policy(_request):
+        return JSONResponse(
+            {
+                "contract_version": SCHEMA_VERSION,
+                "compatibility": "backward_compatible_within_v1",
+                "sunset_header_required": True,
+                "unsupported_version": "fail_closed",
+            }
+        )
 
     def limited(handler):
         async def wrapped(request):
@@ -958,7 +997,9 @@ def routes(
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
-    return [
+    result = [
+        Route("/api/v1/openapi.json", limited(openapi)),
+        Route("/api/v1/deprecation-policy", limited(deprecation_policy)),
         Route("/api/v1/health", limited(health)),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
@@ -976,3 +1017,8 @@ def routes(
         Route("/api/v1/events", protected(events, "skdashboard.events.read")),
         Route("/metrics", protected(metrics, "skdashboard.read")),
     ]
+    if command_gateway is not None:
+        if decision_authorizer is None:
+            raise ValueError("command routes require typed control-plane authorization")
+        result.extend(command_gateway.routes(protected))
+    return result
