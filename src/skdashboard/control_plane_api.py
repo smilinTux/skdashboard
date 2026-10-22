@@ -927,22 +927,51 @@ def routes(
         return Response(serialized, media_type="application/json", headers={"ETag": etag})
 
     async def events(request):
-        raw_cursor = request.query_params.get("cursor") or request.headers.get("last-event-id")
-        topics = [value for value in request.query_params.get("topics", "").split(",") if value]
+        from .dashboard_kanban import BUS, SSE_HEARTBEAT_SECONDS, stream_sse
+
+        cursor_query = request.query_params.get("cursor")
+        cursor_header = request.headers.get("last-event-id")
+        raw_cursor = cursor_query or cursor_header
+        topics = tuple(
+            value for value in request.query_params.get("topics", "").split(",") if value
+        )
         try:
+            if cursor_query and cursor_header and cursor_query != cursor_header:
+                raise ValueError("resume cursors disagree")
             if len(topics) > 16 or any(len(value) > 64 for value in topics):
                 raise ValueError("topics exceed the bounded contract")
-            if raw_cursor:
+            try:
+                subscription = BUS.open_stream(raw_cursor, topics)
+            except ValueError:
+                # Frozen v1 accepted its pagination-shaped placeholder cursor;
+                # it remains an unavailable replay window, not a malformed query.
+                if not raw_cursor:
+                    raise
                 _cursor(raw_cursor)
+                from .dashboard_kanban import StreamReset, StreamSubscription
+
+                subscription = StreamSubscription(
+                    BUS, (), None, StreamReset("replay window unavailable")
+                )
         except ValueError as exc:
             return _error(request, 400, "INVALID_QUERY", str(exc))
+        except RuntimeError:
+            return _error(
+                request,
+                503,
+                "STREAM_CAPACITY_REACHED",
+                "event stream capacity reached",
+                retryable=True,
+            )
 
-        async def stream():
-            if raw_cursor:
-                yield "event: reset-required\ndata: {\"reason\":\"replay window unavailable\"}\n\n"
-            yield ": heartbeat\n\n"
-
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream_sse(subscription),
+            media_type="text/event-stream",
+            headers={
+                "X-Accel-Buffering": "no",
+                "X-Heartbeat-Interval": str(SSE_HEARTBEAT_SECONDS),
+            },
+        )
 
     async def metrics(_request):
         lines = [

@@ -151,7 +151,7 @@ def test_protected_reads_and_equivalent_sse_fail_closed(tmp_path: Path) -> None:
 def test_named_origins_and_exact_capabilities_preserve_legitimate_reads(tmp_path: Path) -> None:
     client = TestClient(_app(tmp_path))
     assert client.get("/api/v1/overview", headers=READ_HEADERS).status_code == 200
-    assert client.get("/api/v1/events", headers=EVENT_HEADERS).status_code == 200
+    assert client.get("/api/v1/events?cursor=djE6MQ", headers=EVENT_HEADERS).status_code == 200
     assert client.get("/api/v1/events", headers=READ_HEADERS).status_code == 403
 
 
@@ -184,7 +184,7 @@ def test_canonical_capauth_transport_reaches_signature_and_pdp_for_all_routes(
             )
             assert response.status_code == 200
         response = client.get(
-            "/api/v1/events",
+            "/api/v1/events?cursor=djE6MQ",
             headers={"Authorization": f"Bearer {events}", "Origin": TAILNET_ORIGIN},
         )
     assert response.status_code == 200

@@ -13,8 +13,13 @@ runner on this or other nodes (Syncthing-synced).
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from skcoord.card import COLUMN_ORDER, LANE_ORDER, Column
 from skcoord.card_store import CardStore
@@ -398,30 +403,197 @@ def apply_mutation(home: Path, card_id: str, action: str, actor: str, **fields) 
 # ---------------------------------------------------------------------------
 
 
-class Bus:
-    """Minimal async pub/sub for SSE fan-out."""
+SSE_BOUND = 200  # Matches the frozen API's maximum bounded result size.
+SSE_MAX_EVENT_BYTES = 64 * 1024  # Matches the existing bounded request ceiling.
+SSE_HEARTBEAT_SECONDS = 20  # Preserves the existing dashboard SSE interval.
 
-    def __init__(self) -> None:
+
+@dataclass(frozen=True)
+class StreamEvent:
+    sequence: int
+    event_id: str
+    event: str
+    data: str
+
+
+@dataclass(frozen=True)
+class StreamReset:
+    reason: str
+
+
+@dataclass
+class StreamSubscription:
+    bus: "Bus"
+    replay: tuple[StreamEvent, ...]
+    queue: asyncio.Queue | None
+    reset: StreamReset | None = None
+
+    def close(self) -> None:
+        if self.queue is not None:
+            self.bus.close_stream(self.queue)
+
+
+class Bus:
+    """Bounded async fan-out with opaque resumable IDs for control-plane SSE."""
+
+    def __init__(self, *, stream_id: str | None = None) -> None:
         self._subs: set[asyncio.Queue] = set()
+        self._stream_subs: dict[asyncio.Queue, frozenset[str]] = {}
+        self._replay: deque[StreamEvent] = deque(maxlen=SSE_BOUND)
+        self._stream_id = stream_id or uuid4().hex
+        self._sequence = 0
 
     def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
+        """Subscribe to the bounded legacy refresh stream."""
+        if self.subscriber_count >= SSE_BOUND:
+            raise RuntimeError("event stream capacity reached")
+        q: asyncio.Queue = asyncio.Queue(maxsize=SSE_BOUND)
         self._subs.add(q)
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._subs.discard(q)
 
-    def publish(self, message: dict) -> None:
-        for q in list(self._subs):
-            try:
-                q.put_nowait(message)
-            except Exception:  # noqa: BLE001
-                pass
+    def _event_id(self, sequence: int) -> str:
+        value = f"sse:v1:{self._stream_id}:{sequence}".encode()
+        return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_event_id(raw: str) -> tuple[str, int]:
+        if len(raw) > 512:
+            raise ValueError("event cursor is too long")
+        try:
+            decoded = base64.b64decode(
+                raw.encode("ascii") + b"=" * (-len(raw) % 4),
+                altchars=b"-_",
+                validate=True,
+            ).decode("ascii")
+            if base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=") != raw:
+                raise ValueError
+            marker, version, stream_id, sequence_text = decoded.split(":", 3)
+            sequence = int(sequence_text)
+            if marker != "sse" or version != "v1" or len(stream_id) != 32 or sequence < 1:
+                raise ValueError
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("event cursor is invalid") from exc
+        return stream_id, sequence
+
+    def open_stream(
+        self, cursor: str | None = None, topics: tuple[str, ...] = ()
+    ) -> StreamSubscription:
+        if cursor:
+            stream_id, sequence = self._decode_event_id(cursor)
+            oldest = self._replay[0].sequence if self._replay else self._sequence + 1
+            if stream_id != self._stream_id or sequence > self._sequence or sequence < oldest - 1:
+                return StreamSubscription(self, (), None, StreamReset("replay window unavailable"))
+            replay = tuple(
+                event
+                for event in self._replay
+                if event.sequence > sequence and (not topics or event.event in topics)
+            )
+        else:
+            replay = ()
+        if self.subscriber_count >= SSE_BOUND:
+            raise RuntimeError("event stream capacity reached")
+        queue: asyncio.Queue = asyncio.Queue(maxsize=SSE_BOUND)
+        self._stream_subs[queue] = frozenset(topics)
+        return StreamSubscription(self, replay, queue)
+
+    def close_stream(self, queue: asyncio.Queue) -> None:
+        self._stream_subs.pop(queue, None)
+
+    @staticmethod
+    def _replace_with_reset(queue: asyncio.Queue, reason: str) -> None:
+        while not queue.empty():
+            queue.get_nowait()
+        queue.put_nowait(StreamReset(reason))
+
+    def _reset_streams(self, reason: str) -> None:
+        for queue in tuple(self._stream_subs):
+            self._replace_with_reset(queue, reason)
+            self._stream_subs.pop(queue, None)
+
+    def publish(self, message: dict) -> StreamEvent | None:
+        try:
+            event = message.get("type", "message")
+            if (
+                not isinstance(message, dict)
+                or not isinstance(event, str)
+                or not event
+                or len(event) > 64
+                or "\n" in event
+                or "\r" in event
+            ):
+                raise ValueError
+            data = json.dumps(message, sort_keys=True, separators=(",", ":"))
+            if len(data.encode()) > SSE_MAX_EVENT_BYTES:
+                raise ValueError
+        except (AttributeError, TypeError, ValueError):
+            self._reset_streams("producer failure")
+            return None
+
+        self._sequence += 1
+        stored = StreamEvent(self._sequence, self._event_id(self._sequence), event, data)
+        self._replay.append(stored)
+        for queue, topics in tuple(self._stream_subs.items()):
+            if topics and event not in topics:
+                continue
+            if queue.full():
+                self._replace_with_reset(queue, "slow consumer")
+                self._stream_subs.pop(queue, None)
+            else:
+                queue.put_nowait(stored)
+        for queue in tuple(self._subs):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(message)
+        return stored
+
+    @property
+    def replay_size(self) -> int:
+        return len(self._replay)
 
     @property
     def subscriber_count(self) -> int:
-        return len(self._subs)
+        return len(self._subs) + len(self._stream_subs)
+
+
+async def stream_sse(
+    subscription: StreamSubscription,
+    *,
+    heartbeat_seconds: float = SSE_HEARTBEAT_SECONDS,
+):
+    """Serialize one bounded subscription until reset or cancellation."""
+
+    def frame(event: StreamEvent) -> str:
+        return f"id: {event.event_id}\nevent: {event.event}\ndata: {event.data}\n\n"
+
+    try:
+        if subscription.reset is not None:
+            yield (
+                "event: reset-required\n"
+                f"data: {json.dumps({'reason': subscription.reset.reason}, separators=(',', ':'))}\n\n"
+            )
+            yield ": heartbeat\n\n"
+            return
+        for event in subscription.replay:
+            yield frame(event)
+        yield ": heartbeat\n\n"
+        while subscription.queue is not None:
+            try:
+                item = await asyncio.wait_for(subscription.queue.get(), timeout=heartbeat_seconds)
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+                continue
+            if isinstance(item, StreamReset):
+                yield (
+                    "event: reset-required\n"
+                    f"data: {json.dumps({'reason': item.reason}, separators=(',', ':'))}\n\n"
+                )
+                return
+            yield frame(item)
+    finally:
+        subscription.close()
 
 
 BUS = Bus()
