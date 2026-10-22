@@ -1,0 +1,183 @@
+{
+  "approved_numeric_budgets_found": false,
+  "blockers": [
+    "No approved numeric latency or resource threshold exists in the repository/card evidence, so criterion 1 cannot receive a PASS verdict.",
+    "The production app has no /api/v1/insights/query implementation and no report-generation route or worker-isolation mechanism.",
+    "The API has conditional ETag computation but no bounded server projection cache or measurable hit/invalidation policy; every 304 recomputes the full projection.",
+    "The shared per-client rate bucket allows common reads to return 429 for /api/v1/health.",
+    "The board page limit is applied after all owner items are materialized; a limit=1 request scanned 10,000 synthetic items.",
+    "The event endpoint has no replay buffer or event IDs, always emits reset-required for every valid resume cursor, then emits one heartbeat and closes."
+  ],
+  "card": "2d02b6ed",
+  "environment": {
+    "cpu_logical": 24,
+    "cpu_model": "12th Gen Intel(R) Core(TM) i9-12900K",
+    "cwd": "/home/skuser01/worktrees/skdashboard-2d02b6ed-api-qual",
+    "host": "chiap08",
+    "model_route": "skgateway/sk-codex",
+    "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.39",
+    "py_max_rss_kib": 57888,
+    "python": "3.12.3",
+    "reasoning": "high",
+    "tmux_pane": "%5"
+  },
+  "fixture": {
+    "classification": "public",
+    "estate_populations": 16,
+    "metric_cases": 17,
+    "path": "/home/skuser01/worktrees/skdashboard-2d02b6ed-api-qual/tests/fixtures/control_plane_full_estate.v1.0.0.json",
+    "sha256": "926f0374b8f32e64d0f370f9a6197b848a95a3403b8d497c5c67848e77fb821d",
+    "synthetic": true
+  },
+  "generated_at": "2026-08-24T23:50:56Z",
+  "git_head": "9b2cbff7204d3e76a69f4bf21e9bf1de8ec04ef5",
+  "load": {
+    "conditional": "1 baseline plus 100 measured If-None-Match GETs",
+    "health": "10 warm-up plus 100 measured GETs",
+    "mode": "in-process Starlette TestClient; sequential; warm cache where named",
+    "overview": "10 warm-up plus 100 measured GETs over 16 public-synthetic adapter populations",
+    "pagination_probe": "one limit=1 GET with a synthetic 10,000-task owner result",
+    "rate_probe": "120 board GETs then one health GET from one client identity",
+    "stream_probe": "fresh, Last-Event-ID resume, and three reconnect GETs"
+  },
+  "measurements": [
+    {
+      "cpu_seconds": 0.558477,
+      "error_rate": 0.0,
+      "errors": 0,
+      "expected_status": 200,
+      "latency_ms": {
+        "max": 27.461,
+        "mean": 5.051,
+        "min": 2.193,
+        "p50": 3.39,
+        "p95": 13.257,
+        "p99": 16.298
+      },
+      "name": "overview_full_estate",
+      "requests": 100,
+      "statuses": {
+        "200": 100
+      },
+      "throughput_rps": 197.939,
+      "wall_seconds": 0.505206
+    },
+    {
+      "cpu_seconds": 0.309976,
+      "error_rate": 0.0,
+      "errors": 0,
+      "expected_status": 304,
+      "latency_ms": {
+        "max": 3.655,
+        "mean": 2.786,
+        "min": 2.177,
+        "p50": 2.777,
+        "p95": 3.415,
+        "p99": 3.638
+      },
+      "name": "overview_conditional_etag",
+      "requests": 100,
+      "statuses": {
+        "304": 100
+      },
+      "throughput_rps": 358.82,
+      "wall_seconds": 0.278691
+    },
+    {
+      "cpu_seconds": 0.185209,
+      "error_rate": 0.0,
+      "errors": 0,
+      "expected_status": 200,
+      "latency_ms": {
+        "max": 3.736,
+        "mean": 1.817,
+        "min": 1.516,
+        "p50": 1.668,
+        "p95": 2.598,
+        "p99": 2.759
+      },
+      "name": "health",
+      "requests": 100,
+      "statuses": {
+        "200": 100
+      },
+      "throughput_rps": 550.242,
+      "wall_seconds": 0.181738
+    }
+  ],
+  "semantics": {
+    "etag_invalidation": {
+      "after_source_change_status": 200,
+      "before_status": 200,
+      "etag_changed": true
+    },
+    "owner_failures": {
+      "timeout": {
+        "elapsed_ms": 1.321,
+        "error_code": "SOURCE_TIMEOUT",
+        "truth_state": "unavailable"
+      },
+      "unauthorized": {
+        "elapsed_ms": 0.694,
+        "error_code": "SOURCE_UNAUTHORIZED",
+        "truth_state": "unknown"
+      },
+      "unavailable": {
+        "elapsed_ms": 0.816,
+        "error_code": "SOURCE_UNAVAILABLE",
+        "truth_state": "unavailable"
+      },
+      "unreachable": {
+        "elapsed_ms": 0.621,
+        "error_code": "SOURCE_UNREACHABLE",
+        "truth_state": "unreachable"
+      }
+    },
+    "owner_timeout": {
+      "declared_ms": 1000,
+      "exception": "TimeoutError",
+      "observed_ms": 1001.458,
+      "within_test_guard_ms": true
+    },
+    "pagination": {
+      "bounded_source_scan": false,
+      "owner_items_materialized_per_request": 10000,
+      "page": {
+        "has_more": true,
+        "limit": 1,
+        "next_cursor": "djE6MQ"
+      },
+      "returned_items": 1,
+      "status": 200
+    },
+    "rate": {
+      "health_after_120_common_reads": 429,
+      "health_isolated": false,
+      "workload_statuses": {
+        "200": 120
+      }
+    },
+    "stream": {
+      "bounded_buffer_implemented": false,
+      "event_ids_present": false,
+      "fresh_body": ": heartbeat\n\n",
+      "fresh_status": 200,
+      "reconnect_bodies": [
+        ": heartbeat\n\n",
+        ": heartbeat\n\n",
+        ": heartbeat\n\n"
+      ],
+      "replay_event_present": false,
+      "reset_required_present": true,
+      "resume_body": "event: reset-required\ndata: {\"reason\":\"replay window unavailable\"}\n\n: heartbeat\n\n",
+      "resume_status": 200
+    },
+    "workload_isolation": {
+      "common_rate_bucket_can_starve_health": true,
+      "production_insight_route_present": false,
+      "production_insight_status": 404,
+      "report_generation_route_present": false
+    }
+  },
+  "verdict": "BLOCKED"
+}
