@@ -203,6 +203,13 @@ remains a versioned compatibility alias and must not be used for a fleet
 baseline. Whole-network apply continues through the governed SKCapstone/ATLAS
 oneshot, not through the dashboard's local scope.
 
+`/api/cmdb/status` also projects the node-local SKCapstone CMDB scheduler
+record. The dashboard does not start, stop, lease, or configure that job; it
+only exposes its current `status`, last scan/artifact, completeness, changes,
+drift, and failure counters. An older or missing SKCapstone runtime is reported
+as `scheduler.status=unavailable` rather than being mistaken for a healthy
+timer.
+
 This repo has **two release surfaces, and only one of them is complete.**
 
 ### Library release (complete)
@@ -350,7 +357,7 @@ list near the end of `create_app` in `src/skdashboard/dashboard.py`.
 | `/api/itil/{overview,incidents,problems,changes}`, `/api/itil/kedb?q=`, `/api/itil/record/{kind}/{rid}` | ITIL |
 | `/api/cmdb/overview`, `/api/cmdb/ci/{ci_id}` | CMDB overview and exact CI detail |
 | `/api/cmdb/search?q=QUERY&limit=50` | Bounded read-only CMDB search; limit is clamped to 1-100 |
-| `/api/cmdb/status`, `/api/cmdb/plan`, `/api/cmdb/drift` | Checksum-verified reconcile state, write-free local plan, and local drift |
+| `/api/cmdb/status`, `/api/cmdb/plan`, `/api/cmdb/drift` | Checksum-verified reconcile and node-local scheduler health, write-free local plan, and local drift |
 | `/api/operator/overview` | Read-only ATLAS evidence, lifecycle, freeze, CMDB and SKBrain projection |
 | `/api/trust/graph`, `/api/economy`, `/api/models` | trust graph, cost/joule ledger, model roster |
 | `/api/suggest/{surface}/{id}` | suggestions for any fleet surface (`coord`, `gtd`, `itil`, `chat`, `security`) |

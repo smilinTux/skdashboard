@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added node-local CMDB scheduler health to `/api/cmdb/status`, allowing the
+  operator surface to distinguish a healthy, disabled, never-run, unavailable,
+  or failed recurring discovery runner without creating a dashboard write path.
 - Added CMDB status, plan, drift, and capability-gated apply APIs plus explicit
   Plan/Apply controls in the CMDB view. The former seed operation remains only
   as a versioned compatibility alias over the canonical reconciler.

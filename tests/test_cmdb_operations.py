@@ -38,7 +38,7 @@ def test_plan_is_write_free_and_apply_is_idempotent(tmp_path: Path, monkeypatch)
     assert second["counts"]["updated"] == 0
 
 
-def test_status_uses_only_checksum_verified_artifacts(tmp_path: Path) -> None:
+def test_status_uses_only_checksum_verified_artifacts(tmp_path: Path, monkeypatch) -> None:
     write_run_artifact(
         tmp_path,
         {
@@ -52,10 +52,15 @@ def test_status_uses_only_checksum_verified_artifacts(tmp_path: Path) -> None:
     bad.write_text('{"scan_id":"tampered"}\n')
     bad.with_suffix(".sha256").write_text("0" * 64 + "  tampered.json\n")
 
+    monkeypatch.setattr(
+        "skdashboard.dashboard_cmdb._scheduler_health",
+        lambda: {"schema": "skcapstone.cmdb-scheduler/v1", "status": "ok"},
+    )
     result = status(tmp_path)
 
     assert result["latest_scan_id"] == "verified"
     assert result["inventory"]["total"] == 0
+    assert result["scheduler"]["status"] == "ok"
 
 
 def test_supported_cmdb_api_routes_are_registered(tmp_path: Path) -> None:

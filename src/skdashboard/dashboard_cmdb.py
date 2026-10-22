@@ -162,6 +162,20 @@ def _verified_run_artifacts(home: Path) -> list[dict]:
     return [value for _, value in sorted(verified, key=lambda item: item[0], reverse=True)]
 
 
+def _scheduler_health() -> dict[str, Any]:
+    """Read the node-local scheduler status when the matching runtime is installed."""
+    try:
+        from skcapstone.cmdb_scheduler import read_status
+
+        return read_status()
+    except (ImportError, OSError, ValueError) as exc:
+        return {
+            "schema": "skcapstone.cmdb-scheduler/v1",
+            "status": "unavailable",
+            "error": type(exc).__name__,
+        }
+
+
 def status(home: Path) -> dict[str, Any]:
     """Return inventory and checksum-verified reconcile status."""
     from skcoord.cmdb_reconcile import operator_summary
@@ -181,6 +195,7 @@ def status(home: Path) -> dict[str, Any]:
     }
     findings = mgr.audit_relationships()
     result["relationship_audit"] = {"clean": not findings, "findings": findings}
+    result["scheduler"] = _scheduler_health()
     return result
 
 
