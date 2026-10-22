@@ -92,7 +92,24 @@ def test_mcp_rejects_arbitrary_endpoints_queries_and_protected_results() -> None
     asyncio.run(run())
 
 
-def test_mcp_server_registers_resources_without_any_tool_or_command_handler() -> None:
+def test_mcp_server_exposes_only_discovered_typed_action_tools_without_bearers() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            server = create_mcp_server(client)
+            handler = server.request_handlers[types.ListToolsRequest]
+            result = await handler(types.ListToolsRequest(method="tools/list"))
+            names = {tool.name for tool in result.root.tools}
+            assert "action_synthetic_action_preview" in names
+            assert "action_synthetic_action_authorize" in names
+            assert all("fixture-read" not in json.dumps(tool.model_dump(mode="json")) for tool in result.root.tools)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_server_registers_resources_and_only_allowlisted_action_tools() -> None:
     async def run() -> None:
         client = await _client()
         try:
@@ -100,8 +117,8 @@ def test_mcp_server_registers_resources_without_any_tool_or_command_handler() ->
             assert types.ListResourcesRequest in server.request_handlers
             assert types.ListResourceTemplatesRequest in server.request_handlers
             assert types.ReadResourceRequest in server.request_handlers
-            assert types.ListToolsRequest not in server.request_handlers
-            assert types.CallToolRequest not in server.request_handlers
+            assert types.ListToolsRequest in server.request_handlers
+            assert types.CallToolRequest in server.request_handlers
         finally:
             await client.aclose()
 

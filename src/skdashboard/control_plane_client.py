@@ -33,6 +33,22 @@ METRIC_FAMILIES = frozenset(
 )
 SCOPE_KEYS = frozenset({"project_id", "service_id", "environment", "baseline"})
 PAGE_OPERATIONS = frozenset({"board", "fleet", "economy"})
+_ACTION_OPERATIONS = frozenset({"preview", "authorize", "receipt", "verify", "cancel", "rollback"})
+_ACTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_ACTION_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_PREVIEW_ID = re.compile(r"^apv-[a-z0-9][a-z0-9-]{7,95}$")
+_ACTION_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_ACTION_CAPABILITY = re.compile(r"^skdashboard\.[A-Za-z0-9._:-]+$")
+_ACTION_TEMPLATE = re.compile(r"\{[^{}]+\}")
+_ACTION_PLACEHOLDERS = {
+    "preview": frozenset(),
+    "authorize": frozenset({"{preview_id}"}),
+    "receipt": frozenset({"{receipt_id}"}),
+    "verify": frozenset({"{receipt_id}"}),
+    "cancel": frozenset({"{receipt_id}"}),
+    "rollback": frozenset({"{receipt_id}"}),
+}
+_HASH = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 _OPERATIONS = {
     "health": ("GET", "/api/v1/health", "envelope", False),
@@ -53,6 +69,30 @@ class ClientResponse:
     data: dict
     etag: str | None
     not_modified: bool = False
+
+
+@dataclass(frozen=True)
+class ActionContract:
+    """One versioned action surface advertised by discovery."""
+
+    contract_id: str
+    version: str
+    operations: Mapping[str, str]
+    capabilities: Mapping[str, str]
+    parameter_fields: frozenset[str] = frozenset()
+
+
+class ActionClientError(ControlPlaneClientError):
+    """An action was not declared, no longer matches, or was rejected."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, code: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
 def _contract_documents() -> dict[str, dict]:
@@ -151,6 +191,8 @@ class ControlPlaneClient:
         self.manifest = copy.deepcopy(dict(manifest))
         self.validators = validators or ContractValidators()
         self._cache: dict[str, ClientResponse] = {}
+        self._action_contracts = self._load_action_contracts(self.manifest)
+        self._previews: dict[str, dict] = {}
 
     def __repr__(self) -> str:
         return f"ControlPlaneClient(origin={self.origin!r})"
@@ -190,6 +232,58 @@ class ControlPlaneClient:
         except Exception:
             await http.aclose()
             raise
+
+    @staticmethod
+    def _load_action_contracts(manifest: Mapping[str, object]) -> dict[str, ActionContract]:
+        raw = manifest.get("actions")
+        if raw is None:
+            return {}
+        if not isinstance(raw, list) or len(raw) > 64:
+            raise ControlPlaneClientError("discovery actions are invalid")
+        contracts = {}
+        for item in raw:
+            if not isinstance(item, dict) or not {"contract_id", "version", "operations", "capabilities"}.issubset(item) or set(item) - {"contract_id", "version", "operations", "capabilities", "parameter_fields"}:
+                raise ControlPlaneClientError("discovery action contract is invalid")
+            contract_id = item["contract_id"]
+            version = item["version"]
+            operations = item["operations"]
+            capabilities = item["capabilities"]
+            if (
+                not isinstance(contract_id, str) or not _ACTION_ID.fullmatch(contract_id)
+                or not isinstance(version, str) or not _ACTION_VERSION.fullmatch(version)
+                or not isinstance(operations, dict) or not isinstance(capabilities, dict)
+                or not _ACTION_OPERATIONS.issuperset(operations)
+                or set(operations) != set(capabilities)
+                or any(not ControlPlaneClient._valid_action_path(operation, value) for operation, value in operations.items())
+                or any(
+                    not isinstance(value, str)
+                    or not _ACTION_CAPABILITY.fullmatch(value)
+                    or value != f"skdashboard.actions.{operation}"
+                    for operation, value in capabilities.items()
+                )
+                or not isinstance(item.get("parameter_fields", []), list)
+                or any(not isinstance(value, str) or not _ACTION_ID.fullmatch(value) for value in item.get("parameter_fields", []))
+            ):
+                raise ControlPlaneClientError("discovery action contract is invalid")
+            if contract_id in contracts:
+                raise ControlPlaneClientError("discovery action contracts are duplicated")
+            fields = frozenset(item.get("parameter_fields", []))
+            if not fields:
+                fields = frozenset({"recommendation_id", "action_contract_id", "parameter_proposal_ref"})
+            contracts[contract_id] = ActionContract(contract_id, version, dict(operations), dict(capabilities), fields)
+        return contracts
+
+    @staticmethod
+    def _valid_action_path(operation: object, path: object) -> bool:
+        if not isinstance(operation, str) or operation not in _ACTION_OPERATIONS or not isinstance(path, str):
+            return False
+        if not path.startswith("/api/v1/") or ".." in path or "//" in path or "?" in path or "#" in path:
+            return False
+        placeholders = _ACTION_TEMPLATE.findall(path)
+        return (
+            frozenset(placeholders) == _ACTION_PLACEHOLDERS[operation]
+            and len(placeholders) == len(_ACTION_PLACEHOLDERS[operation])
+        )
 
     @staticmethod
     def _validate_manifest(manifest: object, origin: str) -> None:
@@ -289,6 +383,130 @@ class ControlPlaneClient:
         if method == "GET":
             self._cache[cache_key] = ClientResponse(copy.deepcopy(data), result.etag)
         return result
+
+    def action_contracts(self) -> tuple[ActionContract, ...]:
+        return tuple(self._action_contracts.values())
+
+    def _action(self, contract_id: str, operation: str) -> tuple[ActionContract, str]:
+        contract = self._action_contracts.get(contract_id)
+        if contract is None or operation not in contract.operations:
+            raise ActionClientError("action operation is not declared by discovery")
+        path = contract.operations[operation]
+        if not self._valid_action_path(operation, path):
+            raise ActionClientError("action endpoint is not allowlisted")
+        return contract, path
+
+    @staticmethod
+    def _materialize_action_path(operation: str, template: str, identifier: str) -> str:
+        placeholder = "{preview_id}" if operation == "authorize" else "{receipt_id}"
+        if operation not in {"authorize", "receipt", "verify", "cancel", "rollback"} or not _ACTION_REF.fullmatch(identifier):
+            raise ActionClientError("action identifier is invalid")
+        if operation == "authorize" and not re.fullmatch(r"apv-[a-z0-9][a-z0-9-]{7,95}", identifier):
+            raise ActionClientError("preview identifier is invalid")
+        if _ACTION_TEMPLATE.findall(template) != [placeholder]:
+            raise ActionClientError("action endpoint has an unexpected placeholder")
+        path = template.replace(placeholder, identifier, 1)
+        if _ACTION_TEMPLATE.search(path) or not ControlPlaneClient._valid_action_path(operation, template):
+            raise ActionClientError("action endpoint could not be materialized")
+        return path
+
+    @staticmethod
+    def _check_hash(value: object) -> str:
+        if not isinstance(value, str) or not _HASH.fullmatch(value):
+            raise ActionClientError("action hash is invalid")
+        return value
+
+    def _remember_preview(self, preview: dict, contract: ActionContract) -> dict:
+        self._check_hash(preview.get("preview_hash"))
+        if preview.get("action_contract_id") != contract.contract_id or preview.get("action_contract_version") != contract.version:
+            raise ActionClientError("preview contract does not match discovery")
+        preview_id = preview.get("preview_id")
+        if not isinstance(preview_id, str) or not _PREVIEW_ID.fullmatch(preview_id):
+            raise ActionClientError("preview identifier is invalid")
+        self._previews[preview_id] = copy.deepcopy(preview)
+        return preview
+
+    async def preview_action(self, contract_id: str, request: Mapping[str, object]) -> ClientResponse:
+        contract, path = self._action(contract_id, "preview")
+        body = dict(request)
+        required = {"recommendation_id", "parameter_proposal_ref"}
+        if "action_contract_id" in body and body["action_contract_id"] != contract.contract_id:
+            raise ActionClientError("action contract does not match discovery")
+        if "action_contract_version" in body and body["action_contract_version"] != contract.version:
+            raise ActionClientError("action contract version does not match discovery")
+        body.update({"action_contract_id": contract.contract_id, "action_contract_version": contract.version})
+        allowed = required | {"action_contract_id", "action_contract_version"} | contract.parameter_fields
+        if set(body) - allowed or not required.issubset(body) or any(not isinstance(value, str) or not value for value in body.values()):
+            raise ActionClientError("action parameters are outside the declared contract")
+        result = await self._request_action("preview", path, body, contract)
+        self._remember_preview(result.data, contract)
+        return result
+
+    async def authorize_action(self, contract_id: str, preview_id: str, preview_hash: str, idempotency_key: str, approval_reason: str, *, target: Mapping[str, object] | None = None, parameters: Mapping[str, object] | None = None) -> ClientResponse:
+        contract, path = self._action(contract_id, "authorize")
+        preview = self._previews.get(preview_id)
+        if preview is None or preview.get("preview_hash") != preview_hash:
+            raise ActionClientError("preview is unknown or changed")
+        if target is not None and dict(target) != preview.get("target"):
+            self._previews.pop(preview_id, None)
+            raise ActionClientError("changed target invalidated the preview")
+        if parameters is not None and dict(parameters) != preview.get("parameters"):
+            self._previews.pop(preview_id, None)
+            raise ActionClientError("changed parameters invalidated the preview")
+        self._check_hash(preview_hash)
+        if not isinstance(idempotency_key, str) or len(idempotency_key) < 16 or len(idempotency_key) > 128 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", idempotency_key):
+            raise ActionClientError("idempotency key is invalid")
+        return await self._request_action("authorize", self._materialize_action_path("authorize", path, preview_id), {"preview_hash": preview_hash, "idempotency_key": idempotency_key, "approval_reason": approval_reason}, contract, status_codes={200, 202})
+
+    async def receipt(self, contract_id: str, receipt_id: str) -> ClientResponse:
+        contract, path = self._action(contract_id, "receipt")
+        return await self._request_action("receipt", self._materialize_action_path("receipt", path, receipt_id), None, contract)
+
+    async def verify_action(self, contract_id: str, receipt_id: str) -> ClientResponse:
+        contract, path = self._action(contract_id, "verify")
+        return await self._request_action("verify", self._materialize_action_path("verify", path, receipt_id), None, contract)
+
+    async def cancel_action(self, contract_id: str, receipt_id: str) -> ClientResponse:
+        contract, path = self._action(contract_id, "cancel")
+        return await self._request_action("cancel", self._materialize_action_path("cancel", path, receipt_id), {}, contract, status_codes={200, 202})
+
+    async def rollback_action(self, contract_id: str, receipt_id: str) -> ClientResponse:
+        contract, path = self._action(contract_id, "rollback")
+        return await self._request_action("rollback", self._materialize_action_path("rollback", path, receipt_id), {}, contract, status_codes={200, 202})
+
+    async def _request_action(self, operation: str, path: str, body: dict | None, contract: ActionContract, *, status_codes: set[int] | None = None) -> ClientResponse:
+        if not path.startswith("/api/v1/") or _ACTION_TEMPLATE.search(path) or operation not in _ACTION_OPERATIONS:
+            raise ActionClientError("action endpoint is not allowlisted")
+        capability = contract.capabilities.get(operation)
+        if not isinstance(capability, str) or not _ACTION_CAPABILITY.fullmatch(capability):
+            raise ActionClientError("action capability is missing or undeclared")
+        if contract.operations.get(operation) != path and _ACTION_TEMPLATE.search(contract.operations.get(operation, "")) is None:
+            raise ActionClientError("action endpoint does not match discovery")
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {self._bearer}", "X-SK-Capability-Name": capability}
+        content = None if body is None else _canonical(body)
+        if content is not None:
+            headers["Content-Type"] = "application/json"
+        try:
+            response = await self._http.request("POST" if operation in {"preview", "authorize", "cancel", "rollback"} else "GET", self.origin + path, content=content, headers=headers)
+        except httpx.TimeoutException as exc:
+            raise ActionClientError("action request timed out", code="ACTION_TIMEOUT") from exc
+        allowed = status_codes or {200}
+        if response.status_code not in allowed:
+            try:
+                error = response.json()
+            except ValueError as exc:
+                raise ActionClientError("action response is not JSON", status_code=response.status_code) from exc
+            code = error.get("code") if isinstance(error, dict) else None
+            raise ActionClientError(f"action request failed: {response.status_code} {code or 'UNKNOWN'}", status_code=response.status_code, code=code)
+        if len(response.content) > MAX_RESPONSE_BYTES or not response.headers.get("content-type", "").startswith("application/json"):
+            raise ActionClientError("action response exceeded its bound or is not JSON", status_code=response.status_code)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ActionClientError("action response is not JSON", status_code=response.status_code) from exc
+        if not isinstance(data, dict):
+            raise ActionClientError("action response is not an object", status_code=response.status_code)
+        return ClientResponse(copy.deepcopy(data), response.headers.get("etag"))
 
     async def health(self) -> ClientResponse:
         return await self._request("health")
@@ -422,6 +640,8 @@ class ControlPlaneClient:
 
 
 __all__ = [
+    "ActionClientError",
+    "ActionContract",
     "ClientResponse",
     "ContractValidators",
     "ControlPlaneClient",
