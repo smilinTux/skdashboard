@@ -169,7 +169,24 @@ tests' `skcapstone` import failed at **collection**, and the kanban, ITIL and qu
 tests were never actually running while the job showed as a test job. Do not
 reintroduce a dependency-free install here.
 
-## 5. Release / Deploy
+## 5. Agent client and MCP contract kit
+
+Use `ControlPlaneClient.discover` with the canonical HTTPS well-known URL and a
+caller-owned short-lived bearer. Reads are the default. Every response is
+validated against the packaged published schema before it is returned.
+
+For a command, call `preview_action` with `skdashboard.actions.preview`, then
+call `submit_action` with the exact preview hash, an idempotency key, approval
+reason, and `skdashboard.actions.authorize`. Poll the returned receipt with a
+bounded timeout. Cancellation raises without retrying a command. The MCP
+adapter exposes only the same allowlisted resources and explicit-capability
+tools. Never pass secrets as arguments or log response diagnostics.
+
+The synthetic fixture is created with `create_fixture_app()` and uses no
+production state. Its denied, replay, stale, malformed, timeout, cancellation,
+changed-input, and discovery-failure cases are contract-test inputs.
+
+## 6. Release / Deploy
 
 ### 2026-08-20 rollout record
 
