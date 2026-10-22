@@ -1,0 +1,11 @@
+timestamp=2026-08-24T23:55:24Z
+cwd=/home/skuser01/worktrees/skdashboard-83a8c40b-browser-qual
+head=9b2cbff7204d3e76a69f4bf21e9bf1de8ec04ef5
+branch=pi/83a8c40b-browser-qual
+model_route=skgateway/sk-codex reasoning=high
+pane=session=sk-parallel-rebase-20260824 window=2:skdashboard pane=%4
+startup_log=/home/skuser01/.skcapstone/runtime/sk-parallel-rebase-20260824-pane-4.log
+python=Python 3.12.3
+chrome=Google Chrome 151.0.7922.173 
+node=v22.23.2
+PYTHONPATH=/home/skuser01/work/capauth/src:/home/skuser01/work/skcoord/src:/home/skuser01/work/skcapstone/src:/home/skuser01/worktrees/skdashboard-83a8c40b-browser-qual/src
