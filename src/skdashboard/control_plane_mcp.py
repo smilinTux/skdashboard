@@ -133,6 +133,60 @@ def create_mcp_server(client: ControlPlaneClient) -> Server:
     resources = ControlPlaneResources(client)
     server = Server("skdashboard-read-only")
 
+    def tool_name(contract_id: str, operation: str) -> str:
+        return f"action_{contract_id.replace('.', '_').replace(':', '_')}_{operation}"
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        tools = []
+        for contract in client.action_contracts():
+            for operation in contract.operations:
+                if operation == "preview":
+                    properties = {
+                        field: {"type": "string", "minLength": 1, "maxLength": 512}
+                        for field in contract.parameter_fields
+                    }
+                    required = ["recommendation_id", "parameter_proposal_ref"]
+                elif operation == "authorize":
+                    properties = {
+                        "preview_id": {"type": "string", "pattern": "^apv-[a-z0-9][a-z0-9-]{7,95}$"},
+                        "preview_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+                        "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"},
+                        "approval_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    }
+                    required = list(properties)
+                else:
+                    properties = {"receipt_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}}
+                    required = ["receipt_id"]
+                tools.append(types.Tool(
+                    name=tool_name(contract.contract_id, operation),
+                    description=f"{operation.title()} one discovered {contract.contract_id} action using capability name {contract.capabilities[operation]}; never accepts bearer material.",
+                    inputSchema={"type": "object", "additionalProperties": False, "properties": properties, "required": required},
+                ))
+        return tools
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict):
+        for contract in client.action_contracts():
+            for operation in contract.operations:
+                if name != tool_name(contract.contract_id, operation):
+                    continue
+                if operation == "preview":
+                    response = await client.preview_action(contract.contract_id, arguments)
+                elif operation == "authorize":
+                    response = await client.authorize_action(contract.contract_id, **arguments)
+                elif operation == "receipt":
+                    response = await client.receipt(contract.contract_id, arguments["receipt_id"])
+                elif operation == "verify":
+                    response = await client.verify_action(contract.contract_id, arguments["receipt_id"])
+                elif operation == "cancel":
+                    response = await client.cancel_action(contract.contract_id, arguments["receipt_id"])
+                else:
+                    response = await client.rollback_action(contract.contract_id, arguments["receipt_id"])
+                _reject_protected(response.data)
+                return response.data
+        raise ControlPlaneClientError("MCP action tool is not allowlisted")
+
     @server.list_resources()
     async def list_resources() -> list[types.Resource]:
         return resources.list()

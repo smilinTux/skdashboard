@@ -9,6 +9,7 @@ import pytest
 from jsonschema import ValidationError
 
 from skdashboard.control_plane_client import (
+    ActionClientError,
     ContractValidators,
     ControlPlaneClient,
     ControlPlaneClientError,
@@ -210,6 +211,89 @@ def test_client_rejects_arbitrary_queries_ids_operations_and_invalid_contracts()
     bad_report["sections"][0]["metric_results"][0]["truth_state"] = "healthy"
     with pytest.raises(ControlPlaneClientError, match="schema validation"):
         ContractValidators().validate("report", bad_report)
+
+
+def test_allowlisted_action_lifecycle_uses_discovered_templates_and_names_only() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            assert len(client.action_contracts()) == 1
+            preview = await client.preview_action(
+                "synthetic.action",
+                {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            )
+            assert preview.data["preview_hash"].startswith("sha256:")
+            receipt = await client.authorize_action(
+                "synthetic.action", "apv-synthetic-0001", preview.data["preview_hash"],
+                "idempotency-action-0001", "synthetic qualification",
+            )
+            assert receipt.data["verification_state"] == "pending"
+            verified = await client.verify_action("synthetic.action", "rcpt-synthetic-0001")
+            assert verified.data["owner_receipt_ref"] == "owner-receipt:synthetic-0001"
+            canceled = await client.cancel_action("synthetic.action", "rcpt-synthetic-0001")
+            assert canceled.data["verification_state"] == "rolled_back"
+            assert "fixture-read" not in json.dumps(receipt.data)
+            assert "skdashboard.actions.authorize" not in json.dumps(receipt.data)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_action_template_and_changed_input_fail_closed_before_dispatch() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            preview = await client.preview_action(
+                "synthetic.action",
+                {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            )
+            with pytest.raises(ActionClientError, match="changed target"):
+                await client.authorize_action(
+                    "synthetic.action", "apv-synthetic-0001", preview.data["preview_hash"],
+                    "idempotency-action-0002", "synthetic qualification", target={"resource_id": "other"},
+                )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+    bad_manifest = {
+        "schemaVersion": "1.1",
+        "entry": {"url": ORIGIN + "/"},
+        "auth": {"audience": "skdashboard"},
+        "health": ORIGIN + "/api/v1/health",
+        "actions": [{
+            "contract_id": "bad",
+            "version": "1.0.0",
+            "operations": {"receipt": "/api/v1/action-receipts/{preview_id}"},
+            "capabilities": {"receipt": "skdashboard.actions.receipt"},
+        }],
+    }
+    with pytest.raises(ControlPlaneClientError, match="action contract"):
+        ControlPlaneClient._load_action_contracts(bad_manifest)
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        {},
+        {"preview": ""},
+        {"preview": "skdashboard.actions.other"},
+        {"preview": "skdashboard.actions.preview", "authorize": "skdashboard.actions.authorize", "receipt": "skdashboard.actions.receipt", "verify": "skdashboard.actions.verify", "cancel": "skdashboard.actions.cancel", "rollback": "skdashboard.actions.rollback", "extra": "skdashboard.actions.extra"},
+    ],
+)
+def test_discovery_rejects_missing_empty_mismatched_or_undeclared_capability_names(capabilities) -> None:
+    manifest = {
+        "actions": [{
+            "contract_id": "synthetic.action",
+            "version": "1.0.0",
+            "operations": {"preview": "/api/v1/actions/preview"},
+            "capabilities": capabilities,
+        }],
+    }
+    with pytest.raises(ControlPlaneClientError, match="action contract"):
+        ControlPlaneClient._load_action_contracts(manifest)
 
 
 def test_client_validates_frozen_error_contract_before_exposing_status() -> None:

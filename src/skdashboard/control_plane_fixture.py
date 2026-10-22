@@ -13,6 +13,9 @@ from .dashboard_reports import build_report_snapshot
 
 ORIGIN = "https://synthetic.test"
 BEARER = "fixture-read"
+ACTION_CONTRACT_ID = "synthetic.action"
+ACTION_CONTRACT_VERSION = "1.0.0"
+ACTION_PREVIEW_HASH = "sha256:" + "b" * 64
 WINDOW = {
     "start": "2026-08-24T00:00:00Z",
     "end": "2026-08-25T00:00:00Z",
@@ -76,6 +79,32 @@ REPORT = build_report_snapshot(
         }
     ],
 )
+
+ACTION_PREVIEW = {
+    "preview_id": "apv-synthetic-0001",
+    "preview_hash": ACTION_PREVIEW_HASH,
+    "schema_version": "1.0.0",
+    "status": "ready",
+    "source_recommendation_id": "rec-synthetic-0001",
+    "action_contract_id": ACTION_CONTRACT_ID,
+    "action_contract_version": ACTION_CONTRACT_VERSION,
+    "owner_service": "synthetic.owner",
+    "owner_operation": "apply_fixture",
+    "target": {"resource_id": "synthetic-1"},
+    "parameters": {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+    "expected_version": "v1",
+    "before_summary": "Synthetic state before the proposed action.",
+    "proposed_effect": "Apply the public synthetic fixture action.",
+    "blast_radius": "one synthetic resource",
+    "risk": {"level": "low", "reasons": ["fixture only"]},
+    "reversibility": "automatic",
+    "verification_plan": ["Read the synthetic owner receipt."],
+    "rollback_plan": ["Use the synthetic owner rollback operation."],
+    "required_scope": "skdashboard.actions.authorize",
+    "required_approvals": [{"approval_type": "synthetic", "state": "not_required"}],
+    "policy_decision_ref": "policy:synthetic-action",
+    "expires_at": "2099-01-01T00:00:00Z",
+}
 
 INSIGHT = {
     "insight_id": "ins-synthetic-abstention",
@@ -153,8 +182,10 @@ def _etag_response(request, body: dict):
     return Response(content, media_type="application/json", headers={"ETag": etag})
 
 
-def _authorized(request) -> bool:
-    return request.headers.get("authorization") == f"Bearer {BEARER}"
+def _authorized(request, capability: str | None = None) -> bool:
+    if request.headers.get("authorization") != f"Bearer {BEARER}":
+        return False
+    return capability is None or request.headers.get("x-sk-capability-name") == capability
 
 
 def _error(code: str, message: str, status: int) -> JSONResponse:
@@ -180,6 +211,27 @@ def create_fixture_app() -> Starlette:
                 "entry": {"url": f"{ORIGIN}/"},
                 "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
                 "health": f"{ORIGIN}/api/v1/health",
+                "actions": [{
+                    "contract_id": ACTION_CONTRACT_ID,
+                    "version": ACTION_CONTRACT_VERSION,
+                    "operations": {
+                        "preview": "/api/v1/actions/preview",
+                        "authorize": "/api/v1/action-previews/{preview_id}/authorize",
+                        "receipt": "/api/v1/action-receipts/{receipt_id}",
+                        "verify": "/api/v1/action-receipts/{receipt_id}/verify",
+                        "cancel": "/api/v1/action-receipts/{receipt_id}/cancel",
+                        "rollback": "/api/v1/action-receipts/{receipt_id}/rollback",
+                    },
+                    "capabilities": {
+                        "preview": "skdashboard.actions.preview",
+                        "authorize": "skdashboard.actions.authorize",
+                        "receipt": "skdashboard.actions.receipt",
+                        "verify": "skdashboard.actions.verify",
+                        "cancel": "skdashboard.actions.cancel",
+                        "rollback": "skdashboard.actions.rollback",
+                    },
+                    "parameter_fields": ["recommendation_id", "parameter_proposal_ref"],
+                }],
             }
         )
 
@@ -221,6 +273,73 @@ def create_fixture_app() -> Starlette:
             return _error("INVALID_QUERY", "The synthetic query was invalid.", 400)
         return _etag_response(request, INSIGHT)
 
+    async def action_preview(request):
+        if not _authorized(request, "skdashboard.actions.preview"):
+            return _error("FORBIDDEN", "The synthetic action preview was denied.", 403)
+        return _etag_response(request, ACTION_PREVIEW)
+
+    async def action_authorize(request):
+        if not _authorized(request, "skdashboard.actions.authorize"):
+            return _error("FORBIDDEN", "The synthetic action authorization was denied.", 403)
+        try:
+            body = await request.json()
+        except Exception:
+            return _error("INVALID_ACTION", "The synthetic action request was invalid.", 400)
+        if body.get("preview_hash") != ACTION_PREVIEW_HASH:
+            return _error("PREVIEW_CHANGED", "The synthetic preview is stale.", 409)
+        return _etag_response(request, {
+            "receipt_id": "rcpt-synthetic-0001",
+            "preview_id": ACTION_PREVIEW["preview_id"],
+            "preview_hash": ACTION_PREVIEW_HASH,
+            "status": "accepted",
+            "owner_service": "synthetic.owner",
+            "owner_receipt_ref": "owner-receipt:synthetic-0001",
+            "policy_decision_ref": "policy:synthetic-action",
+            "accepted_at": "2026-08-24T12:00:30Z",
+            "verification_state": "pending",
+            "actor_ref": "sha256:" + "c" * 64,
+            "purpose": "synthetic qualification",
+            "audit_ref": "audit:synthetic-0001",
+            "external_effect_state": "none",
+        })
+
+    async def action_receipt(request, *, authorize=True):
+        if authorize and not _authorized(request, "skdashboard.actions.receipt"):
+            return _error("FORBIDDEN", "The synthetic receipt was denied.", 403)
+        return _etag_response(request, {
+            "receipt_id": request.path_params["receipt_id"],
+            "preview_id": ACTION_PREVIEW["preview_id"],
+            "preview_hash": ACTION_PREVIEW_HASH,
+            "status": "accepted",
+            "owner_service": "synthetic.owner",
+            "owner_receipt_ref": "owner-receipt:synthetic-0001",
+            "policy_decision_ref": "policy:synthetic-action",
+            "accepted_at": "2026-08-24T12:00:30Z",
+            "verification_state": "pending",
+            "actor_ref": "sha256:" + "c" * 64,
+            "purpose": "synthetic qualification",
+            "audit_ref": "audit:synthetic-0001",
+            "external_effect_state": "none",
+        })
+
+    async def action_verify(request):
+        if not _authorized(request, "skdashboard.actions.verify"):
+            return _error("FORBIDDEN", "The synthetic verification was denied.", 403)
+        return await action_receipt(request, authorize=False)
+
+    async def action_cancel(request):
+        if not _authorized(request, "skdashboard.actions.cancel"):
+            return _error("FORBIDDEN", "The synthetic cancellation was denied.", 403)
+        response = await action_receipt(request, authorize=False)
+        if response.status_code == 200:
+            response.body = response.body.replace(b'"verification_state":"pending"', b'"verification_state":"rolled_back"')
+        return response
+
+    async def action_rollback(request):
+        if not _authorized(request, "skdashboard.actions.rollback"):
+            return _error("FORBIDDEN", "The synthetic rollback was denied.", 403)
+        return await action_cancel(request)
+
     async def events(request):
         if not _authorized(request):
             return _error("FORBIDDEN", "The public synthetic stream was denied.", 403)
@@ -242,6 +361,12 @@ def create_fixture_app() -> Starlette:
             Route("/api/v1/economy/summary", page),
             Route("/api/v1/reports/{snapshot_id}", report),
             Route("/api/v1/insights/query", insight, methods=["POST"]),
+            Route("/api/v1/actions/preview", action_preview, methods=["POST"]),
+            Route("/api/v1/action-previews/{preview_id}/authorize", action_authorize, methods=["POST"]),
+            Route("/api/v1/action-receipts/{receipt_id}", action_receipt),
+            Route("/api/v1/action-receipts/{receipt_id}/verify", action_verify),
+            Route("/api/v1/action-receipts/{receipt_id}/cancel", action_cancel, methods=["POST"]),
+            Route("/api/v1/action-receipts/{receipt_id}/rollback", action_rollback, methods=["POST"]),
             Route("/api/v1/events", events),
         ]
     )
