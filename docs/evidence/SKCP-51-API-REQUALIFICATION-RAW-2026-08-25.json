@@ -1,0 +1,83 @@
+{
+  "blockers": [
+    "limit=1 performs a 10000-record owner read",
+    "ETag 304 recomputes the full owner projection",
+    "common-read saturation rate-limits critical health"
+  ],
+  "candidate": {
+    "equal": true,
+    "head": "436b094b86f422c7eaf94ebbbd98b846e7f3a6af",
+    "origin_main": "436b094b86f422c7eaf94ebbbd98b846e7f3a6af"
+  },
+  "card": "2d02b6ed",
+  "conditional_read": {
+    "baseline_status": 200,
+    "cache_hit_avoided_owner_read": false,
+    "conditional_status": 304,
+    "etag": "\"e3abd4d4bf8952be6a57153779a2c3d9789e205ad526ecfa06981e60cd9ac680\"",
+    "owner_calls": 2,
+    "owner_records_returned": 20000
+  },
+  "environment": {
+    "cpu_model": "12th Gen Intel(R) Core(TM) i9-12900K",
+    "fixture_sha256": "926f0374b8f32e64d0f370f9a6197b848a95a3403b8d497c5c67848e77fb821d",
+    "hostname": "chiap02",
+    "logical_cpus": 24,
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
+    "public_synthetic_only": true,
+    "python": "3.12.3",
+    "transport": "Starlette TestClient in-process ASGI"
+  },
+  "pagination": {
+    "cpu_seconds": 0.21399172499999997,
+    "error_rate": 0.0,
+    "errors": 0,
+    "latency_ms": {
+      "max": 9.353845,
+      "p50": 1.894918,
+      "p95": 2.17581975,
+      "p99": 8.939656720000002
+    },
+    "load": {
+      "concurrency": 1,
+      "estate_records": 10000,
+      "measured_requests": 100,
+      "requested_limit": 1,
+      "warmup_requests": 10
+    },
+    "owner_calls_total": 110,
+    "owner_records_per_limit_one_request": 10000,
+    "owner_records_returned_total": 1100000,
+    "peak_rss_kib": 53260,
+    "rss_growth_kib": 0
+  },
+  "qualification_process": {
+    "cpu_seconds": 0.595184566,
+    "max_rss_kib": 60172,
+    "wall_seconds": 0.5868196720257401
+  },
+  "rate_isolation": {
+    "common_read_requests": 120,
+    "common_read_status_counts": {
+      "200": 120
+    },
+    "critical_health_error_code": "RATE_LIMITED",
+    "critical_health_isolated": false,
+    "critical_health_status_after_saturation": 429,
+    "owner_calls": 120,
+    "owner_records_returned": 1200000
+  },
+  "execution": {
+    "command": "PYTHONPATH=src python scripts/qualify_control_plane_performance.py",
+    "final_exit_code": 1,
+    "note": "The initial measurement invocation exited 0 before the qualifier was corrected to signal a detected qualification failure; the final identical bounded method exits 1 for FAIL.",
+    "script_sha256": "e3f812768f80ac39dfb5bea9b62eb0b5d0f9b3634fa74ee875916a0dc68c1a84"
+  },
+  "limitations": [
+    "Single-host, same-process, sequential public-synthetic qualification only.",
+    "In-process ASGI transport; no socket, TLS, network, multiprocess, multihost, deployed-service, production-owner, protected-data, or sustained-soak capacity claim.",
+    "Qualification stopped at decisive current-candidate pagination, conditional-read cache, and critical-rate-isolation failures; SSE, insight concurrency, report generation, and other criteria are not requalified by this run."
+  ],
+  "rollback": "Delete only scripts/qualify_control_plane_performance.py and the two SKCP-51 requalification evidence files; no product, schema, dependency, service, deployment, protected data, credential, commit, or push mutation occurred.",
+  "verdict": "FAIL"
+}
