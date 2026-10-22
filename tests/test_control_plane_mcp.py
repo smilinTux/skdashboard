@@ -14,10 +14,18 @@ from skdashboard.control_plane_client import (
     ControlPlaneClient,
     ControlPlaneClientError,
 )
-from skdashboard.control_plane_fixture import BEARER, ORIGIN, REPORT, create_fixture_app
+from skdashboard.control_plane_fixture import (
+    BEARER,
+    MANIFEST_SHA256,
+    ORIGIN,
+    REPORT,
+    create_fixture_app,
+)
 from skdashboard.control_plane_mcp import (
     ControlPlaneResources,
+    ControlPlaneTools,
     _read_bearer,
+    _reject_protected,
     create_mcp_server,
 )
 
@@ -27,6 +35,7 @@ async def _client() -> ControlPlaneClient:
         ORIGIN + "/.well-known/skworld-module.json",
         BEARER,
         transport=httpx.ASGITransport(app=create_fixture_app()),
+        manifest_sha256=MANIFEST_SHA256,
     )
 
 
@@ -59,6 +68,7 @@ def test_mcp_exposes_only_fixed_read_resources_and_one_report_template() -> None
             assert BEARER not in exposed
             assert "matter_id" not in exposed
             assert "tenant_id" not in exposed
+            assert "capability" not in exposed
         finally:
             await client.aclose()
 
@@ -92,7 +102,71 @@ def test_mcp_rejects_arbitrary_endpoints_queries_and_protected_results() -> None
     asyncio.run(run())
 
 
-def test_mcp_server_registers_resources_without_any_tool_or_command_handler() -> None:
+def test_mcp_rejects_protected_matter_aliases_and_classifications() -> None:
+    for value in (
+        {"matter_ref": "opaque-reference"},
+        {"matter_payload": {"value": "opaque"}},
+        {"matterPayload": {"value": "opaque"}},
+        {"classification": "protected_matter"},
+        {"actionClass": "protected_matter"},
+        {"summary": "classified Matter summary"},
+        [{"matterReference": "opaque-reference"}],
+    ):
+        with pytest.raises(ControlPlaneClientError):
+            _reject_protected(value)
+
+
+def test_mcp_command_tools_reject_missing_capability_and_never_return_bearer() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            tools = ControlPlaneTools(client)
+            with pytest.raises(ControlPlaneClientError, match="explicit action capability"):
+                await tools.preview(
+                    {
+                        "recommendation_id": "rec-1",
+                        "action_contract_id": "synthetic.noop",
+                        "parameter_proposal_ref": "proposal-1",
+                        "capability": "",
+                    }
+                )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_command_tools_reject_arbitrary_parameters_and_protected_input() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            tools = ControlPlaneTools(client)
+            with pytest.raises(ControlPlaneClientError, match="outside the contract"):
+                await tools.preview(
+                    {
+                        "recommendation_id": "rec-1",
+                        "action_contract_id": "synthetic.noop",
+                        "parameter_proposal_ref": "proposal-1",
+                        "capability": "skdashboard.actions.preview",
+                        "arbitrary": "rejected",
+                    }
+                )
+            with pytest.raises(ControlPlaneClientError, match="protected"):
+                await tools.preview(
+                    {
+                        "recommendation_id": "rec-1",
+                        "action_contract_id": "synthetic.noop",
+                        "parameter_proposal_ref": "matter-ref",
+                        "capability": "skdashboard.actions.preview",
+                    }
+                )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_server_registers_resources_and_explicit_capability_tools() -> None:
     async def run() -> None:
         client = await _client()
         try:
@@ -100,8 +174,8 @@ def test_mcp_server_registers_resources_without_any_tool_or_command_handler() ->
             assert types.ListResourcesRequest in server.request_handlers
             assert types.ListResourceTemplatesRequest in server.request_handlers
             assert types.ReadResourceRequest in server.request_handlers
-            assert types.ListToolsRequest not in server.request_handlers
-            assert types.CallToolRequest not in server.request_handlers
+            assert types.ListToolsRequest in server.request_handlers
+            assert types.CallToolRequest in server.request_handlers
         finally:
             await client.aclose()
 
