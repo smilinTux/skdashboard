@@ -1,0 +1,3197 @@
+{
+  "result": "FAIL",
+  "revision": "436b094b86f422c7eaf94ebbbd98b846e7f3a6af",
+  "browsers": {
+    "chrome": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.0.0 Safari/537.36",
+    "firefox": null
+  },
+  "failures": {
+    "childQualifiers": [
+      "qualify_control_plane_portfolio_cdp.mjs",
+      "qualify_control_plane_schedule_cdp.mjs",
+      "qualify_control_plane_architecture_cdp.mjs",
+      "qualify_control_plane_governance_cdp.mjs",
+      "qualify_control_plane_reports_cdp.mjs"
+    ],
+    "blockedQualifiers": [
+      {
+        "qualifier": "qualify_control_plane_now_cdp.mjs",
+        "limitation": "Existing bearer-string authorizer is rejected by the current decision-bound API."
+      },
+      {
+        "qualifier": "qualify_control_plane_quality_cdp.mjs",
+        "limitation": "Existing quality qualifier could not render its expected legacy fixture under the current API authorization path."
+      },
+      {
+        "qualifier": "qualify_control_plane_reliability_cdp.mjs",
+        "limitation": "Existing synthetic decision fixture imports pytest, which is unavailable in the runtime Python."
+      }
+    ],
+    "landmarks": [
+      "chrome:mobile:schedule",
+      "chrome:tablet:schedule",
+      "chrome:desktop:schedule",
+      "chrome:zoom-200:schedule",
+      "chrome:reduced-motion:schedule"
+    ],
+    "accessibleNames": [],
+    "visibleFocus": [
+      {
+        "row": "chrome:mobile:now",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Search Ctrl K",
+          "Role\n        \n          Operator\n          Project manager\n          Architect",
+          "Scope\n        Whole authorized estate",
+          "Window\n        Latest source observation",
+          "Baseline\n        No comparable baseline",
+          "Service\n        All authorized silos",
+          "Silo filter\n        \n          All silos\n          Portfolio and projectsAgile flow\n          ITIL a",
+          "Truth filter\n        \n          All truth statesCurrent\n          StalePartial\n          Unavailable",
+          "Saved views and recent scopes\n        Current unsaved view",
+          "Save view",
+          "Remove view",
+          "Copy safe link",
+          "Safe share link",
+          "Open source board",
+          "View AI boundary"
+        ]
+      },
+      {
+        "row": "chrome:mobile:portfolio",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Open schedule explorer",
+          "Role\n        \n          Project manager\n          Operator\n          Architect",
+          "Presentation\n        \n          Portfolio and flow\n          Portfolio only\n          Agile flow onl",
+          "Truth\n        \n          All truth states\n          Current\n          Stale\n          Partial\n      "
+        ]
+      },
+      {
+        "row": "chrome:mobile:schedule",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Export snapshot",
+          "RoleProject managerOperatorArchitectServiceTeam",
+          "LensRoadmapGanttFlow",
+          "TimezoneUTCAmerica/Chicago",
+          "Zoom out",
+          "Zoom in",
+          "Collapse all",
+          "Expand all"
+        ]
+      },
+      {
+        "row": "chrome:mobile:reliability",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleOperatorArchitectService owner"
+        ]
+      },
+      {
+        "row": "chrome:mobile:architecture",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleArchitectOperatorService owner"
+        ]
+      },
+      {
+        "row": "chrome:mobile:ai",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "Economy",
+          "Models",
+          "RoleOperatorProject managerArchitect"
+        ]
+      },
+      {
+        "row": "chrome:mobile:governance",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "Governance",
+          "Reports",
+          "AI outcomes",
+          "RoleGovernanceAuditorOperator"
+        ]
+      },
+      {
+        "row": "chrome:mobile:reports",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleProject managerOperatorArchitectAuditor",
+          "Report typeAllDaily operationsWeekly portfolioSprint or flowMonthly serviceMonthly AI and economyQua"
+        ]
+      },
+      {
+        "row": "chrome:tablet:now",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Search Ctrl K",
+          "Role\n        \n          Operator\n          Project manager\n          Architect",
+          "Scope\n        Whole authorized estate",
+          "Window\n        Latest source observation",
+          "Baseline\n        No comparable baseline",
+          "Service\n        All authorized silos",
+          "Silo filter\n        \n          All silos\n          Portfolio and projectsAgile flow\n          ITIL a",
+          "Truth filter\n        \n          All truth statesCurrent\n          StalePartial\n          Unavailable",
+          "Saved views and recent scopes\n        Current unsaved view",
+          "Save view",
+          "Remove view",
+          "Copy safe link",
+          "Safe share link",
+          "Open source board",
+          "View AI boundary"
+        ]
+      },
+      {
+        "row": "chrome:tablet:portfolio",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Open schedule explorer",
+          "Role\n        \n          Project manager\n          Operator\n          Architect",
+          "Presentation\n        \n          Portfolio and flow\n          Portfolio only\n          Agile flow onl",
+          "Truth\n        \n          All truth states\n          Current\n          Stale\n          Partial\n      "
+        ]
+      },
+      {
+        "row": "chrome:tablet:schedule",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Export snapshot",
+          "RoleProject managerOperatorArchitectServiceTeam",
+          "LensRoadmapGanttFlow",
+          "TimezoneUTCAmerica/Chicago",
+          "Zoom out",
+          "Zoom in",
+          "Collapse all",
+          "Expand all"
+        ]
+      },
+      {
+        "row": "chrome:tablet:reliability",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleOperatorArchitectService owner"
+        ]
+      },
+      {
+        "row": "chrome:tablet:architecture",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleArchitectOperatorService owner"
+        ]
+      },
+      {
+        "row": "chrome:tablet:ai",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "Economy",
+          "Models",
+          "RoleOperatorProject managerArchitect"
+        ]
+      },
+      {
+        "row": "chrome:tablet:governance",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "Governance",
+          "Reports",
+          "AI outcomes",
+          "RoleGovernanceAuditorOperator"
+        ]
+      },
+      {
+        "row": "chrome:tablet:reports",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleProject managerOperatorArchitectAuditor",
+          "Report typeAllDaily operationsWeekly portfolioSprint or flowMonthly serviceMonthly AI and economyQua"
+        ]
+      },
+      {
+        "row": "chrome:desktop:now",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Search Ctrl K",
+          "Role\n        \n          Operator\n          Project manager\n          Architect",
+          "Scope\n        Whole authorized estate",
+          "Window\n        Latest source observation",
+          "Baseline\n        No comparable baseline",
+          "Service\n        All authorized silos",
+          "Silo filter\n        \n          All silos\n          Portfolio and projectsAgile flow\n          ITIL a",
+          "Truth filter\n        \n          All truth statesCurrent\n          StalePartial\n          Unavailable",
+          "Saved views and recent scopes\n        Current unsaved view",
+          "Save view",
+          "Remove view",
+          "Copy safe link",
+          "Safe share link",
+          "Open source board",
+          "View AI boundary"
+        ]
+      },
+      {
+        "row": "chrome:desktop:portfolio",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Open schedule explorer",
+          "Role\n        \n          Project manager\n          Operator\n          Architect",
+          "Presentation\n        \n          Portfolio and flow\n          Portfolio only\n          Agile flow onl",
+          "Truth\n        \n          All truth states\n          Current\n          Stale\n          Partial\n      "
+        ]
+      },
+      {
+        "row": "chrome:desktop:schedule",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Export snapshot",
+          "RoleProject managerOperatorArchitectServiceTeam",
+          "LensRoadmapGanttFlow",
+          "TimezoneUTCAmerica/Chicago",
+          "Zoom out",
+          "Zoom in",
+          "Collapse all",
+          "Expand all"
+        ]
+      },
+      {
+        "row": "chrome:desktop:reliability",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleOperatorArchitectService owner"
+        ]
+      },
+      {
+        "row": "chrome:desktop:architecture",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleArchitectOperatorService owner"
+        ]
+      },
+      {
+        "row": "chrome:desktop:ai",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "Economy",
+          "Models",
+          "RoleOperatorProject managerArchitect"
+        ]
+      },
+      {
+        "row": "chrome:desktop:governance",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "Governance",
+          "Reports",
+          "AI outcomes",
+          "RoleGovernanceAuditorOperator"
+        ]
+      },
+      {
+        "row": "chrome:desktop:reports",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleProject managerOperatorArchitectAuditor",
+          "Report typeAllDaily operationsWeekly portfolioSprint or flowMonthly serviceMonthly AI and economyQua"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:now",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Search Ctrl K",
+          "Role\n        \n          Operator\n          Project manager\n          Architect",
+          "Scope\n        Whole authorized estate",
+          "Window\n        Latest source observation",
+          "Baseline\n        No comparable baseline",
+          "Service\n        All authorized silos",
+          "Silo filter\n        \n          All silos\n          Portfolio and projectsAgile flow\n          ITIL a",
+          "Truth filter\n        \n          All truth statesCurrent\n          StalePartial\n          Unavailable",
+          "Saved views and recent scopes\n        Current unsaved view",
+          "Save view",
+          "Remove view",
+          "Copy safe link",
+          "Safe share link",
+          "Open source board",
+          "View AI boundary"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:portfolio",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Open schedule explorer",
+          "Role\n        \n          Project manager\n          Operator\n          Architect",
+          "Presentation\n        \n          Portfolio and flow\n          Portfolio only\n          Agile flow onl",
+          "Truth\n        \n          All truth states\n          Current\n          Stale\n          Partial\n      "
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:schedule",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Export snapshot",
+          "RoleProject managerOperatorArchitectServiceTeam",
+          "LensRoadmapGanttFlow",
+          "TimezoneUTCAmerica/Chicago",
+          "Zoom out",
+          "Zoom in",
+          "Collapse all",
+          "Expand all"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:reliability",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleOperatorArchitectService owner"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:architecture",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleArchitectOperatorService owner"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:ai",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "Economy",
+          "Models",
+          "RoleOperatorProject managerArchitect"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:governance",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "Governance",
+          "Reports",
+          "AI outcomes",
+          "RoleGovernanceAuditorOperator"
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:reports",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleProject managerOperatorArchitectAuditor",
+          "Report typeAllDaily operationsWeekly portfolioSprint or flowMonthly serviceMonthly AI and economyQua"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:now",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Search Ctrl K",
+          "Role\n        \n          Operator\n          Project manager\n          Architect",
+          "Scope\n        Whole authorized estate",
+          "Window\n        Latest source observation",
+          "Baseline\n        No comparable baseline",
+          "Service\n        All authorized silos",
+          "Silo filter\n        \n          All silos\n          Portfolio and projectsAgile flow\n          ITIL a",
+          "Truth filter\n        \n          All truth statesCurrent\n          StalePartial\n          Unavailable",
+          "Saved views and recent scopes\n        Current unsaved view",
+          "Save view",
+          "Remove view",
+          "Copy safe link",
+          "Safe share link",
+          "Open source board",
+          "View AI boundary"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:portfolio",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Open schedule explorer",
+          "Role\n        \n          Project manager\n          Operator\n          Architect",
+          "Presentation\n        \n          Portfolio and flow\n          Portfolio only\n          Agile flow onl",
+          "Truth\n        \n          All truth states\n          Current\n          Stale\n          Partial\n      "
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:schedule",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "ITIL Cockpit",
+          "Assets (CMDB)",
+          "Kanban Board",
+          "Assistant",
+          "Trust",
+          "Models",
+          "Economy",
+          "Fleet Drift",
+          "Export snapshot",
+          "RoleProject managerOperatorArchitectServiceTeam",
+          "LensRoadmapGanttFlow",
+          "TimezoneUTCAmerica/Chicago",
+          "Zoom out",
+          "Zoom in",
+          "Collapse all",
+          "Expand all"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:reliability",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleOperatorArchitectService owner"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:architecture",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleArchitectOperatorService owner"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:ai",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "Economy",
+          "Models",
+          "RoleOperatorProject managerArchitect"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:governance",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "Governance",
+          "Reports",
+          "AI outcomes",
+          "RoleGovernanceAuditorOperator"
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:reports",
+        "controls": [
+          "Now",
+          "Portfolio",
+          "Schedule",
+          "Reliability",
+          "Architecture",
+          "AI outcomes",
+          "Governance",
+          "Reports",
+          "RoleProject managerOperatorArchitectAuditor",
+          "Report typeAllDaily operationsWeekly portfolioSprint or flowMonthly serviceMonthly AI and economyQua"
+        ]
+      }
+    ],
+    "contrast": [
+      {
+        "row": "chrome:mobile:now",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Protected estate evidence is unavailable: /api/v1/overview?role=operator&scope=estate&window=latest&",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected data-quality evidence is unavailable. No source is assumed healthy.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:portfolio",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Protected project evidence is unavailable: /api/v1/overview?role=project-manager&scope=estate&window",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected owner records are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected dependency paths are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected milestone records are unavailable.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:schedule",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:reliability",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:architecture",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:ai",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:governance",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:mobile:reports",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:now",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Protected estate evidence is unavailable: /api/v1/overview?role=operator&scope=estate&window=latest&",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected data-quality evidence is unavailable. No source is assumed healthy.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:portfolio",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Protected project evidence is unavailable: /api/v1/overview?role=project-manager&scope=estate&window",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected owner records are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected dependency paths are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected milestone records are unavailable.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:schedule",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:reliability",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:architecture",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:ai",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:governance",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:tablet:reports",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:now",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Protected estate evidence is unavailable: /api/v1/overview?role=operator&scope=estate&window=latest&",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected data-quality evidence is unavailable. No source is assumed healthy.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:portfolio",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Protected project evidence is unavailable: /api/v1/overview?role=project-manager&scope=estate&window",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected owner records are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected dependency paths are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected milestone records are unavailable.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:schedule",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:reliability",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:architecture",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:ai",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:governance",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:desktop:reports",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:now",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Protected estate evidence is unavailable: /api/v1/overview?role=operator&scope=estate&window=latest&",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected data-quality evidence is unavailable. No source is assumed healthy.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:portfolio",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Protected project evidence is unavailable: /api/v1/overview?role=project-manager&scope=estate&window",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected owner records are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected dependency paths are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected milestone records are unavailable.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:schedule",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:reliability",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:architecture",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:ai",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:governance",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:zoom-200:reports",
+        "failures": [
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:now",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Protected estate evidence is unavailable: /api/v1/overview?role=operator&scope=estate&window=latest&",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected data-quality evidence is unavailable. No source is assumed healthy.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:portfolio",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Protected project evidence is unavailable: /api/v1/overview?role=project-manager&scope=estate&window",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected owner records are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected dependency paths are unavailable.",
+            "ratio": 3.664104018803286
+          },
+          {
+            "name": "Protected milestone records are unavailable.",
+            "ratio": 3.664104018803286
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:schedule",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "ITIL Cockpit",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assets (CMDB)",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Kanban Board",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Assistant",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Trust",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Fleet Drift",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:reliability",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:architecture",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:ai",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Economy",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Models",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:governance",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Reports",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      },
+      {
+        "row": "chrome:reduced-motion:reports",
+        "failures": [
+          {
+            "name": "SKDashboard",
+            "ratio": 1.2820104737115199
+          },
+          {
+            "name": "Now",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Portfolio",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Schedule",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reliability",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Architecture",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "AI outcomes",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Governance",
+            "ratio": 2.739351029932522
+          },
+          {
+            "name": "Reports",
+            "ratio": 1.2860885424556276
+          },
+          {
+            "name": "Read only",
+            "ratio": 1.2820104737115199
+          }
+        ]
+      }
+    ],
+    "responsive": [],
+    "reducedMotion": [
+      {
+        "row": "chrome:now",
+        "controls": [
+          "dot on"
+        ]
+      }
+    ],
+    "stateMeaning": [
+      "measured",
+      "estimated"
+    ],
+    "sideEffects": null,
+    "realFirefox": "WebDriver POST http://127.0.0.1:17961/session: {\"value\":{\"error\":\"invalid argument\",\"message\":\"binary is not a Firefox executable\",\"stacktrace\":\"\"}}"
+  }
+}
