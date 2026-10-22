@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; color: #182336; background: #f6f8fc; }
+body { max-width: 1200px; margin: auto; padding: 1rem; }
+header { padding-right: 6rem; }
+a { color: #174c9a; }
+nav, .actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; }
+label { display: flex; flex-direction: column; gap: .25rem; }
+.actions label { flex-direction: row; }
+input, button { font: inherit; padding: .5rem; max-width: 100%; min-width: 0; }
+button { cursor: pointer; min-height: 44px; }
+:focus-visible { outline: 3px solid #955a00; outline-offset: 3px; }
+.table-wrap { overflow: auto; margin-block: 1.5rem; }
+table { border-collapse: collapse; width: 100%; background: #fff; }
+caption { text-align: left; font-weight: 700; padding: .5rem; }
+th, td { text-align: left; padding: .65rem; border: 1px solid #a6b2c4; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #e6edf7; }
+meter { display: block; width: 100%; min-width: 4rem; }
+#gateway-provenance { overflow-wrap: anywhere; }
+#gateway-state { font-weight: 700; }
+.skip { position: absolute; top: -100px; }
+.skip:focus { position: static; }
+@media (max-width: 560px) { body { padding: .65rem; } form { grid-template-columns: 1fr; } header { padding-right: 4.5rem; } }
+@media (prefers-color-scheme: dark) { :root { color: #e8edf7; background: #111827; } table { background: #182236; } th { background: #24334b; } a { color: #afceff; } :focus-visible { outline-color: #ffca75; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }

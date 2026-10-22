@@ -38,6 +38,7 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "css/architecture.css",
         "css/board.css",
         "css/cockpit.css",
+        "css/gateway_economy.css",
         "css/governance.css",
         "css/overview.css",
         "css/projects.css",
@@ -50,6 +51,8 @@ READ_ONLY_STATIC_ASSETS = frozenset(
         "js/control_plane_scope.js",
         "js/governance.js",
         "js/fleet_chat.js",
+        "js/gateway_client.js",
+        "js/gateway_economy.js",
         "js/overview.js",
         "js/projects.js",
         "js/read_only_api.js",
@@ -65,7 +68,6 @@ LEGACY_RUNTIME_PATHS = (
     "/assistant",
     "/trust",
     "/models",
-    "/economy",
     "/fleet",
 )
 
@@ -377,6 +379,7 @@ def create_read_only_app(
         Route("/control-plane/reliability", page("reliability.html")),
         Route("/control-plane/architecture", page("architecture.html")),
         Route("/control-plane/ai", page("ai.html")),
+        Route("/economy", page("gateway_economy.html")),
         Route("/control-plane/governance", page("governance.html")),
         Route("/control-plane/reports", page("reports.html")),
         Route("/fleet-chat", page("fleet_chat.html")),
