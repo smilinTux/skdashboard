@@ -51,11 +51,23 @@ TARGET = "/api/v1/overview"
 SCHEDULE_TARGET = "/api/v1/schedule/projection"
 BOARD_TARGET = "/api/v1/board/summary"
 EVENTS_TARGET = "/api/v1/events"
+RELIABILITY_TARGET = "/api/v1/reliability/projection"
+ARCHITECTURE_TARGET = "/api/v1/architecture/projection"
+GOVERNANCE_TARGET = "/api/v1/governance/projection"
+REPORTS_TARGET = "/api/v1/reports/projection"
+FLEET_TARGET = "/api/v1/fleet/summary"
+ECONOMY_TARGET = "/api/v1/economy/summary"
 AUTHENTICATED_BINDINGS = frozenset(
     {
         (CAPABILITY, TARGET),
         (CAPABILITY, SCHEDULE_TARGET),
         (CAPABILITY, BOARD_TARGET),
+        (CAPABILITY, RELIABILITY_TARGET),
+        (CAPABILITY, ARCHITECTURE_TARGET),
+        (CAPABILITY, GOVERNANCE_TARGET),
+        (CAPABILITY, REPORTS_TARGET),
+        (CAPABILITY, FLEET_TARGET),
+        (CAPABILITY, ECONOMY_TARGET),
         (EVENTS_CAPABILITY, EVENTS_TARGET),
     }
 )

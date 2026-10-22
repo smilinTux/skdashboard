@@ -10,7 +10,6 @@ from capauth import Principal
 
 from skdashboard.runtime_authorizer import (
     CAPABILITIES,
-    OPERATOR_ID,
     ExactPrincipalBackend,
     FileTrustedIssuerBackend,
     SQLiteCapabilityState,
@@ -109,7 +108,8 @@ def test_file_trust_backend_rejects_scope_widening(tmp_path: Path) -> None:
 
 
 def test_exact_principal_backend_rejects_every_other_operator() -> None:
-    approved = Principal(principal_id=OPERATOR_ID, subject=OPERATOR_ID, kind="human")
+    operator_id = "AD80D077A047BABF29EEC97AF454FDBC3B1C37D9"
+    approved = Principal(principal_id=operator_id, subject=operator_id, kind="human")
     backend = ExactPrincipalBackend(approved, "a" * 64)
 
     assert backend.snapshot(approved).active is True

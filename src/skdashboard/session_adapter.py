@@ -364,13 +364,13 @@ class EncryptedSessionAdapter:
                 "INSERT INTO sessions VALUES (?, ?, ?)",
                 (_digest(handle), self._seal(record), record["expires_at"]),
             )
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse("/control-plane/portfolio", status_code=303)
         response.set_cookie(
             COOKIE_NAME,
             handle,
             secure=True,
             httponly=True,
-            samesite="strict",
+            samesite="lax",
             path="/",
             max_age=SESSION_TTL,
         )
@@ -469,7 +469,7 @@ class EncryptedSessionAdapter:
         handle, record = loaded
         now = int(self.clock())
         if record["access_expires_at"] > now + 15:
-            return self._resolution(request, record)
+            return self._resolution(request, handle, record)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
@@ -522,10 +522,47 @@ class EncryptedSessionAdapter:
                 (self._seal(record), _digest(handle), reserved_encrypted),
             ).rowcount
         return (
-            self._resolution(request, record) if changed == 1 else SessionResolution("unavailable")
+            self._resolution(request, handle, record)
+            if changed == 1
+            else SessionResolution("unavailable")
         )
 
-    def _resolution(self, request: Request, record: dict) -> SessionResolution:
+    def _restore_control_plane_session(self, request: Request, browser_handle: str, record: dict):
+        subject = record.get("subject")
+        if not isinstance(subject, str) or not subject:
+            raise PermissionError("validated operator subject is unavailable")
+        origin = self.config.redirect_uri.rsplit("/auth/callback", 1)[0]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT encrypted FROM sessions WHERE handle_hash = ?",
+                (_digest(browser_handle),),
+            ).fetchone()
+            if row is None:
+                raise PermissionError("browser session is unavailable")
+            current = self._open(row["encrypted"])
+            current_handle = current.get("control_plane_session")
+            try:
+                return self.control_plane_bridge.request(current_handle, request)
+            except Exception:
+                replacement = self.control_plane_bridge.enroll(subject, origin)
+                if (
+                    not isinstance(replacement, str)
+                    or not replacement.isascii()
+                    or not 32 <= len(replacement) <= 128
+                ):
+                    raise PermissionError("invalid control-plane session handle")
+                current["control_plane_session"] = replacement
+                connection.execute(
+                    "UPDATE sessions SET encrypted = ? WHERE handle_hash = ?",
+                    (self._seal(current), _digest(browser_handle)),
+                )
+        record["control_plane_session"] = replacement
+        return self.control_plane_bridge.request(replacement, request)
+
+    def _resolution(
+        self, request: Request, browser_handle: str, record: dict
+    ) -> SessionResolution:
         subject = record.get("subject")
         control_plane_request = None
         if self.control_plane_bridge is not None:
@@ -534,7 +571,12 @@ class EncryptedSessionAdapter:
                     record["control_plane_session"], request
                 )
             except Exception:
-                return SessionResolution("unavailable")
+                try:
+                    control_plane_request = self._restore_control_plane_session(
+                        request, browser_handle, record
+                    )
+                except Exception:
+                    return SessionResolution("unavailable")
         return SessionResolution(
             "authenticated",
             record["access_token"],
@@ -577,9 +619,7 @@ class EncryptedSessionAdapter:
         if self.control_plane_bridge is not None:
             self.control_plane_bridge.discard(record.get("control_plane_session"))
         response = Response(status_code=204)
-        response.delete_cookie(
-            COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict"
-        )
+        response.delete_cookie(COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
         return response
 
 

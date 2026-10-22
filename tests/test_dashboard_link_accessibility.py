@@ -158,6 +158,25 @@ def test_active_navigation_uses_shared_high_contrast_text_token() -> None:
     assert "color:var(--accent)" not in active_rule
 
 
+def test_navigation_never_draws_an_unmasked_fallback_box() -> None:
+    css = (STATIC / "css" / "board.css").read_text()
+    icon_rule = css.split(".tab::before{", 1)[1].split("}", 1)[0]
+    assert "display:none" in icon_rule
+    for path in (
+        "/matters",
+        "/tasks",
+        "/work-queue",
+        "/control-plane/reliability",
+        "/control-plane/architecture",
+        "/control-plane/ai",
+        "/control-plane/governance",
+        "/control-plane/reports",
+    ):
+        assert f'.tab[href*="{path}"]' in css
+    assert '.tab[data-nav="fleet"]' in css
+    assert "::before{display:block;}" in css
+
+
 def test_real_chrome_navigation_contrast_matrix() -> None:
     node = shutil.which("node")
     chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable")

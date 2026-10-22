@@ -89,12 +89,13 @@ def test_session_routes_are_opt_in_and_cookie_is_opaque(tmp_path):
     assert "Short-lived CapAuth bearer" not in client.get("/").text
     query, response = login(client)
     assert response.status_code == 303
+    assert response.headers["location"] == "/control-plane/portfolio"
     assert query["code_challenge_method"] == ["S256"]
     assert query["issuer"] == ["https://capauth.example"]
     assert session.oidc.calls[0][1] == query["nonce"][0]
     cookie = response.headers["set-cookie"]
     assert COOKIE_NAME in cookie and "Secure" in cookie and "HttpOnly" in cookie
-    assert "SameSite=strict" in cookie and "Domain=" not in cookie
+    assert "SameSite=lax" in cookie and "Domain=" not in cookie
     assert "access-" not in cookie and "refresh-" not in cookie
     data = (tmp_path / "state" / "sessions.db").read_bytes()
     assert b"access-1" not in data and b"refresh-1" not in data and b"test-secret" not in data
@@ -275,6 +276,62 @@ def test_control_plane_bridge_persists_only_an_opaque_handle(tmp_path):
 
     assert record["control_plane_session"] == "opaque-control-plane-handle-" + "a" * 32
     assert isinstance(record["control_plane_session"], str)
+
+
+def test_control_plane_bridge_rebuilds_opaque_proof_after_restart(tmp_path):
+    first_handle = "opaque-control-plane-handle-" + "a" * 32
+    second_handle = "opaque-control-plane-handle-" + "b" * 32
+
+    class FirstBridge:
+        def enroll(self, *_args):
+            return first_handle
+
+        def request(self, handle, _request):
+            if handle != first_handle:
+                raise PermissionError
+            return object()
+
+    class RestartedBridge:
+        enrollments = 0
+
+        def enroll(self, subject, origin):
+            assert subject == "operator@example.test"
+            assert origin == ORIGIN
+            self.enrollments += 1
+            return second_handle
+
+        def request(self, handle, _request):
+            if handle != second_handle:
+                raise PermissionError
+            return object()
+
+    first = adapter(tmp_path, tokens=SubjectTokens())
+    first.control_plane_bridge = FirstBridge()
+    client = TestClient(create_read_only_app(tmp_path, session_adapter=first), base_url=ORIGIN)
+    login(client)
+
+    restarted = EncryptedSessionAdapter(
+        first.database,
+        tmp_path / "session.key",
+        first.config,
+        oidc_client=SubjectTokens(),
+        clock=lambda: 1_001,
+    )
+    bridge = RestartedBridge()
+    restarted.control_plane_bridge = bridge
+    app = create_read_only_app(
+        tmp_path,
+        session_adapter=restarted,
+        session_capability_issuer=lambda *_: "internal",
+        authorizer=lambda *_: True,
+    )
+    browser = TestClient(app, base_url=ORIGIN)
+    browser.cookies.update(client.cookies)
+
+    assert browser.get("/api/v1/overview", headers={"Origin": ORIGIN}).status_code == 200
+    assert bridge.enrollments == 1
+    assert browser.get("/api/v1/overview", headers={"Origin": ORIGIN}).status_code == 200
+    assert bridge.enrollments == 1
 
 
 def test_control_plane_bridge_rejects_serializable_proof_material(tmp_path):

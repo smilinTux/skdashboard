@@ -344,7 +344,42 @@ def test_workspace_routes_are_truthful_read_only_entrypoints(tmp_path: Path) -> 
     assert matters.headers["location"].endswith("selected_silo=legal")
     assert tasks.headers["location"] == "https://legacy.example/board"
     assert queue.headers["location"] == "https://legacy.example/board"
-    assert all(response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue))
+    assert all(
+        response.headers["cache-control"] == "no-store" for response in (matters, tasks, queue)
+    )
+
+
+def test_workspace_routes_use_the_configured_sklegal_origin(tmp_path: Path) -> None:
+    app = create_read_only_app(
+        tmp_path,
+        authorizer=lambda *_: True,
+        legacy_board_url="https://legacy.example/board",
+        sklegal_url="https://sklegal.example",
+    )
+    client = TestClient(app, base_url=LAN_ORIGIN)
+
+    for path in ("/matters", "/tasks", "/work-queue"):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == f"https://sklegal.example{path}"
+    portfolio = client.get("/control-plane/portfolio")
+    assert 'href="https://sklegal.example/matters"' in portfolio.text
+    assert 'href="https://sklegal.example/tasks"' in portfolio.text
+    assert 'href="https://sklegal.example/work-queue"' in portfolio.text
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "http://sklegal.example",
+        "https://user:secret@sklegal.example",
+        "https://sklegal.example/path",
+        "https://sklegal.example?token=value",
+    ),
+)
+def test_sklegal_origin_rejects_unsafe_values(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ValueError, match="credential-free exact HTTPS origin"):
+        create_read_only_app(tmp_path, sklegal_url=value)
 
 
 def test_queue_routes_fail_closed_without_authorized_board_source(tmp_path: Path) -> None:

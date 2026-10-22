@@ -138,6 +138,36 @@ for (const hasLive of [true, false]) {
     )
 
 
+def test_shared_reader_surfaces_api_failures_without_redirecting() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    module = Path("src/skdashboard/static/js/read_only_api.js").resolve().as_uri()
+    program = """
+const { getJSON } = await import(process.argv[1]);
+globalThis.window = { location: { assign() { process.exit(1); } } };
+const reply = (status) => ({
+  ok: false,
+  status,
+});
+for (const status of [401, 503]) {
+  globalThis.fetch = async () => reply(status);
+  try {
+    await getJSON("/api/v1/overview");
+    process.exit(1);
+  } catch (error) {
+    if (error.message !== `/api/v1/overview -> ${status}`) process.exit(1);
+  }
+}
+"""
+    subprocess.run(
+        [node, "--input-type=module", "--eval", program, module],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_full_runtime_shared_api_renders_exactly_one_badge() -> None:
     node = shutil.which("node")
     if node is None:

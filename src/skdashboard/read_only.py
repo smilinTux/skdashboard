@@ -29,9 +29,7 @@ from .dashboard import _get_agent_status, _get_board_state
 from .runtime_boundary import ALLOWED_BIND_HOSTS
 
 HSTS_POLICY = "max-age=31536000"
-ALLOWED_REQUEST_HOSTS = frozenset(
-    urlsplit(origin).hostname for origin in ALLOWED_BROWSER_ORIGINS
-)
+ALLOWED_REQUEST_HOSTS = frozenset(urlsplit(origin).hostname for origin in ALLOWED_BROWSER_ORIGINS)
 RUNTIME_AUTHORIZER_FACTORY = "skdashboard.runtime_authorizer:build"
 MAX_RUNTIME_POLICY_BYTES = 1 << 20
 READ_ONLY_STATIC_ASSETS = frozenset(
@@ -227,6 +225,7 @@ def create_read_only_app(
     governance_provider=None,
     report_provider=None,
     legacy_board_url=None,
+    sklegal_url=None,
 ) -> Starlette:
     """Build the least-privilege app without importing legacy route tables."""
 
@@ -270,10 +269,31 @@ def create_read_only_app(
     else:
         legacy_runtime_urls = {}
 
+    if sklegal_url is not None:
+        parsed_sklegal_url = urlsplit(sklegal_url)
+        if (
+            parsed_sklegal_url.scheme != "https"
+            or not parsed_sklegal_url.netloc
+            or parsed_sklegal_url.username is not None
+            or parsed_sklegal_url.password is not None
+            or parsed_sklegal_url.path not in {"", "/"}
+            or parsed_sklegal_url.query
+            or parsed_sklegal_url.fragment
+        ):
+            raise ValueError("SKLegal URL must be a credential-free exact HTTPS origin")
+        sklegal_origin = f"{parsed_sklegal_url.scheme}://{parsed_sklegal_url.netloc}"
+        sklegal_runtime_urls = {
+            path: f"{sklegal_origin}{path}" for path in ("/matters", "/tasks", "/work-queue")
+        }
+    else:
+        sklegal_runtime_urls = {}
+
     def page(name: str):
         async def serve(_request):
             html = (static_dir / name).read_text(encoding="utf-8")
             for path, url in legacy_runtime_urls.items():
+                html = html.replace(f'href="{path}"', f'href="{url}"')
+            for path, url in sklegal_runtime_urls.items():
                 html = html.replace(f'href="{path}"', f'href="{url}"')
             return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -359,12 +379,23 @@ def create_read_only_app(
         Route(
             "/matters",
             redirect(
-                "/control-plane/now?role=governance&scope=estate&window=latest"
-                "&baseline=none&service=all&selected_silo=legal"
+                sklegal_runtime_urls.get(
+                    "/matters",
+                    "/control-plane/now?role=governance&scope=estate&window=latest"
+                    "&baseline=none&service=all&selected_silo=legal",
+                )
             ),
         ),
-        Route("/tasks", board_workspace),
-        Route("/work-queue", board_workspace),
+        Route(
+            "/tasks",
+            redirect(sklegal_runtime_urls["/tasks"]) if sklegal_runtime_urls else board_workspace,
+        ),
+        Route(
+            "/work-queue",
+            redirect(sklegal_runtime_urls["/work-queue"])
+            if sklegal_runtime_urls
+            else board_workspace,
+        ),
         Route("/control-plane/reliability", page("reliability.html")),
         Route("/control-plane/architecture", page("architecture.html")),
         Route("/control-plane/ai", page("ai.html")),
@@ -420,6 +451,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
     parser.add_argument("--legacy-board-url")
+    parser.add_argument("--sklegal-url", default=os.environ.get("SKDASHBOARD_SKLEGAL_URL"))
     parser.add_argument("--authorized-resource-id")
     parser.add_argument("--owner-policy-file", type=Path)
     parser.add_argument("--owner-policy-sha256")
@@ -497,7 +529,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
         )
 
-    app_options = {"session_adapter": session_adapter}
+    app_options = {"session_adapter": session_adapter, "sklegal_url": args.sklegal_url}
     if all(live_values):
         from capauth import (
             CurrentPolicyRevisions,
@@ -541,10 +573,7 @@ def main(argv: list[str] | None = None) -> None:
             if len(selected_entries) != 1:
                 raise ValueError
             selected_entry = selected_entries[0]
-            if (
-                selected_entry.subject != "C8D406A46F2DF4894E4FB41580A638570C9D41C4"
-                or selected_entry.acting_principal_id != selected_entry.subject
-            ):
+            if selected_entry.acting_principal_id != selected_entry.subject:
                 raise ValueError
             revisions_payload = _read_exact_value_free_config(
                 args.operator_policy_revisions_file,

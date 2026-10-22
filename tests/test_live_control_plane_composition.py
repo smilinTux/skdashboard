@@ -20,11 +20,17 @@ from skdashboard.dashboard_schedule import (
     ScheduleProjectionProvider,
 )
 from skdashboard.live_control_plane import (
+    ARCHITECTURE_TARGET,
     BOARD_TARGET,
     CAPABILITY,
+    ECONOMY_TARGET,
     EVENTS_CAPABILITY,
     EVENTS_RESOURCE_TYPE,
     EVENTS_TARGET,
+    FLEET_TARGET,
+    GOVERNANCE_TARGET,
+    RELIABILITY_TARGET,
+    REPORTS_TARGET,
     RESOURCE_TYPE,
     SCHEDULE_TARGET,
     TARGET,
@@ -100,6 +106,12 @@ def test_composition_uses_one_provider_for_owner_decision_and_read(tmp_path) -> 
     ("capability", "target", "resource_type", "resource_id"),
     [
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, RELIABILITY_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, ARCHITECTURE_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, GOVERNANCE_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, REPORTS_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, FLEET_TARGET, RESOURCE_TYPE, RESOURCE_ID),
+        (CAPABILITY, ECONOMY_TARGET, RESOURCE_TYPE, RESOURCE_ID),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ],
 )
@@ -437,6 +449,12 @@ def test_same_origin_session_serves_default_overview_then_schedule(tmp_path, mon
     direct_watermarks = direct_projection["items"][0]["source_watermarks"]
     for capability, target, resource_type, resource_id in (
         (CAPABILITY, BOARD_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, RELIABILITY_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, ARCHITECTURE_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, GOVERNANCE_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, REPORTS_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, FLEET_TARGET, RESOURCE_TYPE, entry.resource_id),
+        (CAPABILITY, ECONOMY_TARGET, RESOURCE_TYPE, entry.resource_id),
         (EVENTS_CAPABILITY, EVENTS_TARGET, EVENTS_RESOURCE_TYPE, "platform"),
     ):
         projection_request = request(
