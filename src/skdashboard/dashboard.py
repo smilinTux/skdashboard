@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -384,15 +385,14 @@ def _get_doctor_report(home: Path) -> dict:
     return report
 
 
-def _get_board_state(home: Path) -> dict:
-    """Load coordination board state.
-
-    Args:
-        home: Agent home directory.
-
-    Returns:
-        dict: Tasks and agents from the coordination board.
-    """
+def _get_board_state(
+    home: Path,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    expected_revision: str | None = None,
+) -> dict:
+    """Load coordination board state, exposing the API owner's page contract."""
     try:
         from skcoord.coordination import Board
 
@@ -400,18 +400,26 @@ def _get_board_state(home: Path) -> dict:
         views = board.get_task_views()
         agents = board.load_agents()
 
+        tasks = [
+            {
+                "id": v.task.id,
+                "title": v.task.title,
+                "priority": v.task.priority.value,
+                "status": v.status.value,
+                "claimed_by": v.claimed_by,
+                "tags": v.task.tags,
+            }
+            for v in views
+        ]
+        revision = hashlib.sha256(
+            json.dumps(tasks, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if expected_revision is not None and revision != expected_revision:
+            return {"error": "board source revision changed", "revision": revision}
+        page = tasks[offset : offset + limit] if limit is not None else tasks
         return {
-            "tasks": [
-                {
-                    "id": v.task.id,
-                    "title": v.task.title,
-                    "priority": v.task.priority.value,
-                    "status": v.status.value,
-                    "claimed_by": v.claimed_by,
-                    "tags": v.task.tags,
-                }
-                for v in views
-            ],
+            "tasks": page,
+            "revision": revision,
             "agents": [
                 {
                     "name": ag.agent,
@@ -421,7 +429,7 @@ def _get_board_state(home: Path) -> dict:
                 for ag in agents
             ],
             "summary": {
-                "total": len(views),
+                "total": len(tasks),
                 "done": sum(1 for v in views if v.status.value == "done"),
                 "open": sum(1 for v in views if v.status.value == "open"),
                 "in_progress": sum(1 for v in views if v.status.value == "in_progress"),
@@ -776,6 +784,7 @@ def create_app(
     control_plane_architecture_provider=None,
     control_plane_governance_provider=None,
     control_plane_report_provider=None,
+    control_plane_projection_cache=None,
 ):
     """Build the Starlette ASGI app for the dashboard.
 
@@ -801,7 +810,12 @@ def create_app(
     from . import dashboard_kanban as dk
     from . import dashboard_operator as dop
     from . import queue_authz
+    from .control_plane_api import ProjectionCache
     from .surface_registry import resolve_card_id
+
+    control_plane_projection_cache = (
+        control_plane_projection_cache or ProjectionCache()
+    )
 
     def _cmdb():
         from . import dashboard_cmdb as dc
@@ -1039,6 +1053,8 @@ def create_app(
             return _gate_deny(decision["reason"])
         result = dk.apply_mutation(home, card_id, action, actor, **body)
         if result.get("ok"):
+            control_plane_projection_cache.invalidate("board")
+            control_plane_projection_cache.invalidate("overview")
             dk.BUS.publish({"type": "card_changed", "id": card_id, "actor": actor})
         return _json(result)
 
@@ -1969,6 +1985,7 @@ def create_app(
             architecture_provider=control_plane_architecture_provider,
             governance_provider=control_plane_governance_provider,
             report_provider=control_plane_report_provider,
+            projection_cache=control_plane_projection_cache,
         )
     )
     if static_dir.exists():

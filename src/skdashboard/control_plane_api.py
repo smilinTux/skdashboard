@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
+import secrets
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 from uuid import uuid4
 
@@ -18,6 +21,10 @@ from starlette.routing import Route
 SCHEMA_VERSION = "1.1.0"
 MAX_LIMIT = 200
 MAX_BEARER_BYTES = 64 * 1024
+PROJECTION_CACHE_ENTRIES = 64
+PROJECTION_CACHE_TTL_SECONDS = 60
+RATE_LIMIT = 120
+RATE_WINDOW_SECONDS = 60
 ALLOWED_BROWSER_ORIGINS = frozenset(
     {"https://10.0.0.139:7778", "https://100.81.238.58:7778"}
 )
@@ -27,6 +34,66 @@ class ControlPlaneInvocationFactory(Protocol):
     """Build trusted invocation facts without consulting bearer claims."""
 
     def __call__(self, request, capability: str, target: str): ...
+
+
+class ProjectionCache:
+    """Small process-local cache; owners explicitly invalidate changed projections."""
+
+    def __init__(
+        self,
+        *,
+        max_entries: int = PROJECTION_CACHE_ENTRIES,
+        ttl_seconds: int = PROJECTION_CACHE_TTL_SECONDS,
+    ) -> None:
+        if max_entries < 1 or ttl_seconds < 1:
+            raise ValueError("projection cache bounds must be positive")
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        self._entries: OrderedDict[tuple, tuple[float, object]] = OrderedDict()
+        self._lock = Lock()
+        self.hits = 0
+        self.misses = 0
+        self.invalidations = 0
+
+    def get(self, key: tuple):
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.pop(key, None)
+            if entry is None:
+                self.misses += 1
+                return None
+            inserted, value = entry
+            if inserted <= now - self.ttl_seconds:
+                self.misses += 1
+                return None
+            self._entries[key] = entry
+            self.hits += 1
+            return value
+
+    def put(self, key: tuple, value: object) -> None:
+        with self._lock:
+            self._entries.pop(key, None)
+            self._entries[key] = (time.monotonic(), value)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+
+    def invalidate(self, projection: str | None = None) -> None:
+        """Explicitly discard one owner projection family, or every family."""
+        with self._lock:
+            if projection is None:
+                removed = len(self._entries)
+                self._entries.clear()
+            else:
+                keys = [key for key in self._entries if key and key[0] == projection]
+                removed = len(keys)
+                for key in keys:
+                    del self._entries[key]
+            self.invalidations += removed
+
+    @property
+    def size(self) -> int:
+        with self._lock:
+            return len(self._entries)
 
 
 def _now() -> str:
@@ -153,8 +220,10 @@ def _response(request, body: dict):
         key: body.get(key)
         for key in ("schema_version", "source_owner", "scope", "metrics", "items", "page", "errors")
     }
-    for error in projection.get("errors") or []:
-        error.pop("request_id", None)
+    projection["errors"] = [
+        {key: value for key, value in error.items() if key != "request_id"}
+        for error in projection.get("errors") or []
+    ]
     def source_projection(value):
         if isinstance(value, dict):
             return {
@@ -231,6 +300,10 @@ def _clear_decision(request) -> None:
         pass
     try:
         del request.state.control_plane_decision
+    except (AttributeError, KeyError):
+        pass
+    try:
+        del request.state.control_plane_cache_scope
     except (AttributeError, KeyError):
         pass
 
@@ -417,6 +490,18 @@ def _protected_handler(
                 )
                 response.headers["Cache-Control"] = "no-store"
                 return response
+        scope_material = bearer
+        context = getattr(request.state, "control_plane_decision", None)
+        if context is not None:
+            try:
+                scope_material += json.dumps(
+                    context.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+                )
+            except Exception:
+                scope_material += repr(context)
+        request.state.control_plane_cache_scope = hashlib.sha256(
+            f"{capability}\0{request.url.path}\0{scope_material}".encode()
+        ).hexdigest()
         try:
             response = await handler(request)
             response.headers["Cache-Control"] = "no-store"
@@ -442,6 +527,7 @@ def routes(
     architecture_provider=None,
     governance_provider=None,
     report_provider=None,
+    projection_cache: ProjectionCache | None = None,
 ):
     if (decision_authorizer is None) != (invocation_factory is None):
         raise ValueError("typed control-plane authorization requires both injected components")
@@ -454,32 +540,44 @@ def routes(
         or report_provider is not None
     ) and decision_authorizer is None:
         raise ValueError("owner projection requires typed control-plane authorization")
-    hits: dict[str, deque[float]] = defaultdict(deque)
-    counters = {"requests": 0, "denied": 0}
+    hits: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+    counters = {
+        "requests": 0,
+        "denied": 0,
+        "rate_accepted": defaultdict(int),
+        "rate_rejected": defaultdict(int),
+    }
+    projection_cache = projection_cache or ProjectionCache()
+    cursor_secret = secrets.token_bytes(32)
     authorize = authorizer or (
         lambda bearer, capability, target: _capauth_authorize(
             home, bearer, capability, target
         )
     )
 
-    def limited(handler):
+    def limited(handler, rate_class: str = "common"):
         async def wrapped(request):
             now = time.monotonic()
-            key = request.client.host if request.client else "local"
-            recent = hits[key]
-            while recent and recent[0] <= now - 60:
+            client = request.client.host if request.client else "local"
+            recent = hits[(rate_class, client)]
+            while recent and recent[0] <= now - RATE_WINDOW_SECONDS:
                 recent.popleft()
-            if len(recent) >= 120:
+            if len(recent) >= RATE_LIMIT:
+                counters["rate_rejected"][rate_class] += 1
                 response = _error(request, 429, "RATE_LIMITED", "read rate limit exceeded", retryable=True)
-                response.headers["Retry-After"] = "60"
+                response.headers["Retry-After"] = str(RATE_WINDOW_SECONDS)
+                response.headers["X-RateLimit-Class"] = rate_class
                 return response
             recent.append(now)
             counters["requests"] += 1
-            return await handler(request)
+            counters["rate_accepted"][rate_class] += 1
+            response = await handler(request)
+            response.headers["X-RateLimit-Class"] = rate_class
+            return response
 
         return wrapped
 
-    def protected(handler, capability: str):
+    def protected(handler, capability: str, *, rate_class: str = "common"):
         return limited(
             _protected_handler(
                 handler,
@@ -489,7 +587,8 @@ def routes(
                 invocation_factory=invocation_factory,
                 counters=counters,
                 session_resolver=session_resolver,
-            )
+            ),
+            rate_class,
         )
 
     async def health(request):
@@ -502,10 +601,101 @@ def routes(
         }]
         return _response(request, _envelope(request, "skcapstone", safe, errors))
 
+    def page_scope(request) -> str:
+        pairs = sorted(
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "cursor"
+        )
+        material = json.dumps(
+            [pairs, getattr(request.state, "control_plane_cache_scope", "public")],
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(material).hexdigest()
+
+    def decode_page_cursor(raw: str | None, scope: str) -> tuple[int, str | None]:
+        if not raw:
+            return 0, None
+        if len(raw) > 512:
+            raise ValueError("cursor is too long")
+        try:
+            decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+            payload, signature = decoded.rsplit(b".", 1)
+            if not hmac.compare_digest(
+                signature, hmac.new(cursor_secret, payload, hashlib.sha256).hexdigest().encode()
+            ):
+                raise ValueError
+            value = json.loads(payload)
+            if (
+                set(value) != {"offset", "revision", "scope"}
+                or value["scope"] != scope
+                or not isinstance(value["offset"], int)
+                or value["offset"] < 0
+                or not isinstance(value["revision"], str)
+                or not value["revision"]
+                or len(value["revision"]) > 256
+            ):
+                raise ValueError
+            return value["offset"], value["revision"]
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("cursor is invalid or its scope changed") from exc
+
+    def encode_page_cursor(offset: int, revision: str, scope: str) -> str:
+        payload = json.dumps(
+            {"offset": offset, "revision": revision, "scope": scope},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        signature = hmac.new(cursor_secret, payload, hashlib.sha256).hexdigest().encode()
+        return base64.urlsafe_b64encode(payload + b"." + signature).decode().rstrip("=")
+
     async def board(request):
         try:
-            raw = board_reader(home)
-            errors = [raw["error"]] if raw.get("error") else []
+            limit = _limit(request)
+            scope = page_scope(request)
+            offset, expected_revision = decode_page_cursor(
+                request.query_params.get("cursor"), scope
+            )
+            cache_key = ("board", scope, offset, limit, expected_revision)
+            cached = projection_cache.get(cache_key)
+            cache_state = "hit"
+            if cached is None:
+                cache_state = "miss"
+                raw = board_reader(
+                    home,
+                    offset=offset,
+                    limit=limit + 1,
+                    expected_revision=expected_revision,
+                )
+                if not isinstance(raw, dict):
+                    raise RuntimeError("owner returned an invalid page")
+                tasks = raw.get("tasks", [])
+                revision = raw.get("revision")
+                if (
+                    not isinstance(tasks, list)
+                    or len(tasks) > limit + 1
+                    or (revision is not None and (not isinstance(revision, str) or len(revision) > 256))
+                ):
+                    raise RuntimeError("owner exceeded the bounded page contract")
+                if expected_revision is not None and revision != expected_revision:
+                    raise ValueError("cursor source revision changed")
+                if raw.get("error"):
+                    return _error(
+                        request,
+                        503,
+                        "SOURCE_UNAVAILABLE",
+                        "the bounded board owner is unavailable",
+                        retryable=True,
+                    )
+                cached = (tasks, None, revision, raw.get("observed_at"))
+                if revision:
+                    projection_cache.put(cache_key, cached)
+                else:
+                    cache_state = "bypass"
+            tasks, source_error, revision, observed_at = cached
+            errors = [source_error] if source_error else []
+            has_more = len(tasks) > limit
+            page_tasks = tasks[:limit]
             items = [
                 {
                     "task_id": item.get("id"),
@@ -514,11 +704,42 @@ def routes(
                     "status": item.get("status"),
                     "claimed_by": item.get("claimed_by"),
                 }
-                for item in raw.get("tasks", [])
+                for item in page_tasks
             ]
-            return _response(request, _page(request, "skcoord", items, errors))
+            result = _envelope(
+                request, "skcoord", items, errors, observed_at=observed_at
+            )
+            next_offset = offset + len(page_tasks)
+            result["page"] = {
+                "limit": limit,
+                "next_cursor": (
+                    encode_page_cursor(next_offset, revision, scope)
+                    if has_more and revision
+                    else None
+                ),
+                "has_more": has_more,
+            }
+            if has_more and not revision:
+                return _error(
+                    request,
+                    503,
+                    "SOURCE_UNAVAILABLE",
+                    "owner pagination revision is unavailable",
+                    retryable=True,
+                )
+            response = _response(request, result)
+            response.headers["X-Projection-Cache"] = cache_state
+            return response
         except ValueError as exc:
             return _error(request, 400, "INVALID_QUERY", str(exc))
+        except Exception:
+            return _error(
+                request,
+                503,
+                "SOURCE_UNAVAILABLE",
+                "the bounded board owner is unavailable",
+                retryable=True,
+            )
 
     async def fleet(request):
         from . import dashboard_fleet
@@ -578,6 +799,17 @@ def routes(
             return _error(request, 400, "INVALID_QUERY", str(exc))
 
     async def overview(request):
+        cache_key = (
+            "overview",
+            getattr(request.state, "control_plane_cache_scope", "public"),
+            tuple(sorted(request.query_params.multi_items())),
+        )
+        cached = projection_cache.get(cache_key)
+        if cached is not None:
+            response = _response(request, cached)
+            response.headers["X-Projection-Cache"] = "hit"
+            return response
+
         from .control_plane_adapters import default_readers, project_estate
         from .control_plane_quality import project_data_quality
         from .control_plane_scope import (
@@ -632,17 +864,21 @@ def routes(
             else ("unavailable" if states == {"unavailable"} else "partial")
         )
         quality = project_data_quality(adapter_items)
-        return _response(
+        result = _envelope(
             request,
-            _envelope(
-                request,
-                "skdashboard",
-                [*adapter_items, project, quality],
-                errors,
-                truth_state=truth,
-                scope=scope.as_dict(),
-            ),
+            "skdashboard",
+            [*adapter_items, project, quality],
+            errors,
+            truth_state=truth,
+            scope=scope.as_dict(),
         )
+        cache_state = "bypass"
+        if truth == "current":
+            projection_cache.put(cache_key, result)
+            cache_state = "miss"
+        response = _response(request, result)
+        response.headers["X-Projection-Cache"] = cache_state
+        return response
 
     async def schedule(request):
         allowed = {
@@ -955,11 +1191,29 @@ def routes(
             "# HELP skdashboard_control_plane_denied_total Denied control-plane requests.",
             "# TYPE skdashboard_control_plane_denied_total counter",
             f"skdashboard_control_plane_denied_total {counters['denied']}",
+            "# HELP skdashboard_control_plane_rate_requests_total Bounded requests by isolation class and result.",
+            "# TYPE skdashboard_control_plane_rate_requests_total counter",
+            *[
+                f'skdashboard_control_plane_rate_requests_total{{class="{rate_class}",result="{result}"}} {values[rate_class]}'
+                for rate_class in ("common", "critical")
+                for result, values in (
+                    ("accepted", counters["rate_accepted"]),
+                    ("rejected", counters["rate_rejected"]),
+                )
+            ],
+            "# HELP skdashboard_control_plane_projection_cache_entries Bounded cached owner pages.",
+            "# TYPE skdashboard_control_plane_projection_cache_entries gauge",
+            f"skdashboard_control_plane_projection_cache_entries {projection_cache.size}",
+            "# HELP skdashboard_control_plane_projection_cache_events_total Projection cache events.",
+            "# TYPE skdashboard_control_plane_projection_cache_events_total counter",
+            f'skdashboard_control_plane_projection_cache_events_total{{event="hit"}} {projection_cache.hits}',
+            f'skdashboard_control_plane_projection_cache_events_total{{event="miss"}} {projection_cache.misses}',
+            f'skdashboard_control_plane_projection_cache_events_total{{event="invalidation"}} {projection_cache.invalidations}',
         ]
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     return [
-        Route("/api/v1/health", limited(health)),
+        Route("/api/v1/health", limited(health, "critical")),
         Route("/api/v1/overview", protected(overview, "skdashboard.read")),
         Route("/api/v1/schedule/projection", protected(schedule, "skdashboard.read")),
         Route("/api/v1/reliability/projection", protected(reliability, "skdashboard.read")),
@@ -968,11 +1222,15 @@ def routes(
         Route("/api/v1/reports/projection", protected(reports, "skdashboard.read")),
         Route(
             "/api/v1/reports/{snapshot_id}",
-            protected(report_snapshot, "skdashboard.reports.read"),
+            protected(
+                report_snapshot, "skdashboard.reports.read", rate_class="critical"
+            ),
         ),
         Route("/api/v1/board/summary", protected(board, "skdashboard.read")),
         Route("/api/v1/fleet/summary", protected(fleet, "skdashboard.read")),
         Route("/api/v1/economy/summary", protected(economy, "skdashboard.read")),
         Route("/api/v1/events", protected(events, "skdashboard.events.read")),
-        Route("/metrics", protected(metrics, "skdashboard.read")),
+        Route(
+            "/metrics", protected(metrics, "skdashboard.read", rate_class="critical")
+        ),
     ]

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
-from skdashboard.control_plane_api import _capauth_authorize
+from skdashboard.control_plane_api import ProjectionCache, _capauth_authorize, routes
 from skdashboard.dashboard import create_app
 
 LAN_ORIGIN = "https://10.0.0.139:7778"
@@ -73,13 +73,127 @@ def test_v1_board_is_bounded_etagged_and_read_only(tmp_path: Path) -> None:
     assert TestClient(app).get("/api/v1/board/summary?limit=201", headers=READ_HEADERS).status_code == 400
 
 
-def test_v1_source_failure_is_partial_not_healthy(tmp_path: Path) -> None:
+def test_board_owner_pagination_is_bounded_stable_and_scope_bound(tmp_path: Path) -> None:
+    tasks = [
+        {
+            "id": str(index),
+            "title": f"Task {index}",
+            "priority": "high",
+            "status": "open",
+            "claimed_by": None,
+        }
+        for index in range(10_000)
+    ]
+    calls = []
+
+    def reader(_home, *, offset, limit, expected_revision):
+        calls.append((offset, limit, expected_revision))
+        revision = "synthetic-r1"
+        return {"tasks": tasks[offset : offset + limit], "revision": revision}
+
+    from starlette.applications import Starlette
+
+    app = Starlette(
+        routes=routes(
+            tmp_path,
+            board_reader=reader,
+            health_reader=lambda _home: {"consciousness": "CONSCIOUS", "pillars": {}},
+            authorizer=_authorizer,
+        )
+    )
+    client = TestClient(app)
+    cursor = None
+    seen = []
+    for _ in range(10):
+        suffix = f"&cursor={cursor}" if cursor else ""
+        response = client.get(
+            f"/api/v1/board/summary?limit=1{suffix}", headers=READ_HEADERS
+        )
+        assert response.status_code == 200
+        body = response.json()
+        seen.append(body["items"][0]["task_id"])
+        cursor = body["page"]["next_cursor"]
+    assert seen == [str(index) for index in range(10)]
+    assert [call[:2] for call in calls] == [(index, 2) for index in range(10)]
+    assert client.get(
+        f"/api/v1/board/summary?limit=2&cursor={cursor}", headers=READ_HEADERS
+    ).status_code == 400
+
+
+def test_board_cache_hit_invalidation_ttl_and_failure_are_fail_closed(tmp_path: Path) -> None:
+    cache = ProjectionCache(max_entries=1, ttl_seconds=60)
+    state = {"calls": 0, "fail": False}
+
+    def reader(_home, *, offset, limit, expected_revision):
+        state["calls"] += 1
+        if state["fail"]:
+            raise TimeoutError
+        return {
+            "tasks": [
+                {
+                    "id": str(index),
+                    "title": "Synthetic",
+                    "priority": "high",
+                    "status": "open",
+                    "claimed_by": None,
+                }
+                for index in range(offset, offset + limit)
+            ],
+            "revision": "synthetic-r1",
+        }
+
+    from starlette.applications import Starlette
+
+    app = Starlette(
+        routes=routes(
+            tmp_path,
+            board_reader=reader,
+            health_reader=lambda _home: {"consciousness": "CONSCIOUS", "pillars": {}},
+            authorizer=_authorizer,
+            projection_cache=cache,
+        )
+    )
+    client = TestClient(app)
+    first = client.get("/api/v1/board/summary?limit=1", headers=READ_HEADERS)
+    unchanged = client.get(
+        "/api/v1/board/summary?limit=1",
+        headers={**READ_HEADERS, "If-None-Match": first.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+    assert unchanged.headers["x-projection-cache"] == "hit"
+    assert state["calls"] == 1
+    cache.invalidate("board")
+    state["fail"] = True
+    failed = client.get("/api/v1/board/summary?limit=1", headers=READ_HEADERS)
+    assert failed.status_code == 503
+    assert failed.json()["code"] == "SOURCE_UNAVAILABLE"
+    assert cache.size == 0
+
+    with patch("skdashboard.control_plane_api.time.monotonic", side_effect=[0, 61]):
+        expiring = ProjectionCache(max_entries=1, ttl_seconds=60)
+        expiring.put(("board",), "value")
+        assert expiring.get(("board",)) is None
+
+
+def test_projection_cache_is_bounded_and_explicitly_invalidated() -> None:
+    cache = ProjectionCache(max_entries=2, ttl_seconds=60)
+    cache.put(("board", 1), 1)
+    cache.put(("overview", 1), 2)
+    cache.put(("board", 2), 3)
+    assert cache.size == 2
+    cache.invalidate("board")
+    assert cache.size == 1
+    cache.invalidate()
+    assert cache.size == 0
+
+
+def test_v1_source_failure_fails_closed(tmp_path: Path) -> None:
     with patch("skdashboard.dashboard._get_board_state", return_value={"error": "offline"}):
         app = _app(tmp_path)
     response = TestClient(app).get("/api/v1/board/summary", headers=READ_HEADERS)
-    body = response.json()
-    assert body["freshness"]["truth_state"] == "partial"
-    assert body["errors"][0]["code"] == "SOURCE_PARTIAL"
+    assert response.status_code == 503
+    assert response.json()["code"] == "SOURCE_UNAVAILABLE"
+    assert response.json()["retryable"] is True
 
 
 def test_v1_economy_keeps_unavailable_cost_distinct_from_zero(tmp_path: Path) -> None:
@@ -132,7 +246,24 @@ def test_v1_rate_control_returns_retry_contract(tmp_path: Path) -> None:
     response = client.get("/api/v1/health")
     assert response.status_code == 429
     assert response.headers["retry-after"] == "60"
+    assert response.headers["x-ratelimit-class"] == "critical"
     assert response.json()["code"] == "RATE_LIMITED"
+
+
+def test_common_read_saturation_cannot_starve_declared_critical_reads(tmp_path: Path) -> None:
+    client = TestClient(_app(tmp_path))
+    for _ in range(120):
+        assert client.get("/api/v1/board/summary", headers=READ_HEADERS).status_code == 200
+    limited = client.get("/api/v1/board/summary", headers=READ_HEADERS)
+    assert limited.status_code == 429
+    assert limited.headers["x-ratelimit-class"] == "common"
+
+    health = client.get("/api/v1/health")
+    evidence = client.get("/metrics", headers=READ_HEADERS)
+    assert health.status_code == evidence.status_code == 200
+    assert health.headers["x-ratelimit-class"] == "critical"
+    assert evidence.headers["x-ratelimit-class"] == "critical"
+    assert 'class="common",result="rejected"} 1' in evidence.text
 
 
 def test_protected_reads_and_equivalent_sse_fail_closed(tmp_path: Path) -> None:
