@@ -9,11 +9,14 @@ import pytest
 from jsonschema import ValidationError
 
 from skdashboard.control_plane_client import (
+    ActionClientError,
     ContractValidators,
     ControlPlaneClient,
     ControlPlaneClientError,
 )
 from skdashboard.control_plane_fixture import (
+    ACTION_PREVIEW,
+    ACTION_PREVIEW_HASH,
     BEARER,
     INSIGHT,
     ORIGIN,
@@ -210,6 +213,348 @@ def test_client_rejects_arbitrary_queries_ids_operations_and_invalid_contracts()
     bad_report["sections"][0]["metric_results"][0]["truth_state"] = "healthy"
     with pytest.raises(ControlPlaneClientError, match="schema validation"):
         ContractValidators().validate("report", bad_report)
+
+
+def test_allowlisted_action_lifecycle_uses_discovered_templates_and_names_only() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            assert len(client.action_contracts()) == 1
+            preview = await client.preview_action(
+                "synthetic.action",
+                {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            )
+            assert preview.data["preview_hash"].startswith("sha256:")
+            receipt = await client.authorize_action(
+                "synthetic.action", "apv-synthetic-0001", preview.data["preview_hash"],
+                "idempotency-action-0001", "synthetic qualification",
+            )
+            assert receipt.data["verification_state"] == "pending"
+            verified = await client.verify_action("synthetic.action", "rcpt-synthetic-0001")
+            assert verified.data["owner_receipt_ref"] == "owner-receipt:synthetic-0001"
+            canceled = await client.cancel_action("synthetic.action", "rcpt-synthetic-0001")
+            assert canceled.data["verification_state"] == "rolled_back"
+            rolled_back = await client.rollback_action("synthetic.action", "rcpt-synthetic-0001")
+            assert rolled_back.data["verification_state"] == "rolled_back"
+            assert "fixture-read" not in json.dumps(receipt.data)
+            assert "skdashboard.actions.authorize" not in json.dumps(receipt.data)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_fixture_action_idempotency_and_terminal_verification_are_stateful() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            preview = await client.preview_action(
+                "synthetic.action",
+                {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            )
+            first = await client.authorize_action(
+                "synthetic.action", preview.data["preview_id"], preview.data["preview_hash"],
+                "idempotency-action-0001", "synthetic qualification",
+            )
+            duplicate = await client.authorize_action(
+                "synthetic.action", preview.data["preview_id"], preview.data["preview_hash"],
+                "idempotency-action-0001", "synthetic qualification",
+            )
+            changed = await client.authorize_action(
+                "synthetic.action", preview.data["preview_id"], preview.data["preview_hash"],
+                "idempotency-action-0002", "synthetic qualification",
+            )
+            verified = await client.verify_action("synthetic.action", first.data["receipt_id"])
+            assert first.data["status"] == "accepted"
+            assert duplicate.data["status"] == "duplicate"
+            assert duplicate.data["receipt_id"] == first.data["receipt_id"]
+            assert changed.data["receipt_id"] != first.data["receipt_id"]
+            assert verified.data["verification_state"] == "verified"
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_action_receipt_rejects_unexpected_and_credential_like_fields() -> None:
+    async def run() -> None:
+        unsafe = {
+            "receipt_id": "rcpt-synthetic-0001",
+            "preview_id": "apv-synthetic-0001",
+            "preview_hash": "sha256:" + "b" * 64,
+            "status": "accepted",
+            "owner_service": "synthetic.owner",
+            "owner_receipt_ref": "owner-receipt:synthetic-0001",
+            "policy_decision_ref": "policy:synthetic-action",
+            "accepted_at": "2026-08-24T12:00:30Z",
+            "verification_state": "pending",
+            "actor_ref": "sha256:" + "c" * 64,
+            "purpose": "synthetic qualification",
+            "audit_ref": "audit:synthetic-0001",
+            "external_effect_state": "none",
+            "authorization": " ".join(("Bearer", "REDACTED_SYNTHETIC_VALUE")),
+        }
+
+        async def handler(_request):
+            return httpx.Response(200, json=unsafe)
+
+        manifest = {
+            "schemaVersion": "1.1",
+            "entry": {"url": ORIGIN + "/"},
+            "auth": {"audience": "skdashboard"},
+            "health": ORIGIN + "/api/v1/health",
+            "actions": [{
+                "contract_id": "synthetic.action",
+                "version": "1.0.0",
+                "operations": {"receipt": "/api/v1/action-receipts/{receipt_id}"},
+                "capabilities": {"receipt": "skdashboard.actions.receipt"},
+            }],
+        }
+        client = ControlPlaneClient(
+            ORIGIN,
+            BEARER,
+            httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            manifest=manifest,
+            owns_http=False,
+        )
+        try:
+            with pytest.raises(ActionClientError, match="protected or credential-like"):
+                await client.receipt("synthetic.action", "rcpt-synthetic-0001")
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_action_response_adversarial_receipts_fail_closed_before_output() -> None:
+    base = {
+        "receipt_id": "rcpt-synthetic-0001",
+        "preview_id": "apv-synthetic-0001",
+        "preview_hash": "sha256:" + "b" * 64,
+        "status": "accepted",
+        "owner_service": "synthetic.owner",
+        "owner_receipt_ref": "owner-receipt:synthetic-0001",
+        "policy_decision_ref": "policy:synthetic-action",
+        "accepted_at": "2026-08-24T12:00:30Z",
+        "verification_state": "pending",
+        "actor_ref": "sha256:" + "c" * 64,
+        "purpose": "synthetic qualification",
+        "audit_ref": "audit:synthetic-0001",
+        "external_effect_state": "none",
+        "action_contract_id": "synthetic.action",
+        "action_contract_version": "1.0.0",
+        "target": {"resource_id": "synthetic-1"},
+        "parameters": {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+        "idempotency_key": "idempotency-action-0001",
+    }
+    mutations = {
+        "unexpected": {"unexpected": True},
+        "bearer": {"authorization": " ".join(("Bearer", "REDACTED_SYNTHETIC_VALUE"))},
+        "matter_alias": {"matter_id": "REDACTED_SYNTHETIC_VALUE"},
+        "matter_payload": {"matter_payload": "protected Matter content"},
+        "endpoint": {"endpoint": "https://attacker.invalid"},
+        "receipt_identity": {"receipt_id": "rcpt-other-0001"},
+        "preview_hash": {"preview_hash": "sha256:" + "a" * 64},
+        "target": {"target": {"resource_id": "other"}},
+        "parameters": {"parameters": {"recommendation_id": "other", "parameter_proposal_ref": "proposal:synthetic-0001"}},
+        "idempotency": {"idempotency_key": "idempotency-other-0001"},
+    }
+
+    expected_errors = {
+        "unexpected": "action response failed its strict typed schema",
+        "bearer": "action response contains protected or credential-like output",
+        "matter_alias": "action response contains protected or credential-like output",
+        "matter_payload": "action response contains protected or credential-like output",
+        "endpoint": "action response contains protected or credential-like output",
+        "receipt_identity": "action receipt identity does not match the request",
+        "preview_hash": "action receipt binding changed",
+        "target": "action receipt binding changed",
+        "parameters": "action receipt binding changed",
+        "idempotency": "action receipt binding changed",
+    }
+
+    async def run() -> None:
+        for name, change in mutations.items():
+            async def handler(_request, change=change):
+                return httpx.Response(200, json={**base, **change})
+
+            manifest = {
+                "schemaVersion": "1.1", "entry": {"url": ORIGIN + "/"},
+                "auth": {"audience": "skdashboard"}, "health": ORIGIN + "/api/v1/health",
+                "actions": [{
+                    "contract_id": "synthetic.action", "version": "1.0.0",
+                    "operations": {"receipt": "/api/v1/action-receipts/{receipt_id}"},
+                    "capabilities": {"receipt": "skdashboard.actions.receipt"},
+                }],
+            }
+            client = ControlPlaneClient(
+                ORIGIN, BEARER, httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                manifest=manifest, owns_http=False,
+            )
+            client._receipts["rcpt-synthetic-0001"] = copy.deepcopy(base)
+            try:
+                with pytest.raises(ActionClientError, match=expected_errors[name]):
+                    await client.receipt("synthetic.action", "rcpt-synthetic-0001")
+            finally:
+                await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_action_template_and_changed_input_fail_closed_before_dispatch() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            preview = await client.preview_action(
+                "synthetic.action",
+                {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            )
+            with pytest.raises(ActionClientError, match="changed target"):
+                await client.authorize_action(
+                    "synthetic.action", "apv-synthetic-0001", preview.data["preview_hash"],
+                    "idempotency-action-0002", "synthetic qualification", target={"resource_id": "other"},
+                )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+    bad_manifest = {
+        "schemaVersion": "1.1",
+        "entry": {"url": ORIGIN + "/"},
+        "auth": {"audience": "skdashboard"},
+        "health": ORIGIN + "/api/v1/health",
+        "actions": [{
+            "contract_id": "bad",
+            "version": "1.0.0",
+            "operations": {"receipt": "/api/v1/action-receipts/{preview_id}"},
+            "capabilities": {"receipt": "skdashboard.actions.receipt"},
+        }],
+    }
+    with pytest.raises(ControlPlaneClientError, match="action contract"):
+        ControlPlaneClient._load_action_contracts(bad_manifest)
+
+
+def test_action_boundaries_reject_arbitrary_routes_fields_expiry_and_unsafe_receipts() -> None:
+    async def run() -> None:
+        calls = []
+
+        async def handler(request):
+            calls.append((request.method, request.url.path))
+            return httpx.Response(200, json={**copy.deepcopy(ACTION_PREVIEW), "expires_at": "2099-01-01T00:00:00Z"})
+
+        manifest = {
+            "schemaVersion": "1.1",
+            "entry": {"url": ORIGIN + "/"},
+            "auth": {"audience": "skdashboard"},
+            "health": ORIGIN + "/api/v1/health",
+            "actions": [{
+                "contract_id": "synthetic.action",
+                "version": "1.0.0",
+                "operations": {"preview": "/api/v1/admin/delete-all"},
+                "capabilities": {"preview": "skdashboard.actions.preview"},
+                "parameter_fields": ["recommendation_id", "parameter_proposal_ref"],
+            }],
+        }
+        with pytest.raises(ControlPlaneClientError, match="action contract"):
+            ControlPlaneClient._load_action_contracts(manifest)
+        manifest["actions"][0]["operations"]["preview"] = "/api/v1/actions/preview"
+        manifest["actions"][0]["parameter_fields"] = ["matter_id"]
+        with pytest.raises(ControlPlaneClientError, match="action contract"):
+            ControlPlaneClient._load_action_contracts(manifest)
+
+        client = await _client()
+        try:
+            client._previews["apv-synthetic-0001"] = {
+                **copy.deepcopy(ACTION_PREVIEW),
+                "expires_at": "2000-01-01T00:00:00Z",
+            }
+            with pytest.raises(ActionClientError, match="expired"):
+                await client.authorize_action(
+                    "synthetic.action", "apv-synthetic-0001", ACTION_PREVIEW_HASH,
+                    "idempotency-expired-0001", "synthetic qualification",
+                )
+            assert calls == []
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        {},
+        {"preview": ""},
+        {"preview": "skdashboard.actions.other"},
+        {"preview": "skdashboard.actions.preview", "authorize": "skdashboard.actions.authorize", "receipt": "skdashboard.actions.receipt", "verify": "skdashboard.actions.verify", "cancel": "skdashboard.actions.cancel", "rollback": "skdashboard.actions.rollback", "extra": "skdashboard.actions.extra"},
+    ],
+)
+def test_discovery_rejects_missing_empty_mismatched_or_undeclared_capability_names(capabilities) -> None:
+    manifest = {
+        "actions": [{
+            "contract_id": "synthetic.action",
+            "version": "1.0.0",
+            "operations": {"preview": "/api/v1/actions/preview"},
+            "capabilities": capabilities,
+        }],
+    }
+    with pytest.raises(ControlPlaneClientError, match="action contract"):
+        ControlPlaneClient._load_action_contracts(manifest)
+
+
+def test_rollback_uses_rollback_only_capability_without_cancel() -> None:
+    async def run() -> None:
+        receipt = {
+            "receipt_id": "rcpt-synthetic-0001",
+            "preview_id": "apv-synthetic-0001",
+            "preview_hash": ACTION_PREVIEW_HASH,
+            "status": "rolled_back",
+            "owner_service": "synthetic.owner",
+            "owner_receipt_ref": "owner-receipt:synthetic-0001",
+            "policy_decision_ref": "policy:synthetic-action",
+            "accepted_at": "2026-08-24T12:00:30Z",
+            "verification_state": "rolled_back",
+            "actor_ref": "sha256:" + "c" * 64,
+            "purpose": "synthetic qualification",
+            "audit_ref": "audit:synthetic-0001",
+            "external_effect_state": "none",
+            "action_contract_id": "synthetic.action",
+            "action_contract_version": "1.0.0",
+            "target": {"resource_id": "synthetic-1"},
+            "parameters": {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+            "idempotency_key": "idempotency-action-0001",
+        }
+        calls = []
+
+        async def handler(request):
+            calls.append(request.url.path)
+            return httpx.Response(200, json=receipt)
+
+        manifest = {
+            "schemaVersion": "1.1", "entry": {"url": ORIGIN + "/"},
+            "auth": {"audience": "skdashboard"}, "health": ORIGIN + "/api/v1/health",
+            "actions": [{
+                "contract_id": "synthetic.action", "version": "1.0.0",
+                "operations": {"rollback": "/api/v1/action-receipts/{receipt_id}/rollback"},
+                "capabilities": {"rollback": "skdashboard.actions.rollback"},
+            }],
+        }
+        client = ControlPlaneClient(
+            ORIGIN, BEARER, httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            manifest=manifest, owns_http=False,
+        )
+        client._receipts[receipt["receipt_id"]] = copy.deepcopy(receipt)
+        try:
+            rolled_back = await client.rollback_action("synthetic.action", receipt["receipt_id"])
+            assert rolled_back.data["verification_state"] == "rolled_back"
+            with pytest.raises(ActionClientError, match="not declared"):
+                await client.cancel_action("synthetic.action", receipt["receipt_id"])
+            assert calls == ["/api/v1/action-receipts/rcpt-synthetic-0001/rollback"]
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
 
 
 def test_client_validates_frozen_error_contract_before_exposing_status() -> None:

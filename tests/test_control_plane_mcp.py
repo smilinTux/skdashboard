@@ -92,7 +92,93 @@ def test_mcp_rejects_arbitrary_endpoints_queries_and_protected_results() -> None
     asyncio.run(run())
 
 
-def test_mcp_server_registers_resources_without_any_tool_or_command_handler() -> None:
+def test_mcp_server_exposes_only_discovered_typed_action_tools_without_bearers() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            server = create_mcp_server(client)
+            handler = server.request_handlers[types.ListToolsRequest]
+            result = await handler(types.ListToolsRequest(method="tools/list"))
+            names = {tool.name for tool in result.root.tools}
+            assert "action_synthetic_action_preview" in names
+            assert "action_synthetic_action_authorize" in names
+            assert all("fixture-read" not in json.dumps(tool.model_dump(mode="json")) for tool in result.root.tools)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_does_not_expose_adversarial_receipt_fields() -> None:
+    unsafe = {
+        "receipt_id": "rcpt-synthetic-0001",
+        "preview_id": "apv-synthetic-0001",
+        "preview_hash": "sha256:" + "b" * 64,
+        "status": "accepted",
+        "owner_service": "synthetic.owner",
+        "owner_receipt_ref": "owner-receipt:synthetic-0001",
+        "policy_decision_ref": "policy:synthetic-action",
+        "accepted_at": "2026-08-24T12:00:30Z",
+        "verification_state": "pending",
+        "actor_ref": "sha256:" + "c" * 64,
+        "purpose": "synthetic qualification",
+        "audit_ref": "audit:synthetic-0001",
+        "external_effect_state": "none",
+        "action_contract_id": "synthetic.action",
+        "action_contract_version": "1.0.0",
+        "target": {"resource_id": "synthetic-1"},
+        "parameters": {"recommendation_id": "rec-synthetic-0001", "parameter_proposal_ref": "proposal:synthetic-0001"},
+        "idempotency_key": "idempotency-action-0001",
+        "matter_payload": "protected Matter content",
+        "endpoint": "https://attacker.invalid",
+        "authorization": " ".join(("Bearer", "REDACTED_SYNTHETIC_VALUE")),
+    }
+
+    async def run() -> None:
+        async def handler(_request):
+            return httpx.Response(200, json=unsafe)
+
+        manifest = {
+            "schemaVersion": "1.1", "entry": {"url": ORIGIN + "/"},
+            "auth": {"audience": "skdashboard"}, "health": ORIGIN + "/api/v1/health",
+            "actions": [{
+                "contract_id": "synthetic.action", "version": "1.0.0",
+                "operations": {"receipt": "/api/v1/action-receipts/{receipt_id}"},
+                "capabilities": {"receipt": "skdashboard.actions.receipt"},
+            }],
+        }
+        client = ControlPlaneClient(
+            ORIGIN, BEARER, httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            manifest=manifest, owns_http=False,
+        )
+        safe_binding = dict(unsafe)
+        safe_binding.pop("matter_payload")
+        safe_binding.pop("endpoint")
+        safe_binding.pop("authorization")
+        client._receipts["rcpt-synthetic-0001"] = safe_binding
+        try:
+            server = create_mcp_server(client)
+            handler = server.request_handlers[types.CallToolRequest]
+            result = await handler(types.CallToolRequest(
+                params=types.CallToolRequestParams(
+                    name="action_synthetic_action_receipt",
+                    arguments={"receipt_id": "rcpt-synthetic-0001"},
+                )
+            ))
+            assert result.root.isError is True
+            content = " ".join(item.text for item in result.root.content if hasattr(item, "text"))
+            assert "authorization" not in content
+            assert "matter_payload" not in content
+            assert "protected Matter content" not in content
+            assert "attacker.invalid" not in content
+            assert "REDACTED_SYNTHETIC_VALUE" not in content
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_server_registers_resources_and_only_allowlisted_action_tools() -> None:
     async def run() -> None:
         client = await _client()
         try:
@@ -100,8 +186,8 @@ def test_mcp_server_registers_resources_without_any_tool_or_command_handler() ->
             assert types.ListResourcesRequest in server.request_handlers
             assert types.ListResourceTemplatesRequest in server.request_handlers
             assert types.ReadResourceRequest in server.request_handlers
-            assert types.ListToolsRequest not in server.request_handlers
-            assert types.CallToolRequest not in server.request_handlers
+            assert types.ListToolsRequest in server.request_handlers
+            assert types.CallToolRequest in server.request_handlers
         finally:
             await client.aclose()
 
