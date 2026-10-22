@@ -17,6 +17,7 @@ from skdashboard.control_plane_client import (
 from skdashboard.control_plane_fixture import BEARER, ORIGIN, REPORT, create_fixture_app
 from skdashboard.control_plane_mcp import (
     ControlPlaneResources,
+    ControlPlaneTools,
     _read_bearer,
     create_mcp_server,
 )
@@ -59,6 +60,7 @@ def test_mcp_exposes_only_fixed_read_resources_and_one_report_template() -> None
             assert BEARER not in exposed
             assert "matter_id" not in exposed
             assert "tenant_id" not in exposed
+            assert "capability" not in exposed
         finally:
             await client.aclose()
 
@@ -92,7 +94,27 @@ def test_mcp_rejects_arbitrary_endpoints_queries_and_protected_results() -> None
     asyncio.run(run())
 
 
-def test_mcp_server_registers_resources_without_any_tool_or_command_handler() -> None:
+def test_mcp_command_tools_reject_missing_capability_and_never_return_bearer() -> None:
+    async def run() -> None:
+        client = await _client()
+        try:
+            tools = ControlPlaneTools(client)
+            with pytest.raises(ControlPlaneClientError, match="explicit action capability"):
+                await tools.preview(
+                    {
+                        "recommendation_id": "rec-1",
+                        "action_contract_id": "synthetic.noop",
+                        "parameter_proposal_ref": "proposal-1",
+                        "capability": "",
+                    }
+                )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_mcp_server_registers_resources_and_explicit_capability_tools() -> None:
     async def run() -> None:
         client = await _client()
         try:
@@ -100,8 +122,8 @@ def test_mcp_server_registers_resources_without_any_tool_or_command_handler() ->
             assert types.ListResourcesRequest in server.request_handlers
             assert types.ListResourceTemplatesRequest in server.request_handlers
             assert types.ReadResourceRequest in server.request_handlers
-            assert types.ListToolsRequest not in server.request_handlers
-            assert types.CallToolRequest not in server.request_handlers
+            assert types.ListToolsRequest in server.request_handlers
+            assert types.CallToolRequest in server.request_handlers
         finally:
             await client.aclose()
 

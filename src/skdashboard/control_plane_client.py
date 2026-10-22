@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import re
@@ -33,6 +34,11 @@ METRIC_FAMILIES = frozenset(
 )
 SCOPE_KEYS = frozenset({"project_id", "service_id", "environment", "baseline"})
 PAGE_OPERATIONS = frozenset({"board", "fleet", "economy"})
+ACTION_CAPABILITIES = frozenset(
+    {"skdashboard.actions.preview", "skdashboard.actions.authorize"}
+)
+PREVIEW_ID = re.compile(r"^apv-[a-z0-9][a-z0-9-]{7,95}$")
+HASH = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 _OPERATIONS = {
     "health": ("GET", "/api/v1/health", "envelope", False),
@@ -41,6 +47,9 @@ _OPERATIONS = {
     "fleet": ("GET", "/api/v1/fleet/summary", "envelope", True),
     "economy": ("GET", "/api/v1/economy/summary", "envelope", True),
     "insight": ("POST", "/api/v1/insights/query", "insight", True),
+    "preview_action": ("POST", "/api/v1/actions/preview", "action_preview", True),
+    "authorize_action": ("POST", None, "receipt", True),
+    "receipt": ("GET", None, "receipt", True),
 }
 
 
@@ -61,6 +70,7 @@ def _contract_documents() -> dict[str, dict]:
         "openapi.control-plane.v1.1.0.json",
         "control-plane-metric-result.v1.1.0.schema.json",
         "control-plane-recommendation.v1.1.0.schema.json",
+        "control-plane-action-preview.v1.1.0.schema.json",
         "control-plane-insight.v1.1.0.schema.json",
         "control-plane-report-snapshot.v1.1.0.schema.json",
     )
@@ -101,6 +111,28 @@ class ContractValidators:
                 format_checker=self.format_checker,
             ),
         }
+        action = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
+        action.update(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://schemas.skworld.local/skdashboard/action-preview.v1.1.0.json",
+                "$ref": "https://schemas.skworld.local/skdashboard/control-plane-action-preview.v1.1.0.schema.json",
+            }
+        )
+        self.validators["action_preview"] = Draft202012Validator(
+            action, registry=self.registry, format_checker=self.format_checker
+        )
+        receipt = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
+        receipt.update(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://schemas.skworld.local/skdashboard/command-receipt.v1.1.0.json",
+                "$ref": "#/components/schemas/CommandReceipt",
+            }
+        )
+        self.validators["receipt"] = Draft202012Validator(
+            receipt, registry=self.registry, format_checker=self.format_checker
+        )
         query = copy.deepcopy(documents["openapi.control-plane.v1.1.0.json"])
         query.update(
             {
@@ -236,7 +268,14 @@ class ControlPlaneClient:
         schema: str | None = None,
         protected: bool | None = None,
     ) -> ClientResponse:
-        if operation in _OPERATIONS:
+        if operation in {"authorize_action", "receipt"} and path is not None:
+            method, fixed_path, family, requires_auth = (
+                _OPERATIONS[operation][0],
+                path,
+                _OPERATIONS[operation][2],
+                _OPERATIONS[operation][3],
+            )
+        elif operation in _OPERATIONS:
             method, fixed_path, family, requires_auth = _OPERATIONS[operation]
         elif operation == "report" and path is not None:
             method, fixed_path, family, requires_auth = "GET", path, "report", True
@@ -267,7 +306,8 @@ class ControlPlaneClient:
             if cached is None:
                 raise ControlPlaneClientError("server returned 304 without a validated baseline")
             return ClientResponse(copy.deepcopy(cached.data), cached.etag, True)
-        if response.status_code != 200:
+        expected_statuses = {200, 202} if operation == "authorize_action" else {200}
+        if response.status_code not in expected_statuses:
             try:
                 error = response.json()
             except ValueError as exc:
@@ -330,6 +370,90 @@ class ControlPlaneClient:
 
     async def insight(self, query: dict) -> ClientResponse:
         return await self._request("insight", body=query)
+
+    @staticmethod
+    def _capability(capability: str, expected: str) -> None:
+        if capability != expected or capability not in ACTION_CAPABILITIES:
+            raise ControlPlaneClientError("explicit action capability is required")
+
+    async def preview_action(
+        self,
+        recommendation_id: str,
+        action_contract_id: str,
+        parameter_proposal_ref: str,
+        *,
+        capability: str,
+    ) -> ClientResponse:
+        self._capability(capability, "skdashboard.actions.preview")
+        if not recommendation_id or len(recommendation_id) > 96:
+            raise ControlPlaneClientError("recommendation id is invalid")
+        if not action_contract_id or len(action_contract_id) > 128:
+            raise ControlPlaneClientError("action contract id is invalid")
+        if not parameter_proposal_ref or len(parameter_proposal_ref) > 512:
+            raise ControlPlaneClientError("parameter proposal reference is invalid")
+        return await self._request(
+            "preview_action",
+            body={
+                "recommendation_id": recommendation_id,
+                "action_contract_id": action_contract_id,
+                "parameter_proposal_ref": parameter_proposal_ref,
+            },
+        )
+
+    async def submit_action(
+        self,
+        preview_id: str,
+        preview_hash: str,
+        idempotency_key: str,
+        approval_reason: str,
+        *,
+        capability: str,
+    ) -> ClientResponse:
+        self._capability(capability, "skdashboard.actions.authorize")
+        if not PREVIEW_ID.fullmatch(preview_id) or not HASH.fullmatch(preview_hash):
+            raise ControlPlaneClientError("action preview identity is invalid")
+        if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+            raise ControlPlaneClientError("idempotency key is invalid")
+        if not approval_reason or len(approval_reason) > 1000:
+            raise ControlPlaneClientError("approval reason is invalid")
+        return await self._request(
+            "authorize_action",
+            path=f"/api/v1/action-previews/{preview_id}/authorize",
+            body={
+                "preview_hash": preview_hash,
+                "idempotency_key": idempotency_key,
+                "approval_reason": approval_reason,
+            },
+            schema="receipt",
+        )
+
+    async def poll_receipt(
+        self,
+        receipt_id: str,
+        *,
+        timeout: float = 10.0,
+        interval: float = 0.05,
+        cancel_event: asyncio.Event | None = None,
+    ) -> ClientResponse:
+        if not receipt_id or len(receipt_id) > 128:
+            raise ControlPlaneClientError("receipt id is invalid")
+        if timeout <= 0 or interval <= 0 or interval > timeout:
+            raise ControlPlaneClientError("receipt polling bounds are invalid")
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise asyncio.CancelledError
+            response = await self._request(
+                "receipt",
+                path=f"/api/v1/action-receipts/{receipt_id}",
+                schema="receipt",
+            )
+            if response.data.get("verification_state") != "pending":
+                return response
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("receipt polling timed out")
+            await asyncio.sleep(min(interval, remaining))
 
     async def metric_family(
         self, family: str, scope: Mapping[str, object] | None = None
