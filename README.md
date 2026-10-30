@@ -37,6 +37,41 @@ legacy operator dashboard still has no unit of its own; its deployed unit is
 lives in `skcapstone`), so routes are byte-identical to the pre-split dashboard.
 Full deploy and rollback: [`SOP.md`](SOP.md) section 5.
 
+## Login with your CapAuth identity (any node)
+
+The plain dashboard (`skcapstone dashboard`, port 7778) needs no login from the
+machine it runs on. `SKDASHBOARD_AUTH=on|off` controls that, and it defaults to
+`off`. Even when it is off, only direct localhost requests skip the check: LAN
+and tailnet callers are always challenged, and unknown values fail closed to `on`.
+
+To reach the full control plane from other devices with a real login, install
+the node-local CapAuth login server and HTTPS dashboard:
+
+```bash
+skdashboard-auth setup      # login server :8421 + HTTPS dashboard :7779 + cert renewal
+skdashboard-auth grant      # grant your own CapAuth identity
+# open https://<node>.<tailnet>.ts.net:7779 and sign in with your CapAuth key
+```
+
+Requirements: Tailscale with HTTPS certificates enabled on the tailnet (or pass
+`--hostname`, `--bind`, `--tls-cert`, `--tls-key`), `gpg`, and a CapAuth
+identity (`capauth init`).
+
+| Command | What it does |
+|---|---|
+| `skdashboard-auth setup` | Idempotent. Creates a dedicated login-server PGP key, the OIDC client, the session key and the TLS cert, and installs and starts `skdashboard-auth-idp`, `skdashboard-auth-dashboard` and a weekly cert-renewal timer (systemd user units). |
+| `skdashboard-auth grant [--pubkey key.asc]` | Lets a CapAuth identity log in (default: your own). Grants last a year; run it again to renew. |
+| `skdashboard-auth revoke <fingerprint>` | Stops that identity from logging in. |
+| `skdashboard-auth enable` / `disable` | Require login on the local :7778 dashboard too, or not (default). When enabled, :7778's `/auth/login` sends you to the HTTPS dashboard. |
+| `skdashboard-auth status` | URLs, service states, local login mode and granted identities. |
+
+**Trust layout.** All login state lives in `~/.local/share/skdashboard-auth`
+(mode 0700), never in the Syncthing-replicated agent home. The login server
+signs with its own service key, so it never needs your personal key's passphrase.
+You prove who you are by signing a CapAuth challenge with your own key. The
+dashboard verifies session tokens against a public-only keyring and checks
+grants in the login server's CapAuth home (`--capauth-home`).
+
 ## Test
 
 ```bash
