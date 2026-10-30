@@ -74,3 +74,14 @@ def test_grant_and_revoke_parse(tmp_path):
     assert args.func is auth_setup.cmd_grant
     args = parser.parse_args(["revoke", "AB" * 20])
     assert args.fingerprint == "AB" * 20
+
+
+def test_cert_renewal_unit_command_parses(tmp_path, cfg):
+    # --state-dir is a top-level option, so it must come before the subcommand.
+    # The unit used to put it after "renew-cert" and every weekly run exited 2.
+    unit = render_units(Layout(tmp_path), cfg)[auth_setup.CERT_UNIT]
+    exec_line = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+    argv = exec_line.split(" -m skdashboard.auth_setup ", 1)[1].split()
+    args = auth_setup.build_parser().parse_args(argv)
+    assert args.func is auth_setup.cmd_renew_cert
+    assert str(args.state_dir) == str(tmp_path)

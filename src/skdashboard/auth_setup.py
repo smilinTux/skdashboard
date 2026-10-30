@@ -281,7 +281,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={sys.executable} -m skdashboard.auth_setup renew-cert --state-dir {layout.root}
+ExecStart={sys.executable} -m skdashboard.auth_setup --state-dir {layout.root} renew-cert
 """
     timer = """[Unit]
 Description=Weekly SKDashboard login TLS certificate renewal
