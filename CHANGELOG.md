@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add Authentik as a dashboard login provider (`--oidc-provider authentik`).
+  API calls verify the Authentik token and map its groups to capabilities,
+  denying anything not granted. The CapAuth login path is unchanged.
+
 - Add the `SKDASHBOARD_AUTH` on/off toggle. Off waives the bearer for direct
   loopback requests only.
 
