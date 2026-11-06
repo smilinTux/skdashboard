@@ -496,6 +496,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--tls-keyfile", type=Path, required=True)
     parser.add_argument("--session-db", type=Path)
     parser.add_argument("--session-key-file", type=Path)
+    parser.add_argument("--oidc-provider", choices=("capauth", "authentik"), default="capauth")
+    parser.add_argument(
+        "--authentik-admin-group",
+        action="append",
+        default=[],
+        help="Authentik group with every dashboard capability (repeatable)",
+    )
+    parser.add_argument(
+        "--authentik-user-group",
+        action="append",
+        default=[],
+        help="Authentik group with read capabilities (repeatable)",
+    )
     parser.add_argument("--oidc-issuer")
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
@@ -560,6 +573,13 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("all live control-plane options are required together")
     if all(live_values) and not all(session_values):
         parser.error("live control-plane composition requires the same-origin session options")
+    if args.oidc_provider == "authentik":
+        if not all(session_values) or not args.authentik_admin_group:
+            parser.error("Authentik login requires the session options and an admin group")
+        if any(live_values) or args.capauth_home is not None:
+            parser.error("Authentik login cannot be combined with CapAuth authorization options")
+    elif args.authentik_admin_group or args.authentik_user_group:
+        parser.error("Authentik groups require --oidc-provider authentik")
 
     session_adapter = None
     if all(session_values):
@@ -574,10 +594,20 @@ def main(argv: list[str] | None = None) -> None:
                 issuer=args.oidc_issuer,
                 redirect_uri=args.oidc_redirect_uri,
                 client_secret=args.oidc_client_secret_file.read_text(encoding="utf-8").strip(),
+                provider=args.oidc_provider,
             ),
         )
 
     app_options = {"session_adapter": session_adapter}
+    if args.oidc_provider == "authentik":
+        from .authentik_authz import AuthentikAuthorizer
+
+        app_options["authorizer"] = AuthentikAuthorizer(
+            args.oidc_issuer,
+            "skdashboard",
+            args.authentik_admin_group,
+            args.authentik_user_group,
+        )
     if args.capauth_home is not None:
         from .control_plane_api import _capauth_authorize
 

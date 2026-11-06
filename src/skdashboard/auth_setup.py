@@ -9,6 +9,8 @@ SKDashboard in one command, and lets the owner grant CapAuth identities access:
     skdashboard-auth revoke <fingerprint>
     skdashboard-auth status
     skdashboard-auth enable|disable     # require login on the local :7778 dashboard too
+    skdashboard-auth sso-setup --issuer URL --client-secret-file F --admin-group G
+                                        # a second dashboard that logs in through Authentik
 
 Trust layout (all node-local, never written into the Syncthing-replicated agent home):
 
@@ -26,6 +28,7 @@ import argparse
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -37,6 +40,7 @@ DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "skdashboard-auth"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 IDP_UNIT = "skdashboard-auth-idp.service"
 DASHBOARD_UNIT = "skdashboard-auth-dashboard.service"
+SSO_UNIT = "skdashboard-sso-dashboard.service"
 CERT_UNIT = "skdashboard-auth-cert.service"
 CERT_TIMER = "skdashboard-auth-cert.timer"
 BEARER_UNIT = "skdashboard-auth-bearer@.service"
@@ -81,6 +85,9 @@ class Layout:
         self.client_secret = self.secrets / "oidc-client.secret"
         self.session_key = self.secrets / "session.key"
         self.session_db = root / "dashboard" / "session.db"
+        self.sso_client_secret = self.secrets / "authentik-client.secret"
+        self.sso_session_key = self.secrets / "sso-session.key"
+        self.sso_session_db = root / "dashboard" / "sso-session.db"
         self.clients = self.capauth_home / "oidc" / "clients.json"
         self.keys_db = self.capauth_home / "service" / "keys.db"
 
@@ -295,6 +302,59 @@ RandomizedDelaySec=1h
 WantedBy=timers.target
 """
     return {IDP_UNIT: idp, DASHBOARD_UNIT: dashboard, CERT_UNIT: cert, CERT_TIMER: timer}
+
+
+def render_sso_unit(
+    layout: Layout, cfg: Config, *, issuer: str, port: int, admin_groups, user_groups
+) -> str:
+    origin = f"https://{cfg.hostname}:{port}"
+    groups = "".join(f" --authentik-admin-group {shlex.quote(g)}" for g in admin_groups)
+    groups += "".join(f" --authentik-user-group {shlex.quote(g)}" for g in user_groups)
+    return f"""[Unit]
+Description=SKDashboard with Authentik login ({origin})
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=SKDASHBOARD_ALLOWED_BIND_HOSTS={cfg.bind}
+Environment=SKDASHBOARD_ALLOWED_BROWSER_ORIGINS={origin}
+ExecStart={sys.executable} -m skdashboard.read_only --home {cfg.agent_home} --host {cfg.bind} --port {port} --tls-certfile {layout.cert} --tls-keyfile {layout.key} --session-db {layout.sso_session_db} --session-key-file {layout.sso_session_key} --oidc-provider authentik --oidc-issuer {issuer} --oidc-redirect-uri {origin}/auth/callback --oidc-client-secret-file {layout.sso_client_secret}{groups}
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def cmd_sso_setup(args) -> None:
+    layout = Layout(args.state_dir)
+    cfg = load_config(layout)
+    secret = args.client_secret_file.read_text(encoding="utf-8").strip()
+    if not secret:
+        sys.exit(f"{args.client_secret_file} is empty")
+    _write_secret(layout.sso_client_secret, secret + "\n")
+    from cryptography.fernet import Fernet
+
+    if not layout.sso_session_key.exists():
+        _write_secret(layout.sso_session_key, Fernet.generate_key().decode("ascii"))
+    unit = render_sso_unit(
+        layout,
+        cfg,
+        issuer=args.issuer,
+        port=args.port,
+        admin_groups=args.admin_group,
+        user_groups=args.user_group,
+    )
+    UNIT_DIR.mkdir(parents=True, exist_ok=True)
+    (UNIT_DIR / SSO_UNIT).write_text(unit, encoding="utf-8")
+    _systemctl("daemon-reload")
+    _systemctl("enable", SSO_UNIT)
+    _systemctl("restart", SSO_UNIT)
+    print(f"Authentik login is at https://{cfg.hostname}:{args.port}")
 
 
 def _systemctl(*args: str, check=True):
@@ -531,7 +591,7 @@ def cmd_renew_cert(args) -> None:
     cfg = load_config(layout)
     if shutil.which("tailscale") and cfg.hostname.endswith(".ts.net"):
         ensure_tls(layout, cfg)
-        _systemctl("try-restart", IDP_UNIT, DASHBOARD_UNIT, check=False)
+        _systemctl("try-restart", IDP_UNIT, DASHBOARD_UNIT, SSO_UNIT, check=False)
 
 
 def cmd_status(args) -> None:
@@ -540,7 +600,7 @@ def cmd_status(args) -> None:
     print(f"Dashboard:    {cfg.dashboard_url}")
     print(f"Login server: {cfg.issuer}")
     print(f"Service key:  {cfg.service_fingerprint}")
-    for unit in (IDP_UNIT, DASHBOARD_UNIT, CERT_TIMER, LOCAL_DASHBOARD_UNIT):
+    for unit in (IDP_UNIT, DASHBOARD_UNIT, SSO_UNIT, CERT_TIMER, LOCAL_DASHBOARD_UNIT):
         state = _systemctl("is-active", unit, check=False).stdout.strip()
         print(f"  {unit:42s} {state}")
     dropin = _local_dropin()
@@ -584,6 +644,14 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--tls-key", type=Path)
     setup.add_argument("--no-start", action="store_true", help="write units without starting them")
     setup.set_defaults(func=cmd_setup)
+
+    sso = sub.add_parser("sso-setup", help="add a second dashboard with Authentik login")
+    sso.add_argument("--issuer", required=True, help="Authentik application issuer URL")
+    sso.add_argument("--client-secret-file", type=Path, required=True)
+    sso.add_argument("--admin-group", action="append", required=True)
+    sso.add_argument("--user-group", action="append", default=[])
+    sso.add_argument("--port", type=int, default=7780)
+    sso.set_defaults(func=cmd_sso_setup)
 
     grant = sub.add_parser("grant", help="grant a CapAuth identity dashboard access")
     grant.add_argument("--pubkey", type=Path, help="armored public key (default: your CapAuth identity)")

@@ -50,6 +50,22 @@ the node-local CapAuth login server and HTTPS dashboard:
 ```bash
 skdashboard-auth setup      # login server :8421 + HTTPS dashboard :7779 + cert renewal
 skdashboard-auth grant      # grant your own CapAuth identity
+### Authentik login
+
+`skdashboard-auth sso-setup` adds a second dashboard, on port 7780 by default,
+that logs in through Authentik. The CapAuth dashboard keeps running as a backup.
+
+1. Provision Authentik with `deploy/authentik/provision_skdashboard.py`. It creates
+   the OAuth2 provider, the application and the groups. Other applications are not
+   touched.
+2. Run `skdashboard-auth sso-setup --issuer https://sso.example/application/o/<slug>/
+   --client-secret-file <file> --admin-group skdashboard-admin --admin-group skadmin
+   --user-group skdashboard-users`.
+
+Admin groups get every dashboard capability. User groups get read capabilities.
+Anyone else is denied. Group changes apply within five minutes, the access token
+lifetime. Logging out of the dashboard does not end the Authentik session.
+
 # open https://<node>.<tailnet>.ts.net:7779 and sign in with your CapAuth key
 ```
 
