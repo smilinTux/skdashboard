@@ -63,7 +63,13 @@ try {
     return result.result.value;
   };
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
-  await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer accessibility-cdp", Origin: "https://10.0.0.139:7778" } });
+  // No Origin header here. The dashboard is reached at its own origin, so a real
+  // browser sends no Origin on these loads, and injecting a foreign one made every
+  // same-origin /static fetch look cross-origin. Chrome 156 enforces CORS on that
+  // and /static returns no Access-Control-Allow-Origin, so the app CSS and JS were
+  // dropped and the pages rendered unstyled. The browser origin allowlist
+  // (control_plane_api origin check) is covered by the pytest suites instead.
+  await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer accessibility-cdp" } });
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   const matrix = [];
   for (const route of routes) {
@@ -83,32 +89,14 @@ try {
         h1: [...document.querySelectorAll('h1')].map((node) => node.textContent.trim()),
         focusName: focus?.getAttribute('aria-label') || focus?.textContent.trim() || '',
         focusVisible: !!focus && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2,
-        diagTag: focus?.tagName || '', diagClass: focus?.className || '',
-        diagOutlineStyle: style?.outlineStyle || '', diagOutlineWidth: style?.outlineWidth || '',
-        diagMatchesFocusVisible: !!focus && focus.matches(':focus-visible'),
-        diagOutlineColor: style?.outlineColor || '', diagOutlineOffset: style?.outlineOffset || '',
-        diagAccent: style ? style.getPropertyValue('--accent').trim() : '',
-        diagSheets: [...document.styleSheets].map((sheet) => {
-          const name = sheet.href || 'inline';
-          try { return name + ' rules=' + sheet.cssRules.length; } catch (err) { return name + ' ERR-' + err.name; }
-        }).join(' | '),
-        diagLinks: [...document.querySelectorAll('link[rel=stylesheet]')].map((node) => node.href).join(' | '),
-        diagOrigin: location.origin,
+        // The app's own CSS reaching the page is a precondition for every visual
+        // assertion here, and it is not self-evident: when the stylesheets were
+        // being dropped, the only symptom was focusVisible going false, which read
+        // as a focus-ring nit and cost two weeks. --accent is defined on :root by
+        // board.css and nowhere else, so an empty value means unstyled.
+        appCssApplied: !!style && style.getPropertyValue('--accent').trim() !== '',
       };
     })())`));
-    if (route === routes[0]) {
-      dom.diagFetch = JSON.parse(await evaluate(`(async () => JSON.stringify(await Promise.all(
-        [...document.querySelectorAll('link[rel=stylesheet]')].map(async (node) => {
-          try {
-            const response = await fetch(node.href, { credentials: 'include' });
-            const body = await response.text();
-            return node.href.split('/').pop() + ' -> ' + response.status + ' ' +
-              (response.headers.get('content-type') || 'no-ct') + ' len=' + body.length +
-              ' head=' + JSON.stringify(body.slice(0, 60));
-          } catch (err) { return node.href.split('/').pop() + ' -> THREW ' + err.name + ' ' + err.message; }
-        })
-      )))()`, true));
-    }
     const tree = await send("Accessibility.getFullAXTree");
     const roles = tree.nodes.map((node) => node.role?.value).filter(Boolean);
     matrix.push({ route, ...dom, axMain: roles.filter((role) => role === "main").length, axNavigation: roles.filter((role) => role === "navigation").length });
@@ -118,7 +106,7 @@ try {
     }
   }
   const result = {
-    result: matrix.every((item) => item.mainLandmarks === 1 && item.axMain === 1 && item.navigationLandmarks >= 1 && item.axNavigation >= 1 && item.focusVisible) ? "PASS" : "FAIL",
+    result: matrix.every((item) => item.mainLandmarks === 1 && item.axMain === 1 && item.navigationLandmarks >= 1 && item.axNavigation >= 1 && item.appCssApplied && item.focusVisible) ? "PASS" : "FAIL",
     browser: await evaluate("navigator.userAgent"), matrix,
     nonGetRequests: requests.filter((request) => !["GET", "OPTIONS"].includes(request.method)).length,
     externalHttpRequests: requests.filter((request) => /^https?:/.test(request.url) && !request.url.startsWith(`http://127.0.0.1:${port}/`)).length,
