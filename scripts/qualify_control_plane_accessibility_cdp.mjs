@@ -83,6 +83,9 @@ try {
         h1: [...document.querySelectorAll('h1')].map((node) => node.textContent.trim()),
         focusName: focus?.getAttribute('aria-label') || focus?.textContent.trim() || '',
         focusVisible: !!focus && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2,
+        diagTag: focus?.tagName || '', diagClass: focus?.className || '',
+        diagOutlineStyle: style?.outlineStyle || '', diagOutlineWidth: style?.outlineWidth || '',
+        diagMatchesFocusVisible: !!focus && focus.matches(':focus-visible'),
       };
     })())`));
     const tree = await send("Accessibility.getFullAXTree");
