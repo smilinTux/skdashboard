@@ -89,11 +89,26 @@ try {
         diagOutlineColor: style?.outlineColor || '', diagOutlineOffset: style?.outlineOffset || '',
         diagAccent: style ? style.getPropertyValue('--accent').trim() : '',
         diagSheets: [...document.styleSheets].map((sheet) => {
-          const name = (sheet.href || 'inline').split('/').pop();
-          try { return name + ':' + sheet.cssRules.length; } catch (err) { return name + ':ERR-' + err.name; }
-        }).join(' '),
+          const name = sheet.href || 'inline';
+          try { return name + ' rules=' + sheet.cssRules.length; } catch (err) { return name + ' ERR-' + err.name; }
+        }).join(' | '),
+        diagLinks: [...document.querySelectorAll('link[rel=stylesheet]')].map((node) => node.href).join(' | '),
+        diagOrigin: location.origin,
       };
     })())`));
+    if (route === routes[0]) {
+      dom.diagFetch = JSON.parse(await evaluate(`(async () => JSON.stringify(await Promise.all(
+        [...document.querySelectorAll('link[rel=stylesheet]')].map(async (node) => {
+          try {
+            const response = await fetch(node.href, { credentials: 'include' });
+            const body = await response.text();
+            return node.href.split('/').pop() + ' -> ' + response.status + ' ' +
+              (response.headers.get('content-type') || 'no-ct') + ' len=' + body.length +
+              ' head=' + JSON.stringify(body.slice(0, 60));
+          } catch (err) { return node.href.split('/').pop() + ' -> THREW ' + err.name + ' ' + err.message; }
+        })
+      )))()`, true));
+    }
     const tree = await send("Accessibility.getFullAXTree");
     const roles = tree.nodes.map((node) => node.role?.value).filter(Boolean);
     matrix.push({ route, ...dom, axMain: roles.filter((role) => role === "main").length, axNavigation: roles.filter((role) => role === "navigation").length });
