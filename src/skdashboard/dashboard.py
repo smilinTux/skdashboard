@@ -2141,6 +2141,17 @@ def create_app(
 
     if auth_mode is None:
         auth_mode = resolve_auth_mode()
+    secure_url = os.environ.get("SKDASHBOARD_SECURE_URL", "").strip().rstrip("/")
+    if secure_url.startswith("https://") and "?" not in secure_url and "#" not in secure_url:
+        # This plain-HTTP app cannot hold a login session (the session cookie is
+        # __Host- and HTTPS-only), so its /auth/login hands off to the
+        # CapAuth-protected dashboard that skdashboard-auth installed.
+        routes.append(
+            Route(
+                "/auth/login",
+                lambda _request: RedirectResponse(f"{secure_url}/control-plane/now", 302),
+            )
+        )
     routes.extend(
         control_plane_routes(
             home,

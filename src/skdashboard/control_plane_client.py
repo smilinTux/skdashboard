@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Mapping
+from typing import AsyncIterator, Callable, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -137,7 +137,7 @@ class ControlPlaneClient:
     def __init__(
         self,
         origin: str,
-        bearer: str,
+        bearer: "str | Callable[[], str]",
         http: httpx.AsyncClient,
         *,
         manifest: Mapping[str, object],
@@ -155,11 +155,19 @@ class ControlPlaneClient:
     def __repr__(self) -> str:
         return f"ControlPlaneClient(origin={self.origin!r})"
 
+    def _authorization(self) -> str:
+        """Current ``Authorization`` value; a callable bearer is re-read every request
+        so a long-lived client follows a bearer file that a timer keeps rotating."""
+        bearer = self._bearer() if callable(self._bearer) else self._bearer
+        if not bearer or len(bearer.encode("utf-8")) > 64 * 1024:
+            raise ControlPlaneClientError("bearer is missing or exceeds its bound")
+        return f"Bearer {bearer}"
+
     @classmethod
     async def discover(
         cls,
         discovery_url: str,
-        bearer: str,
+        bearer: "str | Callable[[], str]",
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 5.0,
@@ -176,7 +184,8 @@ class ControlPlaneClient:
             or len(discovery_url) > 2048
         ):
             raise ControlPlaneClientError("discovery URL is not a canonical HTTPS manifest")
-        if not bearer or len(bearer.encode("utf-8")) > 64 * 1024:
+        current = bearer() if callable(bearer) else bearer
+        if not current or len(current.encode("utf-8")) > 64 * 1024:
             raise ControlPlaneClientError("bearer is missing or exceeds its bound")
         http = httpx.AsyncClient(transport=transport, timeout=timeout, follow_redirects=False)
         try:
@@ -204,7 +213,9 @@ class ControlPlaneClient:
         entry = manifest.get("entry")
         entry_url = entry.get("url") if isinstance(entry, dict) else None
         parsed_entry = urlsplit(entry_url) if isinstance(entry_url, str) else None
-        if parsed_entry is None or entry_url.rstrip("/") != origin:
+        # The entry may be any page on the same origin (the runtime publishes
+        # /control-plane/now); only scheme, host and port must match exactly.
+        if parsed_entry is None or f"{parsed_entry.scheme}://{parsed_entry.netloc}" != origin:
             raise ControlPlaneClientError("discovery entry crosses origins")
 
     async def aclose(self) -> None:
@@ -247,7 +258,7 @@ class ControlPlaneClient:
         url = self.origin + fixed_path
         headers = {"Accept": "application/json"}
         if requires_auth:
-            headers["Authorization"] = f"Bearer {self._bearer}"
+            headers["Authorization"] = self._authorization()
         cache_key = json.dumps([method, fixed_path, params or {}], sort_keys=True)
         if method == "GET" and cache_key in self._cache and self._cache[cache_key].etag:
             headers["If-None-Match"] = self._cache[cache_key].etag or ""
@@ -379,7 +390,7 @@ class ControlPlaneClient:
         response = await self._http.get(
             self.origin + "/api/v1/events",
             params=params,
-            headers={"Accept": "text/event-stream", "Authorization": f"Bearer {self._bearer}"},
+            headers={"Accept": "text/event-stream", "Authorization": self._authorization()},
         )
         if response.status_code != 200 or len(response.content) > MAX_RESPONSE_BYTES:
             raise ControlPlaneClientError("event response failed or exceeded its bound")
