@@ -498,3 +498,66 @@ def test_read_only_fleet_navigation_uses_canonical_route(tmp_path) -> None:
     assert 'href="/control-plane/fleet"' in page.text
     assert fleet.status_code == 200
     assert 'href="/control-plane/fleet"' in fleet.text
+
+
+def _node(home, name):
+    directory = home / "fleet" / "objects" / "node"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.json").write_text(json.dumps({"kind": "Node", "name": name, "spec": {}}))
+
+
+def _beat(home, owner, beat_at):
+    beats = home / "fleet" / "beats"
+    beats.mkdir(parents=True, exist_ok=True)
+    card = owner.rsplit("-", 1)[1]
+    (beats / f"{owner}.json").write_text(
+        json.dumps({"owner": owner, "card_id": card, "disposition": "RUNNING", "beat_at": beat_at})
+    )
+
+
+def test_hosts_come_from_this_estates_fleet_nodes(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("SKFLEET_HOSTS", raising=False)
+    for name in ("node-noroc2027", "node-41", "node-ollama"):
+        _node(tmp_path, name)
+    _beat(tmp_path, "pi-codex-noroc2027-abcd1234", 1_000)
+    _beat(tmp_path, "pi-codex-review-ollama-deadbeef", 1_050)
+    with patch("skcoord.coordination.Board") as board:
+        board.return_value.get_task_views.return_value = []
+        result = df.collect_workers(tmp_path, now=datetime.fromtimestamp(1_100, timezone.utc))
+
+    assert [node["host"] for node in result["nodes"]] == ["41", "noroc2027", "ollama"]
+    assert not any(node["host"].startswith("chi") for node in result["nodes"])
+    hosts = {worker["name"]: worker["host"] for worker in result["workers"]}
+    assert hosts == {"pi-codex-noroc2027-abcd1234": "noroc2027", "pi-codex-review-ollama-deadbeef": "ollama"}
+    assert result["summary"]["reporting_hosts"] == 2
+
+
+def test_explicit_skfleet_hosts_still_wins(tmp_path, monkeypatch) -> None:
+    _node(tmp_path, "node-noroc2027")
+    monkeypatch.setenv("SKFLEET_HOSTS", "alpha beta")
+    assert df.configured_hosts(tmp_path) == ["alpha", "beta"]
+
+
+def test_legacy_list_only_without_any_fleet_nodes(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("SKFLEET_HOSTS", raising=False)
+    assert df.configured_hosts(tmp_path) == list(df.DEFAULT_FLEET_HOSTS)
+    _node(tmp_path, "node-ziowk01")
+    assert df.configured_hosts(tmp_path) == ["ziowk01"]
+
+
+def test_beat_host_prefers_known_hosts_and_keeps_chi_fallback() -> None:
+    assert df._beat_host("pi-codex-noroc2027-abcd1234", ["noroc2027"]) == "noroc2027"
+    assert df._beat_host("pi-codex-review-chiap08-abcd1234", []) == "chiap08"
+    assert df._beat_host("pi-codex-unknownhost-abcd1234", ["noroc2027"]) is None
+
+
+def test_skcounter_expects_fleet_nodes_unless_configured(tmp_path, monkeypatch) -> None:
+    from skdashboard.dashboard_skcounter import _expected_nodes
+
+    for name in ("node-noroc2027", "node-41"):
+        _node(tmp_path, name)
+    monkeypatch.delenv("SKCOUNTER_EXPECTED_NODES", raising=False)
+    assert _expected_nodes("harness_reported", tmp_path) == ["41", "noroc2027"]
+    assert _expected_nodes("gateway_observed", tmp_path) == []
+    monkeypatch.setenv("SKCOUNTER_EXPECTED_NODES", "chiap08")
+    assert _expected_nodes("harness_reported", tmp_path) == ["chiap08"]
