@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add the `skcapstone.fleet_heartbeat` adapter: node liveness (`nodes`,
+  `ready`, `not_ready`, `dead`, `pending`, `max_beat_age_s`) surfaced on the
+  Fleet runtime panel. Node beat age had no adapter; `skcapstone.fleet`
+  measures install-check grading. Phases are derived by calling the fleet's own
+  `node_views()` rather than re-applying `NOT_READY_AFTER_S` /
+  `DEAD_AFTER_S` here, because a second copy of a threshold drifts silently.
+  `pending` is counted so the phase counts stay exhaustive when a joiner is in
+  flight, and an unparsable heartbeat is excluded from `max_beat_age_s` rather
+  than contributing a fabricated zero. Persists nothing: bounded read, 60s TTL.
+
 - Card `ab686b00`: keep NOW analysis active through the existing SKGateway
   assistant deadline while preserving the `sk-m-public` route.
 

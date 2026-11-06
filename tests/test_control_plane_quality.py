@@ -65,7 +65,7 @@ def test_projection_keeps_every_truth_state_coverage_and_metric_registry_visible
             for item in _observations()
         ),
         "expected": len(SPECS),
-        "percent": 62.5,
+        "percent": 64.7,
         "population": "declared_sources",
     }
     assert quality["issue_count"] == sum(
@@ -95,13 +95,13 @@ def test_rollup_separates_source_dimensions_and_accepts_legacy_items() -> None:
 
     assert quality["state_counts"] == project_data_quality(_observations())["state_counts"]
     rollup = quality["source_status_rollup"]
-    assert rollup["requirements"] == {"optional": 1, "required": 15}
+    assert rollup["requirements"] == {"optional": 1, "required": 16}
     assert rollup["availability"]["available"] >= 1
     assert rollup["freshness"]["stale"] >= 1
     assert rollup["coverage"]["partial"] >= 1
     assert rollup["data_quality"]["degraded"] >= 1
     assert rollup["degradation_reasons"] == {"POLICY_FILTERED": 1}
-    assert rollup["visibility"] == {"policy_filtered": 1, "unknown": 15}
+    assert rollup["visibility"] == {"policy_filtered": 1, "unknown": 16}
 
 
 def test_failed_source_never_becomes_zero_coverage_or_empty_green() -> None:

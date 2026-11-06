@@ -57,9 +57,9 @@ def _all_readers(*, observed_at: str | None = None) -> dict:
 def test_every_estate_population_has_bounded_typed_metadata() -> None:
     items = project_estate({}, now=NOW)
 
-    assert len(items) == len(SPECS) == 16
-    assert len({item["adapter_id"] for item in items}) == 16
-    assert len({item["population"] for item in items}) == 16
+    assert len(items) == len(SPECS) == 17
+    assert len({item["adapter_id"] for item in items}) == 17
+    assert len({item["population"] for item in items}) == 17
     for item in items:
         assert item["schema_version"] == SCHEMA_VERSION
         assert item["owner"]
@@ -230,14 +230,18 @@ def test_unreachable_unknown_and_unauthorized_remain_distinct() -> None:
         assert item["visibility"]["authorization"] == authorization
         assert item["truth_state"] != "current"
 
-    unavailable = project_estate({spec.adapter_id: Reader(failure="unavailable")}, now=NOW)[0]
+    unavailable = project_estate(
+        {spec.adapter_id: Reader(failure="unavailable")}, now=NOW
+    )[0]
     assert unavailable["truth_state"] == "unavailable"
     assert unavailable["errors"][0]["code"] == "SOURCE_UNAVAILABLE"
 
 
 def test_sklegal_success_stays_policy_filtered_without_matter_detail() -> None:
     spec = next(value for value in SPECS if value.adapter_id == "sklegal.global")
-    reader = aggregate_reader({field: 1 for field in spec.fields}, observed_at=NOW.isoformat())
+    reader = aggregate_reader(
+        {field: 1 for field in spec.fields}, observed_at=NOW.isoformat()
+    )
     item = next(
         value
         for value in project_estate({spec.adapter_id: reader}, now=NOW)
@@ -250,7 +254,9 @@ def test_sklegal_success_stays_policy_filtered_without_matter_detail() -> None:
     assert "matter_id" not in str(item)
 
 
-def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_path: Path) -> None:
+def test_default_readers_keep_populations_and_measurement_lanes_separate(
+    tmp_path: Path,
+) -> None:
     board = {
         "summary": {"total": 3, "open": 1, "in_progress": 1, "done": 1},
         "tasks": [{"status": "blocked"}],
@@ -314,7 +320,9 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
         patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage),
         patch("skcapstone.skjoule.JouleEngine.get_network_stats", return_value=stats),
     ):
-        local = _local_readers(tmp_path, board_data=board, default_observed_at=NOW.isoformat())
+        local = _local_readers(
+            tmp_path, board_data=board, default_observed_at=NOW.isoformat()
+        )
         new_adapter_ids = {
             "skcapstone.service_release",
             "skperf.aggregate",
@@ -323,7 +331,9 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
             "skos.discovery",
         }
         readers = {
-            adapter_id: reader if isinstance(reader, Reader) else Reader(payload=reader())
+            adapter_id: (
+                reader if isinstance(reader, Reader) else Reader(payload=reader())
+            )
             for adapter_id, reader in local.items()
             if adapter_id not in new_adapter_ids
         }
@@ -354,10 +364,17 @@ def test_default_readers_keep_populations_and_measurement_lanes_separate(tmp_pat
     assert by_id["skcounter.harness"]["aggregate"]["cache_ratio"] == 0.75
     assert by_id["skcounter.harness"]["aggregate"]["cost_usd"] == 1.25
     assert by_id["skcounter.harness"]["aggregate"]["cost_state"] == "estimated"
-    assert by_id["skjoule.wallet"]["aggregate"] == {"total_supply": 7, "active_agents": 1}
+    assert by_id["skjoule.wallet"]["aggregate"] == {
+        "total_supply": 7,
+        "active_agents": 1,
+    }
 
-    harness_spec = next(spec for spec in SPECS if spec.adapter_id == "skcounter.harness")
-    gateway_spec = next(spec for spec in SPECS if spec.adapter_id == "skgateway.observed")
+    harness_spec = next(
+        spec for spec in SPECS if spec.adapter_id == "skcounter.harness"
+    )
+    gateway_spec = next(
+        spec for spec in SPECS if spec.adapter_id == "skgateway.observed"
+    )
     assert harness_spec.ttl_seconds == 1_200
     assert gateway_spec.ttl_seconds == 60
 
@@ -390,8 +407,12 @@ def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry
             "cost_usd": 1.75,
             "cost_state": "estimated",
         },
-        "coverage": {**empty["coverage"], "expected_nodes": 1, "reporting_nodes": 1,
-                     "fresh_collectors": 1},
+        "coverage": {
+            **empty["coverage"],
+            "expected_nodes": 1,
+            "reporting_nodes": 1,
+            "fresh_collectors": 1,
+        },
         "collectors": [{"last_seen": NOW.isoformat(), "status": "fresh"}],
         "observation_count": 1,
     }
@@ -448,10 +469,16 @@ def test_usage_preserves_estimated_cost_and_gateway_falls_back_to_live_telemetry
     assert by_id["skgateway.observed"]["truth_state"] == "current"
 
 
-def test_stale_gateway_observation_does_not_suppress_live_telemetry(tmp_path: Path) -> None:
+def test_stale_gateway_observation_does_not_suppress_live_telemetry(
+    tmp_path: Path,
+) -> None:
     stale = {
         "generated_at": NOW.isoformat(),
-        "summary": {"tokens": {"total": 1}, "cost_usd": 0.0, "cost_state": "unavailable"},
+        "summary": {
+            "tokens": {"total": 1},
+            "cost_usd": 0.0,
+            "cost_state": "unavailable",
+        },
         "coverage": {
             "expected_nodes": 1,
             "reporting_nodes": 1,
@@ -523,12 +550,14 @@ def test_skcounter_collector_age_buckets_do_not_reduce_reporting_coverage(
         }
 
     with patch("skdashboard.dashboard_skcounter.get_ai_usage", side_effect=usage):
-        reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
-            "skcounter.harness"
-        ]
+        reader = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcounter.harness"]
         result = next(
             item
-            for item in project_estate({"skcounter.harness": Reader(payload=reader())}, now=NOW)
+            for item in project_estate(
+                {"skcounter.harness": Reader(payload=reader())}, now=NOW
+            )
             if item["adapter_id"] == "skcounter.harness"
         )
 
@@ -542,7 +571,9 @@ def test_overview_etag_ignores_delivery_clocks_but_changes_with_source() -> None
     observed_at = datetime.now(timezone.utc).isoformat()
     readers = _all_readers(observed_at=observed_at)
     client = TestClient(_read_app())
-    with patch("skdashboard.control_plane_adapters.default_readers", return_value=readers):
+    with patch(
+        "skdashboard.control_plane_adapters.default_readers", return_value=readers
+    ):
         first = client.get("/api/v1/overview", headers=READ_HEADERS)
         unchanged = client.get(
             "/api/v1/overview",
@@ -555,7 +586,9 @@ def test_overview_etag_ignores_delivery_clocks_but_changes_with_source() -> None
     changed[SPECS[0].adapter_id] = aggregate_reader(
         {field: 2 for field in SPECS[0].fields}, observed_at=observed_at
     )
-    with patch("skdashboard.control_plane_adapters.default_readers", return_value=changed):
+    with patch(
+        "skdashboard.control_plane_adapters.default_readers", return_value=changed
+    ):
         response = client.get(
             "/api/v1/overview",
             headers={**READ_HEADERS, "If-None-Match": first.headers["etag"]},
@@ -569,7 +602,9 @@ def test_empty_usage_is_unknown_not_zero_current() -> None:
     aggregate = {field: 0 for field in spec.fields}
     aggregate["cost_usd"] = None
     aggregate["cost_state"] = "unavailable"
-    reader = aggregate_reader(aggregate, expected=0, reporting=0, has_observations=False)
+    reader = aggregate_reader(
+        aggregate, expected=0, reporting=0, has_observations=False
+    )
     item = next(
         value
         for value in project_estate({spec.adapter_id: reader})
@@ -600,7 +635,9 @@ def test_query_timeout_returns_within_declared_budget() -> None:
     assert item["errors"][0]["code"] == "SOURCE_TIMEOUT"
 
 
-def test_empty_or_malformed_owner_folds_never_become_current_zero(tmp_path: Path) -> None:
+def test_empty_or_malformed_owner_folds_never_become_current_zero(
+    tmp_path: Path,
+) -> None:
     empty_fleet = {
         "summary": {
             "graded": 0,
@@ -615,9 +652,9 @@ def test_empty_or_malformed_owner_folds_never_become_current_zero(tmp_path: Path
         "errors": [],
     }
     with patch("skdashboard.dashboard_fleet.get_drift", return_value=empty_fleet):
-        local = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
-            "skcapstone.fleet"
-        ]
+        local = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )["skcapstone.fleet"]
         items = project_estate({"skcapstone.fleet": Reader(payload=local())}, now=NOW)
     fleet = next(item for item in items if item["adapter_id"] == "skcapstone.fleet")
     assert fleet["truth_state"] == "unknown"
@@ -656,7 +693,9 @@ def test_http_timeout_is_bounded_and_projection_clock_follows_source_clock() -> 
     assert observed <= projected <= datetime.now(timezone.utc)
 
 
-def test_project_path_hung_sources_do_not_delay_later_healthy_source(tmp_path: Path) -> None:
+def test_project_path_hung_sources_do_not_delay_later_healthy_source(
+    tmp_path: Path,
+) -> None:
     source_specs = SPECS[:5]
     starts = {}
 
@@ -730,7 +769,9 @@ def test_real_worker_returns_bounded_read_without_mutating_home(tmp_path: Path) 
     assert after == before
 
 
-def test_production_worker_statuses_preserve_safe_failure_classes(tmp_path: Path) -> None:
+def test_production_worker_statuses_preserve_safe_failure_classes(
+    tmp_path: Path,
+) -> None:
     spec = SPECS[0]
     cases = (
         (4, "unavailable", "SOURCE_MALFORMED", "authorized"),
@@ -741,7 +782,9 @@ def test_production_worker_statuses_preserve_safe_failure_classes(tmp_path: Path
     for returncode, truth, code, authorization in cases:
         completed = subprocess.CompletedProcess([], returncode, "", "private detail")
         reader = Reader(adapter_id=spec.adapter_id, home=tmp_path, timeout_ms=1_000)
-        with patch("skdashboard.control_plane_adapters._bounded_run", return_value=completed):
+        with patch(
+            "skdashboard.control_plane_adapters._bounded_run", return_value=completed
+        ):
             item = project_estate({spec.adapter_id: reader}, now=NOW)[0]
         assert item["truth_state"] == truth
         assert item["errors"][0]["code"] == code
@@ -749,12 +792,16 @@ def test_production_worker_statuses_preserve_safe_failure_classes(tmp_path: Path
         assert "private detail" not in str(item)
 
 
-def test_oversize_or_bad_worker_json_is_malformed_not_unavailable(tmp_path: Path) -> None:
+def test_oversize_or_bad_worker_json_is_malformed_not_unavailable(
+    tmp_path: Path,
+) -> None:
     spec = SPECS[0]
     reader = Reader(adapter_id=spec.adapter_id, home=tmp_path, timeout_ms=1_000)
     for stdout in ("x" * 8_193, "{"):
         completed = subprocess.CompletedProcess([], 0, stdout, "")
-        with patch("skdashboard.control_plane_adapters._bounded_run", return_value=completed):
+        with patch(
+            "skdashboard.control_plane_adapters._bounded_run", return_value=completed
+        ):
             item = project_estate({spec.adapter_id: reader}, now=NOW)[0]
         assert item["truth_state"] == "unavailable"
         assert item["errors"][0]["code"] == "SOURCE_MALFORMED"
@@ -798,7 +845,9 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
             service_ci_no_owner,
         ]
 
-        readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+        readers = _local_readers(
+            tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+        )
         reader = readers["skcapstone.service_release"]
         assert callable(reader)
 
@@ -806,7 +855,9 @@ def test_service_release_adapter_reads_cmdb_service_cis(tmp_path: Path) -> None:
             {"skcapstone.service_release": Reader(payload=reader())},
             now=NOW,
         )
-        result = next(item for item in items if item["adapter_id"] == "skcapstone.service_release")
+        result = next(
+            item for item in items if item["adapter_id"] == "skcapstone.service_release"
+        )
 
         assert result["aggregate"]["services"] == 3
         assert result["aggregate"]["releases"] == 2
@@ -840,7 +891,9 @@ def test_service_release_adapter_distinguishes_empty_population_from_failure(
     assert result["errors"] == []
 
 
-def test_service_release_adapter_watermark_covers_deployment_health(tmp_path: Path) -> None:
+def test_service_release_adapter_watermark_covers_deployment_health(
+    tmp_path: Path,
+) -> None:
     service_ci = Mock(
         id="service-1",
         ci_type="service",
@@ -865,7 +918,9 @@ def test_service_release_adapter_watermark_covers_deployment_health(tmp_path: Pa
 
 def test_service_release_adapter_fails_closed_on_cmdb_error(tmp_path: Path) -> None:
     """Service release adapter returns unavailable when CMDB read fails."""
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skcapstone.service_release"]
     assert callable(reader)
 
@@ -901,7 +956,9 @@ def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
     }
     aggregate_path.write_text(json.dumps(perf_data))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skperf.aggregate"]
     assert callable(reader)
 
@@ -923,7 +980,9 @@ def test_skperf_aggregate_reads_from_perf_data_file(tmp_path: Path) -> None:
 def test_skperf_aggregate_fails_closed_on_missing_file(tmp_path: Path) -> None:
     """SKPerf aggregate adapter handles file read gracefully."""
     # The adapter should handle missing or existing files gracefully
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skperf.aggregate"]
     assert callable(reader)
 
@@ -941,7 +1000,9 @@ def test_skperf_aggregate_handles_malformed_data(tmp_path: Path) -> None:
 
     aggregate_path.write_text("{invalid json")
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skperf.aggregate"]
     assert callable(reader)
 
@@ -989,7 +1050,9 @@ def test_capauth_policy_adapter_reads_sanitized_estate(tmp_path: Path) -> None:
     estate_path.write_text(json.dumps(estate_data))
     os.utime(estate_path, (NOW.timestamp(), NOW.timestamp()))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["capauth.policy"]
     assert callable(reader)
 
@@ -1027,9 +1090,9 @@ def test_file_adapters_reject_oversized_sources(
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b" " * (MAX_SOURCE_BYTES + 1))
 
-    reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
-        adapter_id
-    ]
+    reader = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )[adapter_id]
     with pytest.raises(ValueError, match="malformed"):
         reader()
 
@@ -1037,7 +1100,9 @@ def test_file_adapters_reject_oversized_sources(
 def test_capauth_policy_adapter_fails_closed_on_missing_estate(tmp_path: Path) -> None:
     """CapAuth policy adapter handles missing estate gracefully."""
     # This test relies on the fact that capauth estate doesn't exist in test env
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["capauth.policy"]
     assert callable(reader)
 
@@ -1107,7 +1172,9 @@ def test_capauth_source_mtime_drives_stale_and_future_truth(tmp_path: Path) -> N
     os.utime(estate, (stale_at.timestamp(), stale_at.timestamp()))
     stale = next(
         item
-        for item in project_estate({"capauth.policy": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"capauth.policy": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "capauth.policy"
     )
     assert stale["truth_state"] == "stale"
@@ -1117,7 +1184,9 @@ def test_capauth_source_mtime_drives_stale_and_future_truth(tmp_path: Path) -> N
     os.utime(estate, (future_at.timestamp(), future_at.timestamp()))
     future = next(
         item
-        for item in project_estate({"capauth.policy": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"capauth.policy": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "capauth.policy"
     )
     assert future["truth_state"] == "unavailable"
@@ -1166,12 +1235,16 @@ def test_snapshot_helpers_reject_concurrent_source_mutation(tmp_path: Path) -> N
 
     changed = [(1, 1, 2, 3, 4), (1, 1, 2, 5, 6)]
     with (
-        patch("skdashboard.control_plane_adapters._stat_signature", side_effect=changed),
+        patch(
+            "skdashboard.control_plane_adapters._stat_signature", side_effect=changed
+        ),
         pytest.raises(RuntimeError, match="changed during read"),
     ):
         _read_json_snapshot(source)
     with (
-        patch("skdashboard.control_plane_adapters._stat_signature", side_effect=changed),
+        patch(
+            "skdashboard.control_plane_adapters._stat_signature", side_effect=changed
+        ),
         pytest.raises(RuntimeError, match="changed during read"),
     ):
         _directory_snapshot(directory)
@@ -1210,7 +1283,9 @@ def test_atlas_conditions_adapter_reads_observations_file(tmp_path: Path) -> Non
     }
     observations_path.write_text(json.dumps(observations_data))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["atlas.conditions"]
     assert callable(reader)
 
@@ -1229,7 +1304,9 @@ def test_atlas_conditions_adapter_reads_observations_file(tmp_path: Path) -> Non
     assert result["errors"][0]["code"] == "SOURCE_PARTIAL"
 
 
-def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Path) -> None:
+def test_atlas_conditions_adapter_falls_back_to_fleet_observations(
+    tmp_path: Path,
+) -> None:
     """Atlas conditions adapter falls back to fleet observations if operator seat unavailable."""
     # First remove any operator_seat observations that might exist from previous tests
     operator_seat_path = tmp_path / "fleet" / "atlas" / "brief"
@@ -1254,7 +1331,9 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
     }
     observations_path.write_text(json.dumps(observations_data))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["atlas.conditions"]
     assert callable(reader)
 
@@ -1269,7 +1348,9 @@ def test_atlas_conditions_adapter_falls_back_to_fleet_observations(tmp_path: Pat
     assert result["truth_state"] == "current"
 
 
-def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(tmp_path: Path) -> None:
+def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(
+    tmp_path: Path,
+) -> None:
     observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
     observations.parent.mkdir(parents=True)
     observations.write_text(
@@ -1288,7 +1369,9 @@ def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(tmp_path: Pat
     reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
     result = next(
         item
-        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"atlas.conditions": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "atlas.conditions"
     )
 
@@ -1298,15 +1381,21 @@ def test_atlas_conditions_adapter_reads_canonical_boolean_statuses(tmp_path: Pat
     assert result["watermark"]["value"].startswith("sha256:")
 
 
-def test_atlas_conditions_adapter_treats_empty_snapshot_as_observed_zero(tmp_path: Path) -> None:
+def test_atlas_conditions_adapter_treats_empty_snapshot_as_observed_zero(
+    tmp_path: Path,
+) -> None:
     observations = tmp_path / "fleet" / "atlas" / "brief" / "brief.json"
     observations.parent.mkdir(parents=True)
-    observations.write_text(json.dumps({"observed_at": NOW.isoformat(), "conditions": []}))
+    observations.write_text(
+        json.dumps({"observed_at": NOW.isoformat(), "conditions": []})
+    )
 
     reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
     result = next(
         item
-        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"atlas.conditions": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "atlas.conditions"
     )
 
@@ -1331,7 +1420,9 @@ def test_atlas_missing_timestamp_uses_source_mtime(tmp_path: Path) -> None:
     reader = _local_readers(tmp_path, board_data={})["atlas.conditions"]
     result = next(
         item
-        for item in project_estate({"atlas.conditions": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"atlas.conditions": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "atlas.conditions"
     )
 
@@ -1339,7 +1430,9 @@ def test_atlas_missing_timestamp_uses_source_mtime(tmp_path: Path) -> None:
     assert result["age_seconds"] == 61
 
 
-def test_atlas_conditions_adapter_returns_unknown_when_no_observations(tmp_path: Path) -> None:
+def test_atlas_conditions_adapter_returns_unknown_when_no_observations(
+    tmp_path: Path,
+) -> None:
     """Atlas conditions adapter returns unknown or unavailable when no observations file exists."""
     # Clean up any existing observations from previous tests
     import shutil
@@ -1352,7 +1445,9 @@ def test_atlas_conditions_adapter_returns_unknown_when_no_observations(tmp_path:
     if fleet_path.exists():
         shutil.rmtree(fleet_path)
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["atlas.conditions"]
     assert callable(reader)
 
@@ -1378,7 +1473,9 @@ def test_skos_discovery_adapter_scans_skcode_arena(tmp_path: Path) -> None:
     (skcode_arena_path / "module3").mkdir()
     os.utime(skcode_arena_path, (NOW.timestamp(), NOW.timestamp()))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skos.discovery"]
     assert callable(reader)
 
@@ -1404,7 +1501,9 @@ def test_skos_discovery_adapter_scans_repo_modules(tmp_path: Path) -> None:
     (src_path / "module2.py").write_text("# module2")
     os.utime(src_path, (NOW.timestamp(), NOW.timestamp()))
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skos.discovery"]
     assert callable(reader)
 
@@ -1425,12 +1524,14 @@ def test_skos_discovery_uses_successful_projection_time(tmp_path: Path) -> None:
     stale_at = NOW - timedelta(seconds=61)
     os.utime(arena, (stale_at.timestamp(), stale_at.timestamp()))
 
-    reader = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())[
-        "skos.discovery"
-    ]
+    reader = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )["skos.discovery"]
     result = next(
         item
-        for item in project_estate({"skos.discovery": Reader(payload=reader())}, now=NOW)
+        for item in project_estate(
+            {"skos.discovery": Reader(payload=reader())}, now=NOW
+        )
         if item["adapter_id"] == "skos.discovery"
     )
 
@@ -1440,7 +1541,9 @@ def test_skos_discovery_uses_successful_projection_time(tmp_path: Path) -> None:
 
 def test_skos_discovery_adapter_returns_unknown_when_no_modules(tmp_path: Path) -> None:
     """SKOS discovery adapter returns unknown when no modules are found."""
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
     reader = readers["skos.discovery"]
     assert callable(reader)
 
@@ -1482,7 +1585,9 @@ def test_new_adapters_follow_bounded_contract(tmp_path: Path) -> None:
         "skos.discovery",
     ]
 
-    readers = _local_readers(tmp_path, board_data={}, default_observed_at=NOW.isoformat())
+    readers = _local_readers(
+        tmp_path, board_data={}, default_observed_at=NOW.isoformat()
+    )
 
     for adapter_id in adapter_ids:
         assert adapter_id in readers, f"{adapter_id} not in readers"
@@ -1503,10 +1608,79 @@ def test_new_adapters_follow_bounded_contract(tmp_path: Path) -> None:
         )
         assert result["schema_version"] == SCHEMA_VERSION
         assert result["adapter_id"] == adapter_id
-        assert result["truth_state"] in {"current", "stale", "partial", "unavailable", "unknown"}
+        assert result["truth_state"] in {
+            "current",
+            "stale",
+            "partial",
+            "unavailable",
+            "unknown",
+        }
         assert result["classification"] in {"internal", "confidential"}
         assert isinstance(result["coverage"], dict)
         assert "expected" in result["coverage"]
         assert "reporting" in result["coverage"]
         assert isinstance(result["errors"], list)
         assert len(result["errors"]) <= 16
+
+
+def _fleet_home(tmp_path, beats):
+    """Fleet tree with one heartbeat.json per node. ``beats`` maps node -> age seconds."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    home = tmp_path / "skcapstone"
+    for node, age in beats.items():
+        d = home / "fleet" / "status" / node
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "join.json").write_text("{}", encoding="utf-8")
+        # Admit the node: an unadmitted joiner is Pending and its phase never
+        # derives from the heartbeat at all.
+        spec_dir = home / "fleet" / "objects" / "node"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / f"{node}.json").write_text(
+            json.dumps({"kind": "Node", "name": node, "spec": {}}), encoding="utf-8"
+        )
+        if age is not None:
+            ts = (now - timedelta(seconds=age)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            (d / "heartbeat.json").write_text(
+                json.dumps({"node": node, "ts": ts}), encoding="utf-8"
+            )
+    return home
+
+
+def test_fleet_heartbeat_counts_phases_from_the_fleet_s_own_thresholds(tmp_path):
+    """Phases must come from node_controller, not a second copy of the thresholds."""
+    from skcapstone.fleet.node_controller import DEAD_AFTER_S, NOT_READY_AFTER_S
+
+    from skdashboard.control_plane_adapters import default_readers
+
+    home = _fleet_home(
+        tmp_path,
+        {
+            "node-ready": 10,
+            "node-notready": NOT_READY_AFTER_S + 5,
+            "node-dead": DEAD_AFTER_S + 5,
+        },
+    )
+    result = default_readers(home)["skcapstone.fleet_heartbeat"]()
+    fields = result["aggregate"]
+    assert fields["nodes"] == 3
+    assert fields["ready"] == 1
+    assert fields["not_ready"] == 1
+    assert fields["dead"] == 1
+    assert (
+        fields["ready"] + fields["not_ready"] + fields["dead"] + fields["pending"] == 3
+    )
+
+
+def test_fleet_heartbeat_unparsable_beat_does_not_fake_a_zero_age(tmp_path):
+    """A node with no heartbeat is Dead and must not contribute 0 to max age."""
+    from skdashboard.control_plane_adapters import default_readers
+
+    home = _fleet_home(tmp_path, {"node-ok": 30, "node-silent": None})
+    result = default_readers(home)["skcapstone.fleet_heartbeat"]()
+    fields = result["aggregate"]
+    assert fields["nodes"] == 2
+    assert fields["dead"] == 1
+    # max age reflects only the node that actually reported
+    assert 25 <= fields["max_beat_age_s"] <= 40

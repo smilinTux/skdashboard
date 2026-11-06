@@ -23,14 +23,22 @@ MAX_SOURCE_ITEMS = 2_048
 
 
 def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
-    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _observed_at(value: os.stat_result) -> str:
     return datetime.fromtimestamp(value.st_mtime, timezone.utc).isoformat()
 
 
-def _read_json_snapshot(path: Path) -> tuple[object, str, str, tuple[int, int, int, int, int]]:
+def _read_json_snapshot(
+    path: Path,
+) -> tuple[object, str, str, tuple[int, int, int, int, int]]:
     """Read one bounded JSON snapshot and reject an in-place concurrent change."""
     with path.open("rb") as source:
         before = os.fstat(source.fileno())
@@ -43,17 +51,26 @@ def _read_json_snapshot(path: Path) -> tuple[object, str, str, tuple[int, int, i
     signature = _stat_signature(before)
     if _stat_signature(after) != signature:
         raise RuntimeError("source changed during read")
-    return json.loads(raw), hashlib.sha256(raw).hexdigest(), _observed_at(before), signature
+    return (
+        json.loads(raw),
+        hashlib.sha256(raw).hexdigest(),
+        _observed_at(before),
+        signature,
+    )
 
 
 def _read_json_bounded(path: Path) -> object:
     return _read_json_snapshot(path)[0]
 
 
-def _directory_snapshot(path: Path, pattern: str | None = None) -> tuple[list[Path], str]:
+def _directory_snapshot(
+    path: Path, pattern: str | None = None
+) -> tuple[list[Path], str]:
     """Enumerate one bounded directory snapshot and reject concurrent mutation."""
     before = path.stat()
-    entries = list(islice(path.glob(pattern) if pattern else path.iterdir(), MAX_SOURCE_ITEMS + 1))
+    entries = list(
+        islice(path.glob(pattern) if pattern else path.iterdir(), MAX_SOURCE_ITEMS + 1)
+    )
     after = path.stat()
     if len(entries) > MAX_SOURCE_ITEMS:
         raise ValueError("directory exceeds item limit")
@@ -114,7 +131,15 @@ SPECS = (
         "cmdb.configuration",
         "CMDB",
         "configuration_items",
-        ("total", "operational", "degraded", "other_status", "fresh", "stale", "unknown"),
+        (
+            "total",
+            "operational",
+            "degraded",
+            "other_status",
+            "fresh",
+            "stale",
+            "unknown",
+        ),
         timeout_ms=8_000,
     ),
     AdapterSpec(
@@ -123,6 +148,12 @@ SPECS = (
         "fleet_runtime",
         ("graded", "skipped", "error", "warn", "info", "ok"),
         timeout_ms=3_000,
+    ),
+    AdapterSpec(
+        "skcapstone.fleet_heartbeat",
+        "SKCapstone Fleet",
+        "node_liveness",
+        ("nodes", "ready", "not_ready", "dead", "pending", "max_beat_age_s"),
     ),
     AdapterSpec(
         "skcounter.harness",
@@ -162,9 +193,14 @@ SPECS = (
         ),
     ),
     AdapterSpec(
-        "skperf.aggregate", "SKPerf", "approved_benchmarks", ("regressions", "capacity_pressure")
+        "skperf.aggregate",
+        "SKPerf",
+        "approved_benchmarks",
+        ("regressions", "capacity_pressure"),
     ),
-    AdapterSpec("skjoule.wallet", "SKJoule", "wallets", ("total_supply", "active_agents")),
+    AdapterSpec(
+        "skjoule.wallet", "SKJoule", "wallets", ("total_supply", "active_agents")
+    ),
     AdapterSpec(
         "capauth.policy",
         "CapAuth",
@@ -185,7 +221,9 @@ SPECS = (
         ("open_conditions", "ready_actions"),
         classification="confidential",
     ),
-    AdapterSpec("skos.discovery", "SKOS", "module_discovery", ("discovered", "unavailable")),
+    AdapterSpec(
+        "skos.discovery", "SKOS", "module_discovery", ("discovered", "unavailable")
+    ),
     AdapterSpec(
         "sklegal.global",
         "SKLegal",
@@ -316,9 +354,7 @@ def _error(
             availability=(
                 "unauthorized"
                 if code == "SOURCE_UNAUTHORIZED"
-                else "unreachable"
-                if code == "SOURCE_UNREACHABLE"
-                else "unavailable"
+                else "unreachable" if code == "SOURCE_UNREACHABLE" else "unavailable"
             ),
             availability_reason=code,
             freshness="unknown",
@@ -326,7 +362,9 @@ def _error(
             coverage="unknown",
             coverage_reason="COVERAGE_UNAVAILABLE",
             quality="invalid" if code == "SOURCE_MALFORMED" else "unknown",
-            quality_reason=code if code == "SOURCE_MALFORMED" else "QUALITY_UNAVAILABLE",
+            quality_reason=(
+                code if code == "SOURCE_MALFORMED" else "QUALITY_UNAVAILABLE"
+            ),
         ),
         "coverage": {"expected": None, "reporting": None},
         "aggregate": None,
@@ -446,10 +484,14 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
         or len(watermark) > 256
         or any(not isinstance(value, str) for value in errors)
         or not isinstance(has_observations, bool)
-        or len(json.dumps(aggregate, separators=(",", ":"), default=str).encode()) > 4_096
+        or len(json.dumps(aggregate, separators=(",", ":"), default=str).encode())
+        > 4_096
     ):
         return _error(
-            spec, projected, "SOURCE_MALFORMED", "The aggregate reader returned malformed data"
+            spec,
+            projected,
+            "SOURCE_MALFORMED",
+            "The aggregate reader returned malformed data",
         )
 
     expected = coverage["expected"]
@@ -460,13 +502,19 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
         and (expected < 0 or reporting < 0 or reporting > expected)
     ):
         return _error(
-            spec, projected, "SOURCE_MALFORMED", "The aggregate reader returned invalid coverage"
+            spec,
+            projected,
+            "SOURCE_MALFORMED",
+            "The aggregate reader returned invalid coverage",
         )
 
     age = (instant - observed).total_seconds()
     if age < -300:
         return _error(
-            spec, projected, "SOURCE_MALFORMED", "The source observation is in the future"
+            spec,
+            projected,
+            "SOURCE_MALFORMED",
+            "The source observation is in the future",
         )
     if errors and not has_observations:
         return _error(
@@ -478,7 +526,9 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
 
     age_seconds = max(0, int(age))
     truth_state = "current" if has_observations else "unknown"
-    if errors or (expected is not None and reporting is not None and reporting < expected):
+    if errors or (
+        expected is not None and reporting is not None and reporting < expected
+    ):
         truth_state = "partial"
     elif has_observations and age_seconds > spec.ttl_seconds:
         truth_state = "stale"
@@ -529,7 +579,9 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
         ),
         "coverage": coverage,
         "aggregate": (
-            {key: aggregate[key] for key in spec.fields} if truth_state != "unknown" else None
+            {key: aggregate[key] for key in spec.fields}
+            if truth_state != "unknown"
+            else None
         ),
         "errors": [
             {
@@ -543,7 +595,9 @@ def _project(spec: AdapterSpec, reader: Reader | None, now: datetime | None) -> 
     return result
 
 
-def project_estate(readers: Mapping[str, Reader], *, now: datetime | None = None) -> list[dict]:
+def project_estate(
+    readers: Mapping[str, Reader], *, now: datetime | None = None
+) -> list[dict]:
     """Project one bounded, policy-safe aggregate for every declared population."""
     instant = now.astimezone(timezone.utc) if now else None
     with ThreadPoolExecutor(max_workers=len(SPECS)) as executor:
@@ -578,7 +632,9 @@ def aggregate_reader(
         default=str,
     )
     watermark = f"sha256:{hashlib.sha256(safe.encode()).hexdigest()}"
-    timestamp = observed_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    timestamp = observed_at or datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
     return Reader(
         payload={
             "schema_version": SCHEMA_VERSION,
@@ -604,17 +660,25 @@ def _local_readers(
         not board_data.get("error")
         and isinstance(summary, dict)
         and all(
-            isinstance(summary.get(key), int) for key in ("total", "open", "in_progress", "done")
+            isinstance(summary.get(key), int)
+            for key in ("total", "open", "in_progress", "done")
         )
         and isinstance(tasks, list)
         and isinstance(agents, list)
-        and all(isinstance(task, dict) and isinstance(task.get("status"), str) for task in tasks)
         and all(
-            isinstance(agent, dict) and isinstance(agent.get("state"), str) for agent in agents
+            isinstance(task, dict) and isinstance(task.get("status"), str)
+            for task in tasks
+        )
+        and all(
+            isinstance(agent, dict) and isinstance(agent.get("state"), str)
+            for agent in agents
         )
     ):
         readers["skcapstone.portfolio"] = aggregate_reader(
-            {key: summary.get(key, 0) for key in ("total", "open", "in_progress", "done")},
+            {
+                key: summary.get(key, 0)
+                for key in ("total", "open", "in_progress", "done")
+            },
             observed_at=default_observed_at,
         )
         readers["skcoord.flow"] = aggregate_reader(
@@ -629,7 +693,9 @@ def _local_readers(
         readers["skcoord.agent_presence"] = aggregate_reader(
             {
                 "total_agents": len(agents),
-                "active_agents": sum(agent.get("state") == "active" for agent in agents),
+                "active_agents": sum(
+                    agent.get("state") == "active" for agent in agents
+                ),
             },
             observed_at=default_observed_at,
         )
@@ -669,7 +735,9 @@ def _local_readers(
             or not isinstance(health, dict)
             or not all(isinstance(value, int) for value in health.values())
             or not isinstance(freshness, dict)
-            or not all(isinstance(freshness.get(key), int) for key in required_freshness)
+            or not all(
+                isinstance(freshness.get(key), int) for key in required_freshness
+            )
         ):
             raise ValueError
         stale = freshness.get("stale", 0)
@@ -716,7 +784,9 @@ def _local_readers(
 
     def usage(lane: str) -> dict:
         raw = dashboard_skcounter.get_ai_usage(home, {"lane": lane})
-        collectors = raw.get("collectors") if isinstance(raw.get("collectors"), list) else []
+        collectors = (
+            raw.get("collectors") if isinstance(raw.get("collectors"), list) else []
+        )
         has_aged_collector = any(
             item.get("status") in {"delayed", "stale"}
             for item in collectors
@@ -740,9 +810,9 @@ def _local_readers(
                     {
                         "tokens_total": int(summary.get("totalInputTokens", 0) or 0)
                         + int(summary.get("totalOutputTokens", 0) or 0),
-                        "cost_usd": summary.get("totalCostUsd")
-                        if not unpriced
-                        else None,
+                        "cost_usd": (
+                            summary.get("totalCostUsd") if not unpriced else None
+                        ),
                         "cost_state": "billed" if not unpriced else "unavailable",
                         "latency_ms": None,
                         "cache_ratio": None,
@@ -756,9 +826,11 @@ def _local_readers(
                     expected=expected,
                     reporting=reporting,
                     observed_at=telemetry.get("observed_at"),
-                    errors=["partial"]
-                    if telemetry.get("errors") or reporting < expected
-                    else [],
+                    errors=(
+                        ["partial"]
+                        if telemetry.get("errors") or reporting < expected
+                        else []
+                    ),
                     has_observations=bool(summary.get("totalRequests")),
                     watermark_data=gateway,
                 )()
@@ -777,9 +849,7 @@ def _local_readers(
         total = (
             tokens.get("total")
             if isinstance(tokens, dict)
-            else summary.get("total")
-            if isinstance(summary, dict)
-            else None
+            else summary.get("total") if isinstance(summary, dict) else None
         )
         if (
             not isinstance(summary, dict)
@@ -808,9 +878,11 @@ def _local_readers(
             {
                 "tokens_total": total,
                 "latency_ms": None,
-                "cache_ratio": summary.get("cache_ratio")
-                if summary.get("cache_ratio") is not None
-                else None,
+                "cache_ratio": (
+                    summary.get("cache_ratio")
+                    if summary.get("cache_ratio") is not None
+                    else None
+                ),
                 "error_count": None,
                 "denial_count": None,
                 "cost_usd": cost_usd if cost_state != "unavailable" else None,
@@ -844,6 +916,48 @@ def _local_readers(
             observed_at=default_observed_at,
         )()
 
+    def fleet_heartbeat() -> dict:
+        """Node liveness, derived by the SAME code the fleet CLI derives it with.
+
+        Deliberately calls node_views() instead of re-reading heartbeat.json and
+        re-applying NOT_READY_AFTER_S / DEAD_AFTER_S here. A second copy of a
+        threshold is a second source of truth and it drifts silently: an earlier
+        attempt at this metric read node.json, the slower full self-report,
+        rather than heartbeat.json, and reported a healthy node as six minutes
+        stale.
+
+        A node whose heartbeat cannot be parsed has heartbeat_age_s None and is
+        excluded from `max_beat_age_s` rather than contributing a fabricated 0.
+
+        The four phase counts are exhaustive: ready + not_ready + dead + pending
+        equals nodes.
+        """
+        from skcapstone.fleet.node_controller import node_views
+        from skcapstone.fleet.paths import FleetPaths
+
+        views = node_views(FleetPaths(root=home / "fleet"))
+        ages = [v.heartbeat_age_s for v in views if v.heartbeat_age_s is not None]
+        phases = [v.phase for v in views]
+        return aggregate_reader(
+            {
+                "nodes": len(views),
+                "ready": phases.count("Ready"),
+                "not_ready": phases.count("NotReady"),
+                "dead": phases.count("Dead"),
+                # A node that has joined but is not yet admitted is Pending, and
+                # its phase never derives from the heartbeat. Without this field
+                # ready+not_ready+dead silently fails to sum to `nodes` on any
+                # estate with a joiner in flight.
+                "pending": phases.count("Pending"),
+                "max_beat_age_s": round(max(ages), 1) if ages else 0,
+            },
+            expected=len(views),
+            reporting=len(ages),
+            has_observations=bool(views),
+            observed_at=default_observed_at,
+            watermark_data=f"fleet-heartbeat:{len(views)}:{len(ages)}",
+        )()
+
     def service_release() -> dict:
         """Read service release observations from CMDB service CIs with release metadata."""
         try:
@@ -872,9 +986,11 @@ def _local_readers(
                     "id": ci.id,
                     "status": ci.status,
                     "release": {
-                        key: str(ci.attributes.get(key))[:128]
-                        if ci.attributes.get(key) is not None
-                        else None
+                        key: (
+                            str(ci.attributes.get(key))[:128]
+                            if ci.attributes.get(key) is not None
+                            else None
+                        )
                         for key in sorted(release_keys)
                     },
                 }
@@ -888,7 +1004,11 @@ def _local_readers(
                 },
                 expected=len(service_cis),
                 reporting=len(releases),
-                errors=["missing_release_observation"] if len(releases) < len(service_cis) else [],
+                errors=(
+                    ["missing_release_observation"]
+                    if len(releases) < len(service_cis)
+                    else []
+                ),
                 has_observations=bool(service_cis),
                 observed_at=default_observed_at,
                 watermark_data=provenance,
@@ -919,7 +1039,10 @@ def _local_readers(
                 or perf_data.get("population") != "approved_benchmarks"
                 or not isinstance(perf_data.get("source_sha256"), str)
                 or len(perf_data["source_sha256"]) != 64
-                or any(character not in "0123456789abcdef" for character in perf_data["source_sha256"])
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in perf_data["source_sha256"]
+                )
             ):
                 raise ValueError("SKPerf aggregate provenance malformed")
 
@@ -930,15 +1053,19 @@ def _local_readers(
             observed_at = perf_data.get("produced_at")
             errors = perf_data.get("errors", [])
 
-            if not isinstance(regressions, int) or not isinstance(capacity_pressure, (int, float)):
+            if not isinstance(regressions, int) or not isinstance(
+                capacity_pressure, (int, float)
+            ):
                 raise ValueError("SKPerf aggregate fields malformed")
 
             return aggregate_reader(
                 {
                     "regressions": regressions,
-                    "capacity_pressure": float(capacity_pressure)
-                    if isinstance(capacity_pressure, (int, float))
-                    else 0.0,
+                    "capacity_pressure": (
+                        float(capacity_pressure)
+                        if isinstance(capacity_pressure, (int, float))
+                        else 0.0
+                    ),
                 },
                 expected=expected,
                 reporting=reporting,
@@ -968,7 +1095,10 @@ def _local_readers(
 
             _, digest, observed_at, signature = _read_json_snapshot(estate_path)
             manifest = EstateManifest.load(estate_path)
-            if manifest.digest != digest or _stat_signature(estate_path.stat()) != signature:
+            if (
+                manifest.digest != digest
+                or _stat_signature(estate_path.stat()) != signature
+            ):
                 raise RuntimeError("CapAuth estate changed during validation")
 
             identities = tuple(manifest.identities.values())
@@ -1009,8 +1139,12 @@ def _local_readers(
     def atlas_conditions() -> dict:
         """Read Atlas operator conditions from the operator seat observation store."""
         try:
-            operator_observations_path = home / "fleet" / "atlas" / "brief" / "brief.json"
-            fleet_observations_path = home / "fleet" / "observations" / "conditions.json"
+            operator_observations_path = (
+                home / "fleet" / "atlas" / "brief" / "brief.json"
+            )
+            fleet_observations_path = (
+                home / "fleet" / "observations" / "conditions.json"
+            )
 
             observations_data = None
             source_path = None
@@ -1019,13 +1153,13 @@ def _local_readers(
 
             if operator_observations_path.exists():
                 source_path = operator_observations_path
-                observations_data, source_digest, source_observed_at, _ = _read_json_snapshot(
-                    operator_observations_path
+                observations_data, source_digest, source_observed_at, _ = (
+                    _read_json_snapshot(operator_observations_path)
                 )
             elif fleet_observations_path.exists():
                 source_path = fleet_observations_path
-                observations_data, source_digest, source_observed_at, _ = _read_json_snapshot(
-                    fleet_observations_path
+                observations_data, source_digest, source_observed_at, _ = (
+                    _read_json_snapshot(fleet_observations_path)
                 )
             else:
                 open_conditions = 0
@@ -1061,7 +1195,9 @@ def _local_readers(
                 raw_status = condition.get("status", "Unknown")
                 if not isinstance(raw_status, (str, bool)):
                     raise ValueError("Atlas condition status malformed")
-                status = raw_status.lower() if isinstance(raw_status, str) else raw_status
+                status = (
+                    raw_status.lower() if isinstance(raw_status, str) else raw_status
+                )
                 known = isinstance(status, bool) or status != "unknown"
                 if known:
                     reporting += 1
@@ -1115,7 +1251,9 @@ def _local_readers(
 
             if skcode_arena_path.exists() and skcode_arena_path.is_dir():
                 try:
-                    arena_entries, arena_observed_at = _directory_snapshot(skcode_arena_path)
+                    arena_entries, arena_observed_at = _directory_snapshot(
+                        skcode_arena_path
+                    )
                     source_observed_at.append(arena_observed_at)
                     discovered = sum(1 for entry in arena_entries if entry.is_dir())
                 except PermissionError:
@@ -1127,7 +1265,9 @@ def _local_readers(
                 try:
                     src_path = skcapstone_repo_path / "src" / "skcapstone"
                     if src_path.exists() and src_path.is_dir():
-                        module_files, repo_observed_at = _directory_snapshot(src_path, "*.py")
+                        module_files, repo_observed_at = _directory_snapshot(
+                            src_path, "*.py"
+                        )
                         source_observed_at.append(repo_observed_at)
                         discovered += len(module_files)
                 except PermissionError:
@@ -1166,6 +1306,7 @@ def _local_readers(
             "skcapstone.itil": itil,
             "cmdb.configuration": cmdb,
             "skcapstone.fleet": fleet,
+            "skcapstone.fleet_heartbeat": fleet_heartbeat,
             "skcounter.harness": lambda: usage("harness_reported"),
             "skgateway.observed": lambda: usage("gateway_observed"),
             "skjoule.wallet": joule,
@@ -1186,6 +1327,7 @@ _IMPLEMENTED = {
     "skcapstone.itil",
     "cmdb.configuration",
     "skcapstone.fleet",
+    "skcapstone.fleet_heartbeat",
     "skcounter.harness",
     "skgateway.observed",
     "skjoule.wallet",

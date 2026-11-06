@@ -18,15 +18,27 @@
   "qualification_profiles": {
     "ui": {
       "projection": "estate_rows",
-      "required_fields": ["silo", "signal", "truth_state", "watermark", "errors"],
-      "expected_item_count": 16,
+      "required_fields": [
+        "silo",
+        "signal",
+        "truth_state",
+        "watermark",
+        "errors"
+      ],
+      "expected_item_count": 17,
       "expected_row_set_sha256": "sha256:e3eabce15da5ea75fbc9800ecb23e2483424ea2aafece9de9ea1bdf2124b5902"
     },
     "api": {
       "method": "GET",
       "route": "/api/v1/overview",
       "expected_status": 200,
-      "required_envelope_fields": ["schema_version", "source_owner", "items", "freshness", "errors"]
+      "required_envelope_fields": [
+        "schema_version",
+        "source_owner",
+        "items",
+        "freshness",
+        "errors"
+      ]
     },
     "agent": {
       "access": "read_only",
@@ -48,8 +60,18 @@
       "requires_confidence_bounds": true
     },
     "failure": {
-      "required_truth_states": ["stale", "partial", "unavailable", "unknown", "not_applicable"],
-      "no_value_states": ["unavailable", "unknown", "not_applicable"]
+      "required_truth_states": [
+        "stale",
+        "partial",
+        "unavailable",
+        "unknown",
+        "not_applicable"
+      ],
+      "no_value_states": [
+        "unavailable",
+        "unknown",
+        "not_applicable"
+      ]
     }
   },
   "metric_pack": {
@@ -58,7 +80,9 @@
     "result_set_sha256": "sha256:d391a300dfa1c714d1d946194ad67cffa5e2353e93a08c372dec2e31206b62b2",
     "case_overrides": {
       "4": {
-        "errors": ["declared and observed revisions conflict"]
+        "errors": [
+          "declared and observed revisions conflict"
+        ]
       }
     }
   },
@@ -68,8 +92,16 @@
       "signal": "blocked_objectives",
       "adapter_id": "skcapstone.portfolio",
       "condition": "healthy",
-      "aggregate": {"total": 9, "open": 3, "in_progress": 2, "done": 4},
-      "coverage": {"expected": 9, "reporting": 9},
+      "aggregate": {
+        "total": 9,
+        "open": 3,
+        "in_progress": 2,
+        "done": 4
+      },
+      "coverage": {
+        "expected": 9,
+        "reporting": 9
+      },
       "watermark": "synthetic-portfolio-r1",
       "errors": [],
       "has_observations": true,
@@ -80,10 +112,20 @@
       "signal": "dependency_flow",
       "adapter_id": "skcoord.flow",
       "condition": "partial",
-      "aggregate": {"open": 3, "in_progress": 2, "done": 4, "blocked": 2},
-      "coverage": {"expected": 9, "reporting": 8},
+      "aggregate": {
+        "open": 3,
+        "in_progress": 2,
+        "done": 4,
+        "blocked": 2
+      },
+      "coverage": {
+        "expected": 9,
+        "reporting": 8
+      },
       "watermark": "synthetic-flow-r1",
-      "errors": ["one dependency owner is unavailable"],
+      "errors": [
+        "one dependency owner is unavailable"
+      ],
       "has_observations": true,
       "expected_truth_state": "partial"
     },
@@ -92,8 +134,14 @@
       "signal": "agent_presence",
       "adapter_id": "skcoord.agent_presence",
       "condition": "healthy",
-      "aggregate": {"total_agents": 4, "active_agents": 3},
-      "coverage": {"expected": 4, "reporting": 4},
+      "aggregate": {
+        "total_agents": 4,
+        "active_agents": 3
+      },
+      "coverage": {
+        "expected": 4,
+        "reporting": 4
+      },
       "watermark": "synthetic-presence-r1",
       "errors": [],
       "has_observations": true,
@@ -104,8 +152,16 @@
       "signal": "service_events",
       "adapter_id": "skcapstone.itil",
       "condition": "observed_zero",
-      "aggregate": {"open_incidents": 0, "sev1": 0, "sev2": 0, "awaiting_cab": 0},
-      "coverage": {"expected": 6, "reporting": 6},
+      "aggregate": {
+        "open_incidents": 0,
+        "sev1": 0,
+        "sev2": 0,
+        "awaiting_cab": 0
+      },
+      "coverage": {
+        "expected": 6,
+        "reporting": 6
+      },
       "watermark": "synthetic-itil-r1",
       "errors": [],
       "has_observations": true,
@@ -116,10 +172,18 @@
       "signal": "delivery_and_recovery",
       "adapter_id": "skcapstone.service_release",
       "condition": "partial",
-      "aggregate": {"services": 5, "releases": 3},
-      "coverage": {"expected": 5, "reporting": 4},
+      "aggregate": {
+        "services": 5,
+        "releases": 3
+      },
+      "coverage": {
+        "expected": 5,
+        "reporting": 4
+      },
       "watermark": "synthetic-delivery-r1",
-      "errors": ["one service recovery event is unavailable"],
+      "errors": [
+        "one service recovery event is unavailable"
+      ],
       "has_observations": true,
       "expected_truth_state": "partial"
     },
@@ -128,10 +192,23 @@
       "signal": "configuration_drift",
       "adapter_id": "cmdb.configuration",
       "condition": "conflict",
-      "aggregate": {"total": 12, "operational": 8, "degraded": 2, "other_status": 2, "fresh": 9, "stale": 2, "unknown": 1},
-      "coverage": {"expected": 12, "reporting": 11},
+      "aggregate": {
+        "total": 12,
+        "operational": 8,
+        "degraded": 2,
+        "other_status": 2,
+        "fresh": 9,
+        "stale": 2,
+        "unknown": 1
+      },
+      "coverage": {
+        "expected": 12,
+        "reporting": 11
+      },
       "watermark": "synthetic-cmdb-r1",
-      "errors": ["declared and observed revisions conflict"],
+      "errors": [
+        "declared and observed revisions conflict"
+      ],
       "has_observations": true,
       "expected_truth_state": "partial"
     },
@@ -144,13 +221,50 @@
       "expected_truth_state": "unavailable"
     },
     {
+      "silo": "fleet",
+      "signal": "node_liveness",
+      "adapter_id": "skcapstone.fleet_heartbeat",
+      "condition": "healthy",
+      "aggregate": {
+        "nodes": 4,
+        "ready": 3,
+        "not_ready": 1,
+        "dead": 0,
+        "pending": 0,
+        "max_beat_age_s": 190.0
+      },
+      "coverage": {
+        "expected": 4,
+        "reporting": 4
+      },
+      "watermark": "synthetic-fleet-heartbeat-r1",
+      "errors": [],
+      "has_observations": true,
+      "expected_truth_state": "current"
+    },
+    {
       "silo": "ai",
       "signal": "harness_usage",
       "adapter_id": "skcounter.harness",
       "condition": "mixed_lane",
       "measurement_lane": "harness_reported",
-      "aggregate": {"tokens_total": 1200, "cost_usd": 18.0, "cost_state": "estimated", "latency_ms": null, "cache_ratio": 0.8, "error_count": null, "denial_count": null, "observation_count": 8, "fresh_collectors": 2, "delayed_collectors": 0, "stale_collectors": 0},
-      "coverage": {"expected": 2, "reporting": 2},
+      "aggregate": {
+        "tokens_total": 1200,
+        "cost_usd": 18.0,
+        "cost_state": "estimated",
+        "latency_ms": null,
+        "cache_ratio": 0.8,
+        "error_count": null,
+        "denial_count": null,
+        "observation_count": 8,
+        "fresh_collectors": 2,
+        "delayed_collectors": 0,
+        "stale_collectors": 0
+      },
+      "coverage": {
+        "expected": 2,
+        "reporting": 2
+      },
       "watermark": "synthetic-harness-r1",
       "errors": [],
       "has_observations": true,
@@ -162,10 +276,27 @@
       "adapter_id": "skgateway.observed",
       "condition": "mixed_lane",
       "measurement_lane": "gateway_observed",
-      "aggregate": {"tokens_total": 1260, "cost_usd": null, "cost_state": "unavailable", "latency_ms": null, "cache_ratio": 0.6, "error_count": null, "denial_count": null, "observation_count": 9, "fresh_collectors": 1, "delayed_collectors": 1, "stale_collectors": 0},
-      "coverage": {"expected": 2, "reporting": 1},
+      "aggregate": {
+        "tokens_total": 1260,
+        "cost_usd": null,
+        "cost_state": "unavailable",
+        "latency_ms": null,
+        "cache_ratio": 0.6,
+        "error_count": null,
+        "denial_count": null,
+        "observation_count": 9,
+        "fresh_collectors": 1,
+        "delayed_collectors": 1,
+        "stale_collectors": 0
+      },
+      "coverage": {
+        "expected": 2,
+        "reporting": 1
+      },
       "watermark": "synthetic-gateway-r1",
-      "errors": ["one gateway collector is delayed"],
+      "errors": [
+        "one gateway collector is delayed"
+      ],
       "has_observations": true,
       "expected_truth_state": "partial"
     },
@@ -175,8 +306,14 @@
       "adapter_id": "skperf.aggregate",
       "condition": "stale",
       "observed_at": "2026-08-24T11:55:00Z",
-      "aggregate": {"regressions": 1, "capacity_pressure": 0.72},
-      "coverage": {"expected": 4, "reporting": 4},
+      "aggregate": {
+        "regressions": 1,
+        "capacity_pressure": 0.72
+      },
+      "coverage": {
+        "expected": 4,
+        "reporting": 4
+      },
       "watermark": "synthetic-perf-r1",
       "errors": [],
       "has_observations": true,
@@ -187,8 +324,14 @@
       "signal": "joule_supply",
       "adapter_id": "skjoule.wallet",
       "condition": "healthy",
-      "aggregate": {"total_supply": 420, "active_agents": 3},
-      "coverage": {"expected": 4, "reporting": 4},
+      "aggregate": {
+        "total_supply": 420,
+        "active_agents": 3
+      },
+      "coverage": {
+        "expected": 4,
+        "reporting": 4
+      },
       "watermark": "synthetic-joule-r1",
       "errors": [],
       "has_observations": true,
@@ -199,8 +342,17 @@
       "signal": "policy_denials",
       "adapter_id": "capauth.policy",
       "condition": "governance_denial",
-      "aggregate": {"available": true, "denials": 2, "inspected_identities": 2, "active_identities": 1, "inactive_identities": 1},
-      "coverage": {"expected": 5, "reporting": 5},
+      "aggregate": {
+        "available": true,
+        "denials": 2,
+        "inspected_identities": 2,
+        "active_identities": 1,
+        "inactive_identities": 1
+      },
+      "coverage": {
+        "expected": 5,
+        "reporting": 5
+      },
       "watermark": "synthetic-policy-r1",
       "errors": [],
       "has_observations": true,
@@ -211,8 +363,14 @@
       "signal": "operator_conditions",
       "adapter_id": "atlas.conditions",
       "condition": "healthy",
-      "aggregate": {"open_conditions": 3, "ready_actions": 2},
-      "coverage": {"expected": 3, "reporting": 3},
+      "aggregate": {
+        "open_conditions": 3,
+        "ready_actions": 2
+      },
+      "coverage": {
+        "expected": 3,
+        "reporting": 3
+      },
       "watermark": "synthetic-atlas-r1",
       "errors": [],
       "has_observations": true,
@@ -223,8 +381,14 @@
       "signal": "module_discovery",
       "adapter_id": "skos.discovery",
       "condition": "unknown",
-      "aggregate": {"discovered": 0, "unavailable": 0},
-      "coverage": {"expected": 0, "reporting": 0},
+      "aggregate": {
+        "discovered": 0,
+        "unavailable": 0
+      },
+      "coverage": {
+        "expected": 0,
+        "reporting": 0
+      },
       "watermark": "synthetic-skos-r1",
       "errors": [],
       "has_observations": false,
@@ -243,8 +407,14 @@
       "signal": "approved_release_aggregate",
       "adapter_id": "hammertime.pipeline",
       "condition": "unknown",
-      "aggregate": {"approved_releases": 0, "pipeline_failures": 0},
-      "coverage": {"expected": 0, "reporting": 0},
+      "aggregate": {
+        "approved_releases": 0,
+        "pipeline_failures": 0
+      },
+      "coverage": {
+        "expected": 0,
+        "reporting": 0
+      },
       "watermark": "synthetic-corpus-r1",
       "errors": [],
       "has_observations": false,
@@ -284,6 +454,6 @@
       "skos"
     ],
     "watermark_policy": "include_nonempty_authorized_aggregate_watermarks",
-    "expected_report_hash": "sha256:9838d606e994b8c46558c7be64d524feca2e9a33e8c3400a97e62e8da577869e"
+    "expected_report_hash": "sha256:17c04081d9af189baf5d14a997f20c5bf4d4b8fa97fdb73c65c8a0850afdc6ef"
   }
 }
