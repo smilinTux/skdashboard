@@ -86,6 +86,12 @@ try {
         diagTag: focus?.tagName || '', diagClass: focus?.className || '',
         diagOutlineStyle: style?.outlineStyle || '', diagOutlineWidth: style?.outlineWidth || '',
         diagMatchesFocusVisible: !!focus && focus.matches(':focus-visible'),
+        diagOutlineColor: style?.outlineColor || '', diagOutlineOffset: style?.outlineOffset || '',
+        diagAccent: style ? style.getPropertyValue('--accent').trim() : '',
+        diagSheets: [...document.styleSheets].map((sheet) => {
+          const name = (sheet.href || 'inline').split('/').pop();
+          try { return name + ':' + sheet.cssRules.length; } catch (err) { return name + ':ERR-' + err.name; }
+        }).join(' '),
       };
     })())`));
     const tree = await send("Accessibility.getFullAXTree");
