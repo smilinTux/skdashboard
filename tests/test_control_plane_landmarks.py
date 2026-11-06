@@ -68,9 +68,8 @@ def test_real_chrome_exposes_one_main_per_qualified_page(tmp_path: Path) -> None
     chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
     if not node or not chrome:
         pytest.skip("Node or Chrome is unavailable for the CDP landmark qualifier")
-    subprocess.run(
+    completed = subprocess.run(
         [node, str(QUALIFIER)],
-        check=True,
         capture_output=True,
         text=True,
         env={
@@ -79,6 +78,7 @@ def test_real_chrome_exposes_one_main_per_qualified_page(tmp_path: Path) -> None
             "SKCP50_ARTIFACT_DIR": str(tmp_path),
         },
     )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     evidence = json.loads((tmp_path / "accessibility-landmark-matrix.json").read_text())
     assert evidence["result"] == "PASS"
     assert len(evidence["matrix"]) == 7
