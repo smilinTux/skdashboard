@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add the `SKDASHBOARD_AUTH` on/off toggle. Off waives the bearer for direct
+  loopback requests only.
+
+- Add `skdashboard-auth`, a one-command CapAuth login for any node.
+
+- Derive Fleet and Economy nodes from this estate's fleet instead of chi
+  defaults, so a newly admitted node appears without configuration.
+
 - Card `ab686b00`: keep NOW analysis active through the existing SKGateway
   assistant deadline while preserving the `sk-m-public` route.
 
