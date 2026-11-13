@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- Raised `cryptography` to `>=50.0.0,<51`, `mcp` to `>=1.30.0`, `PyJWT` to `>=2.15.0` and `starlette` to `>=1.3.1` to clear the 2026-11-13 dependency sweep findings.
+
 - Add Authentik as a dashboard login provider (`--oidc-provider authentik`).
   API calls verify the Authentik token and map its groups to capabilities,
   denying anything not granted. The CapAuth login path is unchanged.
