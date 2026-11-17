@@ -1,0 +1,21 @@
+{
+  "card_id": "cda3da56",
+  "verdict": "BLOCKED",
+  "blocked_on": "card",
+  "referent": "ac:2",
+  "explanation": "Criterion 2 violation: The candidate fails 'owner-policy hash and file-identity drift fail closed' as demonstrated by previous independent review oracle showing backend accepts policy documents with changed SHA256. Criterion 1 unsatisfiable: Candidate source commits 2066211a, tree 667a9ba4, and parent 3a61c01e do not exist in any available repository or evidence archive. Previous reviewer used /tmp/skdashboard-cda3da56.Vu5atM which no longer exists. Without candidate bytes, AC1 cannot be satisfied.",
+  "evidence_link": "~/.skcapstone/fleet/workspaces/skdashboard-cda3da56/review-evidence/REVIEW-cda3da56.md",
+  "reviewer": "pi-glm-chiap03-cda3da56",
+  "review_date": "2026-08-30T03:10:00Z",
+  "previous_review_date": "2026-08-30T02:00:05Z",
+  "previous_reviewer": "codex-skdashboard-policy-composition-independent-review",
+  "producer_card": "e08681af",
+  "dependency_card": "b0db90c5",
+  "attempted_searches": [
+    "~/.skcapstone/fleet/workspaces/pi-codex-chiap03-1d5a9a62/skdashboard-1d5a9a62/",
+    "~/.skcapstone/fleet/workspaces/pi-codex-chiap03-888b0c76/skdashboard/",
+    "fresh clone from https://github.com/smilinTux/skdashboard.git",
+    "~/.skcapstone/evidence/work/e08681af/",
+    "~/.skcapstone/evidence/work/cda3da56/"
+  ]
+}
