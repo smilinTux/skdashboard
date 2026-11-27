@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Security
+
+- Raised `cryptography` to `>=50.0.0`, `mcp` to `>=1.30.0`, `PyJWT` to `>=2.15.0` and `starlette` to `>=1.3.1` to clear the 2026-11-13 dependency sweep findings.
+
+- Add Authentik as a dashboard login provider (`--oidc-provider authentik`).
+  API calls verify the Authentik token and map its groups to capabilities,
+  denying anything not granted. The CapAuth login path is unchanged.
+
+- Add the `SKDASHBOARD_AUTH` on/off toggle. Off waives the bearer for direct
+  loopback requests only.
+
+- Add `skdashboard-auth`, a one-command CapAuth login for any node.
+
+- Derive Fleet and Economy nodes from this estate's fleet instead of chi
+  defaults, so a newly admitted node appears without configuration.
+
 - Add the `skcapstone.fleet_heartbeat` adapter: node liveness (`nodes`,
   `ready`, `not_ready`, `dead`, `pending`, `max_beat_age_s`) surfaced on the
   Fleet runtime panel. Node beat age had no adapter; `skcapstone.fleet`

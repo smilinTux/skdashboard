@@ -483,12 +483,32 @@ def create_read_only_app(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve the read-only SKDashboard control plane")
     parser.add_argument("--home", type=Path, default=Path.home() / ".skcapstone")
+    parser.add_argument(
+        "--capauth-home",
+        type=Path,
+        help="CapAuth home whose enrollments, grants and revocations authorize bearers "
+        "(default: --home). Point it at a node-local login-server home so grants are not "
+        "written into the Syncthing-replicated agent home.",
+    )
     parser.add_argument("--host", required=True, choices=sorted(ALLOWED_BIND_HOSTS))
     parser.add_argument("--port", type=int, default=7778)
     parser.add_argument("--tls-certfile", type=Path, required=True)
     parser.add_argument("--tls-keyfile", type=Path, required=True)
     parser.add_argument("--session-db", type=Path)
     parser.add_argument("--session-key-file", type=Path)
+    parser.add_argument("--oidc-provider", choices=("capauth", "authentik"), default="capauth")
+    parser.add_argument(
+        "--authentik-admin-group",
+        action="append",
+        default=[],
+        help="Authentik group with every dashboard capability (repeatable)",
+    )
+    parser.add_argument(
+        "--authentik-user-group",
+        action="append",
+        default=[],
+        help="Authentik group with read capabilities (repeatable)",
+    )
     parser.add_argument("--oidc-issuer")
     parser.add_argument("--oidc-redirect-uri")
     parser.add_argument("--oidc-client-secret-file", type=Path)
@@ -553,6 +573,13 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("all live control-plane options are required together")
     if all(live_values) and not all(session_values):
         parser.error("live control-plane composition requires the same-origin session options")
+    if args.oidc_provider == "authentik":
+        if not all(session_values) or not args.authentik_admin_group:
+            parser.error("Authentik login requires the session options and an admin group")
+        if any(live_values) or args.capauth_home is not None:
+            parser.error("Authentik login cannot be combined with CapAuth authorization options")
+    elif args.authentik_admin_group or args.authentik_user_group:
+        parser.error("Authentik groups require --oidc-provider authentik")
 
     session_adapter = None
     if all(session_values):
@@ -567,10 +594,27 @@ def main(argv: list[str] | None = None) -> None:
                 issuer=args.oidc_issuer,
                 redirect_uri=args.oidc_redirect_uri,
                 client_secret=args.oidc_client_secret_file.read_text(encoding="utf-8").strip(),
+                provider=args.oidc_provider,
             ),
         )
 
     app_options = {"session_adapter": session_adapter}
+    if args.oidc_provider == "authentik":
+        from .authentik_authz import AuthentikAuthorizer
+
+        app_options["authorizer"] = AuthentikAuthorizer(
+            args.oidc_issuer,
+            "skdashboard",
+            args.authentik_admin_group,
+            args.authentik_user_group,
+        )
+    if args.capauth_home is not None:
+        from .control_plane_api import _capauth_authorize
+
+        capauth_home = args.capauth_home.expanduser()
+        app_options["authorizer"] = lambda bearer, capability, target: _capauth_authorize(
+            capauth_home, bearer, capability, target
+        )
     if all(live_values):
         from capauth import (
             CurrentPolicyRevisions,
@@ -760,3 +804,7 @@ __all__ = [
     "create_read_only_app",
     "main",
 ]
+
+
+if __name__ == "__main__":
+    main()

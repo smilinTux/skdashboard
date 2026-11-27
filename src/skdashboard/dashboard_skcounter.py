@@ -829,19 +829,26 @@ def _apply_filters(rows: Iterable[dict], filters: dict[str, str]) -> list[dict]:
     return result
 
 
-def _expected_nodes(lane: str) -> list[str]:
+def _expected_nodes(lane: str, home: Path | None = None) -> list[str]:
+    """Nodes whose silence the coverage view should flag.
+
+    The explicit environment list wins. Otherwise the harness lane expects this
+    estate's fleet nodes (the ids ``skcounter-fleet-enroll`` gives each edge), so
+    a newly admitted node shows as missing until its edge reports.
+    """
     environment = (
         "SKCOUNTER_EXPECTED_GATEWAY_NODES"
         if lane == "gateway_observed"
         else "SKCOUNTER_EXPECTED_NODES"
     )
-    return sorted(
-        {
-            value.strip()
-            for value in os.environ.get(environment, "").split(",")
-            if value.strip()
-        }
-    )
+    configured = {
+        value.strip() for value in os.environ.get(environment, "").split(",") if value.strip()
+    }
+    if not configured and lane == "harness_reported" and home is not None:
+        from .dashboard_fleet import fleet_node_hosts
+
+        configured = set(fleet_node_hosts(home))
+    return sorted(configured)
 
 
 def get_ai_usage(
@@ -895,7 +902,7 @@ def get_ai_usage(
 
     lane_observations = [item for item in observations if item["lane"] == lane]
     collectors = _collectors(lane_observations, lane, now)
-    expected_nodes = _expected_nodes(lane)
+    expected_nodes = _expected_nodes(lane, home)
     coverage = node_coverage(
         expected_nodes,
         {item["node_id"]: item["status"] for item in collectors},

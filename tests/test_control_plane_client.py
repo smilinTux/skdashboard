@@ -285,3 +285,62 @@ def test_published_contract_copies_are_exact_and_schema_validators_are_sensitive
         assert (root / "src/skdashboard/contracts/v1.1.0" / name).read_bytes() == (
             root / "docs/contracts/v1.1.0" / name
         ).read_bytes()
+
+
+def test_callable_bearer_is_reread_on_every_request():
+    """A long-lived client (the MCP server) follows a bearer file the timer rotates."""
+    current = {"value": BEARER}
+
+    async def scenario():
+        client = await ControlPlaneClient.discover(
+            DISCOVERY,
+            lambda: current["value"],
+            transport=httpx.ASGITransport(app=create_fixture_app()),
+        )
+        try:
+            first = await client.health()
+            current["value"] = "rotated-but-not-valid-for-the-fixture"
+            with pytest.raises(ControlPlaneClientError):
+                await client.overview()
+            current["value"] = BEARER
+            again = await client.health()
+        finally:
+            await client.aclose()
+        return first, again
+
+    first, again = asyncio.run(scenario())
+    assert first.data and again.data == first.data
+
+
+@pytest.mark.parametrize(
+    ("entry", "accepted"),
+    [
+        (ORIGIN + "/control-plane/now", True),  # what the read-only runtime publishes
+        (ORIGIN + "/", True),
+        (ORIGIN + ":8443/control-plane/now", False),  # same host, different port
+        ("https://other.test/control-plane/now", False),
+    ],
+)
+def test_discovery_entry_may_be_any_page_on_the_same_origin(entry, accepted) -> None:
+    manifest = {
+        "schemaVersion": "1.1",
+        "entry": {"url": entry},
+        "auth": {"audience": "skdashboard", "scopes": ["skdashboard.read"]},
+        "health": ORIGIN + "/api/v1/health",
+    }
+
+    async def handler(_request):
+        return httpx.Response(200, json=manifest)
+
+    async def run():
+        return await ControlPlaneClient.discover(
+            DISCOVERY, BEARER, transport=httpx.MockTransport(handler)
+        )
+
+    if accepted:
+        client = asyncio.run(run())
+        assert client.origin == ORIGIN
+        asyncio.run(client.aclose())
+    else:
+        with pytest.raises(ControlPlaneClientError, match="crosses origins"):
+            asyncio.run(run())

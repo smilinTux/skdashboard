@@ -24,6 +24,7 @@ from starlette.routing import Route
 
 COOKIE_NAME = "__Host-skdashboard_session"
 SCOPES = "openid skdashboard.read skdashboard.events.read"
+AUTHENTIK_SCOPES = "openid profile email offline_access"
 SESSION_TTL = 24 * 60 * 60
 LOGIN_TTL = 5 * 60
 MAX_LOGIN_GLOBAL = 128
@@ -159,9 +160,16 @@ class SessionConfig:
     issuer: str
     redirect_uri: str
     client_secret: str
+    provider: str = "capauth"
 
     def __post_init__(self) -> None:
-        if not self.issuer.startswith("https://") or self.issuer.endswith("/"):
+        if self.provider == "authentik":
+            # Authentik's issuer is a per-application URL ending in a slash.
+            if not self.issuer.startswith("https://") or not self.issuer.endswith("/"):
+                raise ValueError("Authentik issuer must be its HTTPS application URL")
+        elif self.provider != "capauth":
+            raise ValueError("unknown OIDC provider")
+        elif not self.issuer.startswith("https://") or self.issuer.endswith("/"):
             raise ValueError("issuer must be an exact HTTPS origin")
         if not self.redirect_uri.startswith("https://") or not self.client_secret:
             raise ValueError("redirect URI and confidential client secret are required")
@@ -178,6 +186,33 @@ class SessionResolution:
 class OIDCClient:
     def __init__(self, config: SessionConfig) -> None:
         self.config = config
+        self._authentik_metadata = None
+
+    @property
+    def _discovery_url(self) -> str:
+        if self.config.provider == "authentik":
+            return f"{self.config.issuer}.well-known/openid-configuration"
+        return f"{self.config.issuer}/oidc/.well-known/openid-configuration"
+
+    async def _metadata(self, client: httpx.AsyncClient) -> dict:
+        discovery = await client.get(self._discovery_url)
+        discovery.raise_for_status()
+        metadata = discovery.json()
+        if metadata.get("issuer") != self.config.issuer:
+            raise OIDCExchangeError("issuer_mismatch")
+        return metadata
+
+    async def _endpoint(self, client: httpx.AsyncClient, name: str) -> str:
+        if self.config.provider != "authentik":
+            return f"{self.config.issuer}/oidc/{name}"
+        if self._authentik_metadata is None:
+            self._authentik_metadata = await self._metadata(client)
+        key = {"revoke": "revocation_endpoint"}.get(name, f"{name}_endpoint")
+        return self._authentik_metadata[key]
+
+    async def authorization_endpoint(self) -> str:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await self._endpoint(client, "authorization")
 
     async def exchange(self, values: dict[str, str], *, expected_nonce: str | None = None) -> dict:
         values = {
@@ -187,17 +222,11 @@ class OIDCClient:
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(f"{self.config.issuer}/oidc/token", data=values)
+                response = await client.post(await self._endpoint(client, "token"), data=values)
                 response.raise_for_status()
                 result = response.json()
                 if expected_nonce is not None:
-                    discovery = await client.get(
-                        f"{self.config.issuer}/oidc/.well-known/openid-configuration"
-                    )
-                    discovery.raise_for_status()
-                    metadata = discovery.json()
-                    if metadata.get("issuer") != self.config.issuer:
-                        raise OIDCExchangeError("issuer_mismatch")
+                    metadata = await self._metadata(client)
                     keys_response = await client.get(metadata["jwks_uri"])
                     keys_response.raise_for_status()
                     try:
@@ -247,7 +276,7 @@ class OIDCClient:
     async def revoke(self, refresh_token: str) -> None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                f"{self.config.issuer}/oidc/revoke",
+                await self._endpoint(client, "revoke"),
                 data={
                     "token": refresh_token,
                     "token_type_hint": "refresh_token",
@@ -364,20 +393,27 @@ class EncryptedSessionAdapter:
                 "INSERT INTO login_transactions(state_hash, encrypted, expires_at, source) VALUES (?, ?, ?, ?)",
                 (_digest(state), self._seal(payload), now + LOGIN_TTL, source),
             )
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": "skdashboard",
-                "redirect_uri": self.config.redirect_uri,
-                "scope": SCOPES,
-                "state": state,
-                "nonce": nonce,
-                "code_challenge": challenge,
-                "code_challenge_method": "S256",
-                "issuer": self.config.issuer,
-            }
-        )
-        return RedirectResponse(f"{self.config.issuer}/oidc/authorize?{query}", status_code=302)
+        params = {
+            "response_type": "code",
+            "client_id": "skdashboard",
+            "redirect_uri": self.config.redirect_uri,
+            "scope": SCOPES,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "issuer": self.config.issuer,
+        }
+        if self.config.provider == "authentik":
+            del params["issuer"]
+            params["scope"] = AUTHENTIK_SCOPES
+            try:
+                endpoint = await self.oidc.authorization_endpoint()
+            except Exception:
+                return self._authentication_failure("upstream_unavailable")
+        else:
+            endpoint = f"{self.config.issuer}/oidc/authorize"
+        return RedirectResponse(f"{endpoint}?{urlencode(params)}", status_code=302)
 
     async def callback(self, request: Request) -> Response:
         state, code = request.query_params.get("state", ""), request.query_params.get("code", "")
@@ -480,9 +516,13 @@ class EncryptedSessionAdapter:
             raise ValueError("invalid token response")
         if type(token["expires_in"]) is not int or not 1 <= token["expires_in"] <= 300:
             raise ValueError("invalid token lifetime")
-        if frozenset(str(token["scope"]).split()) != frozenset(
-            {"skdashboard.read", "skdashboard.events.read"}
-        ):
+        granted = frozenset(str(token["scope"]).split())
+        if self.config.provider == "authentik":
+            # The group claim that authorizes API calls comes from the profile scope.
+            valid = {"openid", "profile", "offline_access"} <= granted
+        else:
+            valid = granted == {"skdashboard.read", "skdashboard.events.read"}
+        if not valid:
             raise ValueError("invalid token scope")
         return {
             "access_token": str(token["access_token"]),
@@ -690,7 +730,9 @@ class EncryptedSessionAdapter:
         return JSONResponse(
             {
                 "authenticated": True,
-                "authenticator": "CapAuth",
+                "authenticator": (
+                    "Authentik" if self.config.provider == "authentik" else "CapAuth"
+                ),
                 "subject": loaded[1].get("subject"),
                 "expires_at": loaded[1]["expires_at"],
                 "csrf_token": loaded[1]["csrf"],

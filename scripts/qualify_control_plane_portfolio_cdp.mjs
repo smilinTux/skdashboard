@@ -87,7 +87,13 @@ uvicorn.run(app, host="127.0.0.1", port=${port}, log_level="error")
       await send("Input.dispatchKeyEvent", { type: "keyUp", key: value, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
     };
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
-    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: `Bearer ${fs.readFileSync(bearerFile, "utf8")}`, Origin: "https://10.0.0.139:7778" } });
+    // No Origin header here. The dashboard is reached at its own origin, so a real
+    // browser sends no Origin on these loads, and injecting a foreign one made every
+    // same-origin /static fetch look cross-origin. Chrome 156 enforces CORS on that
+    // and /static returns no Access-Control-Allow-Origin, so the app CSS and JS were
+    // dropped and the pages rendered unstyled. The browser origin allowlist
+    // (control_plane_api origin check) is covered by the pytest suites instead.
+    await send("Network.setExtraHTTPHeaders", { headers: { Authorization: `Bearer ${fs.readFileSync(bearerFile, "utf8")}` } });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/portfolio?role=operator&scope=estate&window=latest&baseline=none&service=all` });
     await waitFor(async () => evaluate("document.querySelectorAll('[data-workspace-silo]').length === 10 && document.querySelector('[data-workspace-silo]').href.includes('role=operator')").catch(() => false), "Portfolio presentation links did not initialize");
     const presentation = JSON.parse(await evaluate(`JSON.stringify({options:[...document.getElementById("project-silo").options].map((option)=>option.value),links:[...document.querySelectorAll("[data-workspace-silo]")].map((link)=>({silo:link.dataset.workspaceSilo,href:link.href}))})`));

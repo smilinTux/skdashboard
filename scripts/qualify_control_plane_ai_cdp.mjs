@@ -138,7 +138,13 @@ try {
   const purged = () => evaluate("document.querySelectorAll('.ai-lane').length === 0 && !(document.getElementById('ai-lanes')?.innerText || '').includes('1200')");
 
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Accessibility.enable");
-  await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer skcp24-cdp", Origin: "https://10.0.0.139:7778" } });
+  // No Origin header here. The dashboard is reached at its own origin, so a real
+  // browser sends no Origin on these loads, and injecting a foreign one made every
+  // same-origin /static fetch look cross-origin. Chrome 156 enforces CORS on that
+  // and /static returns no Access-Control-Allow-Origin, so the app CSS and JS were
+  // dropped and the pages rendered unstyled. The browser origin allowlist
+  // (control_plane_api origin check) is covered by the pytest suites instead.
+  await send("Network.setExtraHTTPHeaders", { headers: { Authorization: "Bearer skcp24-cdp" } });
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   stage = "initial render";
   await send("Page.navigate", { url: `http://127.0.0.1:${port}/control-plane/ai?role=operator&scope=estate&window=latest&baseline=none&service=all` });
