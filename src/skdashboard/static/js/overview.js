@@ -199,7 +199,7 @@ function renderEstate(items) {
   const byId = new Map(observations.map((item) => [item.adapter_id, item]));
   const complete = ESTATE_SILOS.every((silo) => silo.adapters.every((adapter) => byId.has(adapter)));
   const rows = document.getElementById("estate-rows");
-  if (!complete || observations.length !== 16) {
+  if (!complete || observations.length !== 17) {
     return false;
   }
   estateEvidence = new Map();
@@ -392,7 +392,7 @@ async function loadQuality(epoch, context) {
     if (quality.metric_registry.registry_version !== REGISTRY_VERSION || quality.metric_registry.registry_hash !== REGISTRY_HASH) {
       throw new Error("Metric registry changed; this view is stale");
     }
-    if (!renderEstate(response.items)) throw new Error("Expected 16 bounded adapter observations");
+    if (!renderEstate(response.items)) throw new Error("Expected 17 bounded adapter observations");
     renderAiBrief(response.items);
     renderQuality(quality);
     currentQuality = quality;
