@@ -262,7 +262,7 @@ def test_fixture_spans_every_public_synthetic_estate_signal_and_truth_condition(
     }
 
     assert hashlib.sha256(ESTATE_FIXTURE.read_bytes()).hexdigest() == (
-        "e797c5af0ec8b04835fd0b3aeeedd5ecf493da48dbd83f8fe8b79e55e6eb3ea9"
+        "eb86e75dafefb0ac5565e95f57a4d9395256120a72cb6a28ee0e92ac0afd74c5"
     )
     assert fixture["classification"] == "public"
     assert fixture["synthetic"] is True
@@ -374,7 +374,7 @@ def test_one_pack_drives_api_report_forecast_failure_agent_and_mcp_qualification
     }
     assert set(profiles) == set(fixture["qualification_targets"])
     assert report["report_hash"] == fixture["report_profile"]["expected_report_hash"]
-    assert len(report["source_watermarks"]) == 12
+    assert len(report["source_watermarks"]) == 13
     assert all(item["value"].startswith("sha256:") for item in report["source_watermarks"])
     assert len(report["sections"]) == profiles["report"]["expected_sections"]
     _validate_report(report)

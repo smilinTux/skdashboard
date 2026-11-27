@@ -67,7 +67,7 @@ const ESTATE_SILOS = [
   { id: "itil", label: "ITIL and SRE", adapters: ["skcapstone.itil"], metric: "itil.change_classification_coverage@1.0.0" },
   { id: "delivery", label: "Engineering delivery", adapters: ["skcapstone.service_release"], metric: "engineering.delivery_signals_current@1.0.0" },
   { id: "architecture", label: "Architecture and CMDB", adapters: ["cmdb.configuration"], metric: "architecture.drift_signals@1.0.0" },
-  { id: "fleet", label: "Fleet runtime", adapters: ["skcapstone.fleet"], metric: "fleet.reporting_nodes@1.0.0" },
+  { id: "fleet", label: "Fleet runtime", adapters: ["skcapstone.fleet", "skcapstone.fleet_heartbeat"], metric: "fleet.reporting_nodes@1.0.0" },
   { id: "ai", label: "AI and models", adapters: ["skcounter.harness", "skgateway.observed"], metric: "ai.accepted_outcome_rate@1.0.0" },
   { id: "economy", label: "Economy", adapters: ["skperf.aggregate", "skjoule.wallet"], metric: "economy.cost_per_accepted_outcome@1.0.0", metricSource: "skcounter.harness" },
   { id: "governance", label: "Governance and data quality", adapters: ["capauth.policy"], metric: "governance.definition_coverage@1.0.0" },
@@ -199,7 +199,7 @@ function renderEstate(items) {
   const byId = new Map(observations.map((item) => [item.adapter_id, item]));
   const complete = ESTATE_SILOS.every((silo) => silo.adapters.every((adapter) => byId.has(adapter)));
   const rows = document.getElementById("estate-rows");
-  if (!complete || observations.length !== 16) {
+  if (!complete || observations.length !== 17) {
     return false;
   }
   estateEvidence = new Map();
@@ -392,7 +392,7 @@ async function loadQuality(epoch, context) {
     if (quality.metric_registry.registry_version !== REGISTRY_VERSION || quality.metric_registry.registry_hash !== REGISTRY_HASH) {
       throw new Error("Metric registry changed; this view is stale");
     }
-    if (!renderEstate(response.items)) throw new Error("Expected 16 bounded adapter observations");
+    if (!renderEstate(response.items)) throw new Error("Expected 17 bounded adapter observations");
     renderAiBrief(response.items);
     renderQuality(quality);
     currentQuality = quality;
